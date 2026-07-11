@@ -65,12 +65,14 @@ pub struct PackSearchOptions {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ValidationBenchmarks {
     #[serde(default)]
     benchmarks: Vec<ValidationBenchmark>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ValidationBenchmark {
     name: Option<String>,
     fixture: Option<String>,
@@ -408,15 +410,23 @@ fn validate_stage_tests(
         }
     };
 
-    let tests: StageTests = match serde_yaml::from_str(&source) {
+    problems.extend(validate_stage_tests_source(pack, stage, &source));
+}
+
+pub fn validate_stage_tests_source(
+    pack: &LoadedPack,
+    stage: &StageSpec,
+    source: &str,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let tests: StageTests = match serde_yaml::from_str(source) {
         Ok(tests) => tests,
         Err(error) => {
             problems.push(format!(
-                "stage {} tests file is invalid YAML {}: {error}",
-                stage.id,
-                tests_path.display()
+                "stage {} tests file is invalid YAML: {error}",
+                stage.id
             ));
-            return;
+            return problems;
         }
     };
 
@@ -437,7 +447,7 @@ fn validate_stage_tests(
                 stage.id, test.name
             ));
         }
-        validate_expectations(stage, &test.name, &test.expect, problems);
+        validate_expectations(stage, &test.name, &test.expect, &mut problems);
         if let Some(fixture) = test.fixture {
             if !is_safe_relative_path(Path::new(&fixture)) {
                 problems.push(format!(
@@ -456,6 +466,7 @@ fn validate_stage_tests(
             }
         }
     }
+    problems
 }
 
 fn validate_expectations(
@@ -532,17 +543,29 @@ fn validate_stage_benchmarks(
         }
     };
 
-    let benchmarks: ValidationBenchmarks = match serde_yaml::from_str(&source) {
+    problems.extend(validate_stage_benchmarks_source(pack, stage, &source));
+}
+
+pub fn validate_stage_benchmarks_source(
+    pack: &LoadedPack,
+    stage: &StageSpec,
+    source: &str,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let benchmarks: ValidationBenchmarks = match serde_yaml::from_str(source) {
         Ok(benchmarks) => benchmarks,
         Err(error) => {
             problems.push(format!(
-                "stage {} benchmarks file is invalid YAML {}: {error}",
-                stage.id,
-                benchmarks_path.display()
+                "stage {} benchmarks file is invalid YAML: {error}",
+                stage.id
             ));
-            return;
+            return problems;
         }
     };
+
+    if benchmarks.benchmarks.is_empty() {
+        problems.push(format!("stage {} defines no benchmarks", stage.id));
+    }
 
     for benchmark in benchmarks.benchmarks {
         let name = benchmark.name.unwrap_or_else(|| "<unnamed>".to_string());
@@ -568,7 +591,7 @@ fn validate_stage_benchmarks(
             ));
         }
         if let Some(fixture) = benchmark.fixture {
-            if fixture.contains("..") || Path::new(&fixture).is_absolute() {
+            if !is_safe_relative_path(Path::new(&fixture)) {
                 problems.push(format!(
                     "stage {} benchmark {} fixture path is unsafe: {}",
                     stage.id, name, fixture
@@ -592,6 +615,7 @@ fn validate_stage_benchmarks(
         }
         let _ = benchmark.warmup;
     }
+    problems
 }
 
 fn load_pack_from_manifest(

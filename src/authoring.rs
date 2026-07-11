@@ -4,9 +4,18 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::fs_util::atomic_write;
-use crate::pack::{LoadedPack, PackSearchOptions, load_pack, validate_pack};
+use crate::integrity::is_safe_relative_path;
+use crate::pack::{
+    LoadedPack, PackSearchOptions, load_pack, validate_pack, validate_stage_benchmarks_source,
+    validate_stage_tests_source,
+};
+
+const MAX_AUTHORED_TEXT_BYTES: usize = 1024 * 1024;
+const MAX_METADATA_BYTES: usize = 4096;
+const MAX_TOPICS: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct NewPackRequest {
@@ -32,6 +41,60 @@ pub struct CheckReferenceRequest {
     pub language: String,
     pub reference: PathBuf,
     pub packs_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdatePackMetadataRequest {
+    pub project: String,
+    pub packs_dir: PathBuf,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub version: Option<String>,
+    pub topics: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateStageMetadataRequest {
+    pub project: String,
+    pub packs_dir: PathBuf,
+    pub stage: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct WriteStageDocumentRequest {
+    pub project: String,
+    pub packs_dir: PathBuf,
+    pub stage: String,
+    pub document: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplaceStageTestsRequest {
+    pub project: String,
+    pub packs_dir: PathBuf,
+    pub stage: String,
+    pub tests: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct WriteFixtureFileRequest {
+    pub project: String,
+    pub packs_dir: PathBuf,
+    pub stage: String,
+    pub fixture: String,
+    pub path: PathBuf,
+    pub content: String,
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplaceStageBenchmarksRequest {
+    pub project: String,
+    pub packs_dir: PathBuf,
+    pub stage: String,
+    pub benchmarks: Value,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -236,6 +299,177 @@ pub fn add_stage(request: &AddStageRequest) -> Result<AuthoringReport> {
     ))
 }
 
+pub fn update_pack_metadata(request: &UpdatePackMetadataRequest) -> Result<AuthoringReport> {
+    let mut pack = load_explicit_authoring_pack(&request.project, &request.packs_dir)?;
+    if request.name.is_none()
+        && request.description.is_none()
+        && request.version.is_none()
+        && request.topics.is_none()
+    {
+        bail!("at least one pack metadata field must be provided");
+    }
+
+    if let Some(name) = &request.name {
+        validate_nonempty_text("pack name", name)?;
+        pack.manifest.name = name.clone();
+    }
+    if let Some(description) = &request.description {
+        validate_nonempty_text("pack description", description)?;
+        pack.manifest.description = description.clone();
+    }
+    if let Some(version) = &request.version {
+        validate_nonempty_text("pack version", version)?;
+        pack.manifest.version = version.clone();
+    }
+    if let Some(topics) = &request.topics {
+        if topics.is_empty() {
+            bail!("pack topics must contain at least one non-empty value");
+        }
+        if topics.len() > MAX_TOPICS {
+            bail!("pack topics exceed the {MAX_TOPICS} item authoring limit");
+        }
+        for topic in topics {
+            validate_nonempty_text("pack topic", topic)?;
+        }
+        pack.manifest.topics = topics.clone();
+    }
+
+    let relative = Path::new("project.yaml");
+    reject_symlink_components(&pack.root, relative)?;
+    let path = pack.root.join(relative);
+    atomic_write(&path, serde_yaml::to_string(&pack.manifest)?)?;
+    Ok(AuthoringReport::ok(
+        request.project.clone(),
+        path,
+        vec!["Run validate_pack before reference checking.".to_string()],
+    ))
+}
+
+pub fn update_stage_metadata(request: &UpdateStageMetadataRequest) -> Result<AuthoringReport> {
+    validate_nonempty_text("stage title", &request.title)?;
+    let mut pack = load_explicit_authoring_pack(&request.project, &request.packs_dir)?;
+    let stage = pack
+        .manifest
+        .stages
+        .iter_mut()
+        .find(|stage| stage.id == request.stage)
+        .with_context(|| {
+            format!(
+                "pack {} does not contain stage {}",
+                request.project, request.stage
+            )
+        })?;
+    stage.title = request.title.clone();
+
+    let relative = Path::new("project.yaml");
+    reject_symlink_components(&pack.root, relative)?;
+    let path = pack.root.join(relative);
+    atomic_write(&path, serde_yaml::to_string(&pack.manifest)?)?;
+    Ok(AuthoringReport::ok(
+        request.project.clone(),
+        path,
+        vec!["Review the renamed stage instructions and tests for consistency.".to_string()],
+    ))
+}
+
+pub fn write_stage_document(request: &WriteStageDocumentRequest) -> Result<AuthoringReport> {
+    validate_authored_content("stage document", &request.content, false)?;
+    let pack = load_explicit_authoring_pack(&request.project, &request.packs_dir)?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let file_name = match request.document.as_str() {
+        "instructions" => "instructions.md",
+        "hints" => "hints.md",
+        "design_prompt" => "design_prompt.md",
+        other => bail!(
+            "unsupported stage document {other}; expected instructions, hints, or design_prompt"
+        ),
+    };
+    let relative = stage.path.join(file_name);
+    reject_symlink_components(&pack.root, &relative)?;
+    let path = pack.root.join(relative);
+    atomic_write(&path, &request.content)?;
+    Ok(AuthoringReport::ok(
+        request.project.clone(),
+        path,
+        vec!["Run diagnose_pack to check for remaining placeholders.".to_string()],
+    ))
+}
+
+pub fn replace_stage_tests(request: &ReplaceStageTestsRequest) -> Result<AuthoringReport> {
+    let pack = load_explicit_authoring_pack(&request.project, &request.packs_dir)?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let source = structured_yaml("tests", &request.tests)?;
+    validate_authored_content("tests YAML", &source, false)?;
+    let problems = validate_stage_tests_source(&pack, stage, &source);
+    if !problems.is_empty() {
+        return Ok(validation_blocked(&pack, problems));
+    }
+
+    let relative = stage.path.join("tests.yaml");
+    reject_symlink_components(&pack.root, &relative)?;
+    let path = pack.root.join(relative);
+    atomic_write(&path, source)?;
+    Ok(AuthoringReport::ok(
+        request.project.clone(),
+        path,
+        vec!["Run check_reference after the test suite is complete.".to_string()],
+    ))
+}
+
+pub fn write_fixture_file(request: &WriteFixtureFileRequest) -> Result<AuthoringReport> {
+    validate_authored_content("fixture file", &request.content, true)?;
+    if !is_safe_relative_path(Path::new(&request.fixture)) {
+        bail!("unsafe fixture name: {}", request.fixture);
+    }
+    if !is_safe_relative_path(&request.path) {
+        bail!("unsafe fixture file path: {}", request.path.display());
+    }
+    let pack = load_explicit_authoring_pack(&request.project, &request.packs_dir)?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let relative = stage
+        .path
+        .join("fixtures")
+        .join(&request.fixture)
+        .join(&request.path);
+    reject_symlink_components(&pack.root, &relative)?;
+    let path = pack.root.join(relative);
+    if path.exists() && !request.overwrite {
+        bail!(
+            "fixture file already exists: {}; set overwrite=true to replace it",
+            path.display()
+        );
+    }
+    atomic_write(&path, &request.content)?;
+    Ok(AuthoringReport::ok(
+        request.project.clone(),
+        path,
+        vec!["Reference this fixture by name from structured tests or benchmarks.".to_string()],
+    ))
+}
+
+pub fn replace_stage_benchmarks(
+    request: &ReplaceStageBenchmarksRequest,
+) -> Result<AuthoringReport> {
+    let pack = load_explicit_authoring_pack(&request.project, &request.packs_dir)?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let source = structured_yaml("benchmarks", &request.benchmarks)?;
+    validate_authored_content("benchmarks YAML", &source, false)?;
+    let problems = validate_stage_benchmarks_source(&pack, stage, &source);
+    if !problems.is_empty() {
+        return Ok(validation_blocked(&pack, problems));
+    }
+
+    let relative = stage.path.join("benchmarks.yaml");
+    reject_symlink_components(&pack.root, &relative)?;
+    let path = pack.root.join(relative);
+    atomic_write(&path, source)?;
+    Ok(AuthoringReport::ok(
+        request.project.clone(),
+        path,
+        vec!["Run the benchmark in a copied learner project before publishing.".to_string()],
+    ))
+}
+
 pub fn diagnose_pack(pack: &LoadedPack) -> AuthoringReport {
     let mut problems = validate_pack(pack);
     let mut next_actions = Vec::new();
@@ -385,6 +619,122 @@ fn validate_identifier(value: &str) -> Result<()> {
             .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
     {
         bail!("identifier must use lowercase ascii letters, digits, '_' or '-': {value}");
+    }
+    Ok(())
+}
+
+fn load_explicit_authoring_pack(project: &str, packs_dir: &Path) -> Result<LoadedPack> {
+    validate_identifier(project)?;
+    let expected_root = packs_dir.join(project);
+    let manifest = expected_root.join("project.yaml");
+    if !manifest.is_file() {
+        bail!(
+            "authoring pack manifest is missing: {}; mutations require an explicit packs_dir",
+            manifest.display()
+        );
+    }
+    let pack = load_pack(
+        project,
+        &PackSearchOptions {
+            packs_dir: Some(packs_dir.to_path_buf()),
+        },
+    )?;
+    let expected = expected_root.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize explicit pack root {}",
+            expected_root.display()
+        )
+    })?;
+    let actual = pack.root.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize loaded pack root {}",
+            pack.root.display()
+        )
+    })?;
+    if actual != expected {
+        bail!(
+            "refusing to mutate pack discovered outside explicit packs_dir: {}",
+            actual.display()
+        );
+    }
+    Ok(pack)
+}
+
+fn require_stage<'a>(pack: &'a LoadedPack, stage_id: &str) -> Result<&'a crate::pack::StageSpec> {
+    pack.manifest.stage(stage_id).with_context(|| {
+        format!(
+            "pack {} does not contain stage {stage_id}",
+            pack.manifest.id
+        )
+    })
+}
+
+fn validate_nonempty_text(label: &str, value: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{label} must not be empty");
+    }
+    if value.len() > MAX_METADATA_BYTES {
+        bail!("{label} exceeds the {MAX_METADATA_BYTES} byte authoring limit");
+    }
+    Ok(())
+}
+
+fn validate_authored_content(label: &str, value: &str, allow_empty: bool) -> Result<()> {
+    if !allow_empty && value.trim().is_empty() {
+        bail!("{label} must not be empty");
+    }
+    if value.len() > MAX_AUTHORED_TEXT_BYTES {
+        bail!(
+            "{label} exceeds the {} byte authoring limit",
+            MAX_AUTHORED_TEXT_BYTES
+        );
+    }
+    Ok(())
+}
+
+fn structured_yaml(key: &str, entries: &Value) -> Result<String> {
+    if !entries.is_array() {
+        bail!("{key} must be a JSON array of structured definitions");
+    }
+    let mut document = serde_json::Map::new();
+    document.insert(key.to_string(), entries.clone());
+    serde_yaml::to_string(&Value::Object(document))
+        .with_context(|| format!("failed to serialize structured {key}"))
+}
+
+fn validation_blocked(pack: &LoadedPack, problems: Vec<String>) -> AuthoringReport {
+    AuthoringReport::blocked(
+        Some(pack.manifest.id.clone()),
+        Some(&pack.root),
+        problems,
+        vec!["Fix the structured definitions; no file was changed.".to_string()],
+    )
+}
+
+fn reject_symlink_components(root: &Path, relative: &Path) -> Result<()> {
+    if !is_safe_relative_path(relative) {
+        bail!("unsafe authoring path: {}", relative.display());
+    }
+    let mut current = root.to_path_buf();
+    if fs::symlink_metadata(&current)?.file_type().is_symlink() {
+        bail!("pack root must not be a symbolic link: {}", root.display());
+    }
+    for component in relative.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "authoring path crosses symbolic link: {}",
+                    current.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect {}", current.display()));
+            }
+        }
     }
     Ok(())
 }

@@ -31,6 +31,12 @@ It exposes pack-authoring tools for AI agents:
 - `inspect_packs`
 - `create_pack`
 - `add_stage`
+- `update_pack_metadata`
+- `update_stage_metadata`
+- `write_stage_document`
+- `replace_stage_tests`
+- `write_fixture_file`
+- `replace_stage_benchmarks`
 - `diagnose_pack`
 - `validate_pack`
 - `check_reference`
@@ -44,6 +50,8 @@ The MCP server returns structured reports with:
 - `next_actions`
 
 Agents should treat `status: blocked` as a hard stop. They should not claim a pack is ready until `validate_pack` and `check_reference` return `status: ok`.
+
+Mutation tools require an explicit `packs_dir`; they will not fall back to bundled packs. Stage documents are limited to instructions, hints, and design prompts. Tests and benchmarks are accepted as structured arrays and validated before atomic replacement. Fixture writes are limited to safe relative paths beneath a named stage fixture, reject symbolic-link crossings, and require `overwrite: true` before replacing an existing file.
 
 Set `DELTAFORGE_BIN=/path/to/deltaforge` when running the MCP server from a location where the `deltaforge` binary is not installed next to `deltaforge-pack-mcp`.
 

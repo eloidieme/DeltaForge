@@ -56,4 +56,4 @@ deltaforge pack add-stage --pack-dir packs/example 02_next --title "Next behavio
 deltaforge-pack-mcp
 ```
 
-The MCP server returns structured `ok`/`blocked` reports with problems and next actions. It is designed so agents create packs through scaffold, validation, and reference-solution proof instead of guessing the format.
+The MCP server returns structured `ok`/`blocked` reports with problems and next actions. It is designed so agents create packs through scaffold, constrained metadata/document/test/fixture/benchmark updates, validation, and reference-solution proof instead of guessing the format or editing arbitrary files.

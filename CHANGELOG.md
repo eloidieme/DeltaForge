@@ -14,6 +14,7 @@
 - Added MCP protocol negotiation and malformed-message recovery.
 - Added legacy state compatibility coverage and strict Ubuntu, macOS, and Windows CI.
 - Added an end-to-end stdio integration test using the official Rust MCP SDK.
+- Added constrained MCP tools for pack/stage metadata, stage documents, structured tests and benchmarks, and fixture files.
 
 - Added `pack list`, `pack show`, and local `pack install`.
 - Added `doctor` and `explain-failure`.

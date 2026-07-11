@@ -31,8 +31,14 @@ pub fn digest_tree(root: &Path, excluded_names: &[&str]) -> Result<String> {
 }
 
 pub fn is_safe_relative_path(path: &Path) -> bool {
+    let text = path.to_string_lossy();
     !path.as_os_str().is_empty()
         && !path.is_absolute()
+        && !text.starts_with(['/', '\\'])
+        && !text.contains(':')
+        && text
+            .split(['/', '\\'])
+            .all(|component| !component.is_empty() && component != "." && component != "..")
         && path
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
@@ -72,5 +78,20 @@ fn update_hash(hash: &mut u64, bytes: &[u8]) {
     for byte in bytes {
         *hash ^= u64::from(*byte);
         *hash = hash.wrapping_mul(FNV_PRIME);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_relative_paths_are_portable() {
+        assert!(is_safe_relative_path(Path::new("fixtures/basic/input.txt")));
+        assert!(!is_safe_relative_path(Path::new("../escape")));
+        assert!(!is_safe_relative_path(Path::new("..\\escape")));
+        assert!(!is_safe_relative_path(Path::new("fixtures/./input.txt")));
+        assert!(!is_safe_relative_path(Path::new("C:\\escape")));
+        assert!(!is_safe_relative_path(Path::new("")));
     }
 }

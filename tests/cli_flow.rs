@@ -460,6 +460,8 @@ fn pack_mcp_lists_tools_and_creates_pack_with_structured_report() {
         .collect::<Vec<_>>();
     assert!(tool_names.contains(&"create_pack"));
     assert!(tool_names.contains(&"check_reference"));
+    assert!(tool_names.contains(&"replace_stage_tests"));
+    assert!(tool_names.contains(&"write_fixture_file"));
     let inspect = tools["result"]["tools"]
         .as_array()
         .unwrap()
@@ -467,6 +469,16 @@ fn pack_mcp_lists_tools_and_creates_pack_with_structured_report() {
         .find(|tool| tool["name"] == "inspect_packs")
         .unwrap();
     assert_eq!(inspect["annotations"]["readOnlyHint"], true);
+    let replace_tests = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "replace_stage_tests")
+        .unwrap();
+    assert_eq!(replace_tests["annotations"]["readOnlyHint"], false);
+    assert_eq!(replace_tests["annotations"]["destructiveHint"], true);
+    assert_eq!(replace_tests["annotations"]["idempotentHint"], true);
+    assert_eq!(replace_tests["inputSchema"]["additionalProperties"], false);
     let create_tool = tools["result"]["tools"]
         .as_array()
         .unwrap()

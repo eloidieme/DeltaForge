@@ -3,8 +3,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use deltaforge::authoring::{
-    AddStageRequest, CheckReferenceRequest, NewPackRequest, add_stage, check_reference,
-    create_pack, diagnose_pack,
+    AddStageRequest, CheckReferenceRequest, NewPackRequest, ReplaceStageBenchmarksRequest,
+    ReplaceStageTestsRequest, UpdatePackMetadataRequest, UpdateStageMetadataRequest,
+    WriteFixtureFileRequest, WriteStageDocumentRequest, add_stage, check_reference, create_pack,
+    diagnose_pack, replace_stage_benchmarks, replace_stage_tests, update_pack_metadata,
+    update_stage_metadata, write_fixture_file, write_stage_document,
 };
 use deltaforge::pack::{PackSearchOptions, discover_packs_with_options, load_pack, validate_pack};
 use serde_json::{Value, json};
@@ -63,7 +66,7 @@ fn handle_request(request: Value) -> Option<Value> {
                     "capabilities": {
                         "tools": {}
                     },
-                    "instructions": "Ground pack work with inspect_packs first. Treat status=blocked as a hard stop. A pack is not ready until validate_pack and check_reference both return status=ok. Never copy internal reference solutions into learner templates.",
+                    "instructions": "Ground pack work with inspect_packs first. Use the constrained metadata, document, test, fixture, and benchmark tools instead of unconstrained filesystem editing. Mutations require an explicit packs_dir. Treat status=blocked as a hard stop. A pack is not ready until validate_pack and check_reference both return status=ok. Never copy internal reference solutions into learner templates.",
                     "serverInfo": {
                         "name": "deltaforge-pack-mcp",
                         "version": env!("CARGO_PKG_VERSION")
@@ -165,6 +168,96 @@ fn call_tool(request: &Value) -> Result<Value> {
             })?;
             Ok(serde_json::to_value(report)?)
         }
+        "update_pack_metadata" => {
+            ensure_only_arguments(
+                &arguments,
+                &[
+                    "project",
+                    "packs_dir",
+                    "name",
+                    "description",
+                    "version",
+                    "topics",
+                ],
+            )?;
+            let report = update_pack_metadata(&UpdatePackMetadataRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: required_path(&arguments, "packs_dir")?,
+                name: optional_string_strict(&arguments, "name")?,
+                description: optional_string_strict(&arguments, "description")?,
+                version: optional_string_strict(&arguments, "version")?,
+                topics: optional_string_array(&arguments, "topics")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "update_stage_metadata" => {
+            ensure_only_arguments(&arguments, &["project", "packs_dir", "stage", "title"])?;
+            let report = update_stage_metadata(&UpdateStageMetadataRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: required_path(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+                title: required_string(&arguments, "title")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "write_stage_document" => {
+            ensure_only_arguments(
+                &arguments,
+                &["project", "packs_dir", "stage", "document", "content"],
+            )?;
+            let report = write_stage_document(&WriteStageDocumentRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: required_path(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+                document: required_string(&arguments, "document")?,
+                content: required_string(&arguments, "content")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "replace_stage_tests" => {
+            ensure_only_arguments(&arguments, &["project", "packs_dir", "stage", "tests"])?;
+            let report = replace_stage_tests(&ReplaceStageTestsRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: required_path(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+                tests: required_array_value(&arguments, "tests")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "write_fixture_file" => {
+            ensure_only_arguments(
+                &arguments,
+                &[
+                    "project",
+                    "packs_dir",
+                    "stage",
+                    "fixture",
+                    "path",
+                    "content",
+                    "overwrite",
+                ],
+            )?;
+            let report = write_fixture_file(&WriteFixtureFileRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: required_path(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+                fixture: required_string(&arguments, "fixture")?,
+                path: required_path(&arguments, "path")?,
+                content: required_string(&arguments, "content")?,
+                overwrite: optional_bool_strict(&arguments, "overwrite")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "replace_stage_benchmarks" => {
+            ensure_only_arguments(&arguments, &["project", "packs_dir", "stage", "benchmarks"])?;
+            let report = replace_stage_benchmarks(&ReplaceStageBenchmarksRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: required_path(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+                benchmarks: required_array_value(&arguments, "benchmarks")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
         "diagnose_pack" => {
             let pack = load_pack(
                 &required_string(&arguments, "project")?,
@@ -241,7 +334,8 @@ fn tools() -> Value {
                 }
             }),
             false,
-            true
+            true,
+            false
         ),
         tool(
             "add_stage",
@@ -257,6 +351,114 @@ fn tools() -> Value {
                 }
             }),
             false,
+            true,
+            false
+        ),
+        tool(
+            "update_pack_metadata",
+            "Update selected manifest metadata for a pack in an explicit packs directory.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["project", "packs_dir"],
+                "properties": {
+                    "project": {"type": "string", "minLength": 1},
+                    "packs_dir": {"type": "string", "minLength": 1},
+                    "name": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "description": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "version": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "topics": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 256,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+                    }
+                }
+            }),
+            false,
+            true,
+            true
+        ),
+        tool(
+            "update_stage_metadata",
+            "Rename one existing stage without changing its id or path.",
+            authoring_target_schema(
+                json!({
+                    "stage": {"type": "string", "minLength": 1},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 4096}
+                }),
+                &["stage", "title"]
+            ),
+            false,
+            true,
+            true
+        ),
+        tool(
+            "write_stage_document",
+            "Replace one known stage document: instructions, hints, or design_prompt.",
+            authoring_target_schema(
+                json!({
+                    "stage": {"type": "string", "minLength": 1},
+                    "document": {"type": "string", "enum": ["instructions", "hints", "design_prompt"]},
+                    "content": {"type": "string", "minLength": 1, "maxLength": 1048576}
+                }),
+                &["stage", "document", "content"]
+            ),
+            false,
+            true,
+            true
+        ),
+        tool(
+            "replace_stage_tests",
+            "Validate and atomically replace a stage test suite from structured test definitions.",
+            authoring_target_schema(
+                json!({
+                    "stage": {"type": "string", "minLength": 1},
+                    "tests": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": test_definition_schema()
+                    }
+                }),
+                &["stage", "tests"]
+            ),
+            false,
+            true,
+            true
+        ),
+        tool(
+            "write_fixture_file",
+            "Create or explicitly overwrite one UTF-8 fixture file beneath a named stage fixture.",
+            authoring_target_schema(
+                json!({
+                    "stage": {"type": "string", "minLength": 1},
+                    "fixture": {"type": "string", "minLength": 1},
+                    "path": {"type": "string", "minLength": 1},
+                    "content": {"type": "string", "maxLength": 1048576},
+                    "overwrite": {"type": "boolean", "default": false}
+                }),
+                &["stage", "fixture", "path", "content"]
+            ),
+            false,
+            true,
+            false
+        ),
+        tool(
+            "replace_stage_benchmarks",
+            "Validate and atomically replace stage benchmarks from structured definitions.",
+            authoring_target_schema(
+                json!({
+                    "stage": {"type": "string", "minLength": 1},
+                    "benchmarks": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": benchmark_definition_schema()
+                    }
+                }),
+                &["stage", "benchmarks"]
+            ),
+            false,
+            true,
             true
         ),
         tool(
@@ -271,7 +473,8 @@ fn tools() -> Value {
                 }
             }),
             true,
-            false
+            false,
+            true
         ),
         tool(
             "validate_pack",
@@ -285,7 +488,8 @@ fn tools() -> Value {
                 }
             }),
             true,
-            false
+            false,
+            true
         ),
         tool(
             "check_reference",
@@ -301,6 +505,7 @@ fn tools() -> Value {
                 }
             }),
             false,
+            false,
             false
         ),
         tool(
@@ -313,9 +518,111 @@ fn tools() -> Value {
                 }
             }),
             true,
-            false
+            false,
+            true
         )
     ])
+}
+
+fn authoring_target_schema(extra_properties: Value, required: &[&str]) -> Value {
+    let mut properties = serde_json::Map::from_iter([
+        (
+            "project".to_string(),
+            json!({"type": "string", "minLength": 1}),
+        ),
+        (
+            "packs_dir".to_string(),
+            json!({"type": "string", "minLength": 1}),
+        ),
+    ]);
+    properties.extend(
+        extra_properties
+            .as_object()
+            .expect("authoring schema properties are an object")
+            .clone(),
+    );
+    let mut required_fields = vec![json!("project"), json!("packs_dir")];
+    required_fields.extend(required.iter().map(|field| json!(field)));
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required_fields,
+        "properties": properties
+    })
+}
+
+fn test_definition_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "command", "expect"],
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "fixture": {"type": "string", "minLength": 1},
+            "stdin": {"type": "string"},
+            "env": {
+                "type": "object",
+                "additionalProperties": {"type": "string"}
+            },
+            "command": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string"}
+            },
+            "expect": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "exit_code": {"type": "integer"},
+                    "stdout_exact": {"type": "string"},
+                    "stdout_contains": string_array_schema(),
+                    "stdout_not_contains": string_array_schema(),
+                    "stderr_contains": string_array_schema(),
+                    "file_exists": string_array_schema(),
+                    "file_not_exists": string_array_schema(),
+                    "file_contains": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["path", "contains"],
+                            "properties": {
+                                "path": {"type": "string"},
+                                "contains": {"type": "string"}
+                            }
+                        }
+                    },
+                    "regex_match": string_array_schema(),
+                    "json_equals": {},
+                    "timeout_ms": {"type": "integer", "minimum": 1}
+                }
+            }
+        }
+    })
+}
+
+fn benchmark_definition_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "fixture", "command"],
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "fixture": {"type": "string", "minLength": 1},
+            "command": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string"}
+            },
+            "iterations": {"type": "integer", "minimum": 1},
+            "warmup": {"type": "integer", "minimum": 0},
+            "timeout_ms": {"type": "integer", "minimum": 1}
+        }
+    })
+}
+
+fn string_array_schema() -> Value {
+    json!({"type": "array", "items": {"type": "string"}})
 }
 
 fn tool(
@@ -324,6 +631,7 @@ fn tool(
     input_schema: Value,
     read_only: bool,
     destructive: bool,
+    idempotent: bool,
 ) -> Value {
     json!({
         "name": name,
@@ -332,7 +640,7 @@ fn tool(
         "annotations": {
             "readOnlyHint": read_only,
             "destructiveHint": destructive,
-            "idempotentHint": read_only,
+            "idempotentHint": idempotent,
             "openWorldHint": false
         }
     })
@@ -346,11 +654,57 @@ fn required_string(arguments: &Value, key: &str) -> Result<String> {
         .with_context(|| format!("missing required string argument {key}"))
 }
 
+fn ensure_only_arguments(arguments: &Value, allowed: &[&str]) -> Result<()> {
+    let object = arguments
+        .as_object()
+        .context("tool arguments must be an object")?;
+    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
+        bail!("unknown tool argument {key}");
+    }
+    Ok(())
+}
+
 fn optional_string(arguments: &Value, key: &str) -> Option<String> {
     arguments
         .get(key)
         .and_then(Value::as_str)
         .map(ToString::to_string)
+}
+
+fn optional_string_strict(arguments: &Value, key: &str) -> Result<Option<String>> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => bail!("optional argument {key} must be a string"),
+    }
+}
+
+fn optional_string_array(arguments: &Value, key: &str) -> Result<Option<Vec<String>>> {
+    let Some(value) = arguments.get(key) else {
+        return Ok(None);
+    };
+    let array = value
+        .as_array()
+        .with_context(|| format!("optional argument {key} must be an array"))?;
+    array
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(ToString::to_string)
+                .with_context(|| format!("every {key} item must be a string"))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+fn required_array_value(arguments: &Value, key: &str) -> Result<Value> {
+    let value = arguments
+        .get(key)
+        .with_context(|| format!("missing required array argument {key}"))?;
+    if !value.is_array() {
+        bail!("required argument {key} must be an array");
+    }
+    Ok(value.clone())
 }
 
 fn required_path(arguments: &Value, key: &str) -> Result<PathBuf> {
@@ -363,6 +717,14 @@ fn optional_path(arguments: &Value, key: &str) -> Option<PathBuf> {
 
 fn optional_bool(arguments: &Value, key: &str) -> bool {
     arguments.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn optional_bool_strict(arguments: &Value, key: &str) -> Result<bool> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => bail!("optional argument {key} must be a boolean"),
+    }
 }
 
 fn negotiate_protocol(requested: Option<&str>) -> std::result::Result<&'static str, String> {
