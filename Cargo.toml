@@ -15,6 +15,10 @@ serde_yaml = "0.9"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 toml = "0.8"
 
+[dev-dependencies]
+rmcp = { version = "2.2", default-features = false, features = ["client", "transport-child-process"] }
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

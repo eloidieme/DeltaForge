@@ -13,6 +13,7 @@
 - Added bounded concurrent process capture, process-tree timeouts, isolated benchmark fixtures, and truthful benchmark exit statuses.
 - Added MCP protocol negotiation and malformed-message recovery.
 - Added legacy state compatibility coverage and strict Ubuntu, macOS, and Windows CI.
+- Added an end-to-end stdio integration test using the official Rust MCP SDK.
 
 - Added `pack list`, `pack show`, and local `pack install`.
 - Added `doctor` and `explain-failure`.

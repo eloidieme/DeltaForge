@@ -366,19 +366,14 @@ fn optional_bool(arguments: &Value, key: &str) -> bool {
 }
 
 fn negotiate_protocol(requested: Option<&str>) -> std::result::Result<&'static str, String> {
-    const SUPPORTED: [&str; 3] = ["2024-11-05", "2025-03-26", "2025-06-18"];
+    const SUPPORTED: [&str; 4] = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
     let requested =
         requested.ok_or_else(|| "initialize params.protocolVersion is required".to_string())?;
-    SUPPORTED
+    Ok(SUPPORTED
         .iter()
         .copied()
         .find(|version| *version == requested)
-        .ok_or_else(|| {
-            format!(
-                "unsupported MCP protocol version {requested}; supported versions: {}",
-                SUPPORTED.join(", ")
-            )
-        })
+        .unwrap_or("2025-11-25"))
 }
 
 fn read_message(reader: &mut impl BufRead) -> Result<Option<std::result::Result<Value, String>>> {

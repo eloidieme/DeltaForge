@@ -46,3 +46,5 @@ The MCP server returns structured reports with:
 Agents should treat `status: blocked` as a hard stop. They should not claim a pack is ready until `validate_pack` and `check_reference` return `status: ok`.
 
 Set `DELTAFORGE_BIN=/path/to/deltaforge` when running the MCP server from a location where the `deltaforge` binary is not installed next to `deltaforge-pack-mcp`.
+
+The server uses stdio transport. MCP hosts such as Codex start and stop the configured binary as a child process; authors do not need to keep it running in a separate terminal or background service.

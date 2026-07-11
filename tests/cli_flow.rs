@@ -1335,7 +1335,7 @@ fn mcp_recovers_after_malformed_messages_and_negotiates_protocols() {
         .collect::<Vec<_>>();
     assert_eq!(responses.len(), 4);
     assert_eq!(responses[0]["error"]["code"], -32700);
-    assert_eq!(responses[1]["error"]["code"], -32602);
+    assert_eq!(responses[1]["result"]["protocolVersion"], "2025-11-25");
     assert_eq!(responses[2]["result"]["protocolVersion"], "2025-06-18");
     assert!(responses[3]["result"]["tools"].as_array().unwrap().len() >= 6);
 }
