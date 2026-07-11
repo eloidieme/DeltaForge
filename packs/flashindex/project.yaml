@@ -15,6 +15,8 @@ languages:
       command: ["cargo", "build", "--release"]
     run:
       command: ["cargo", "run", "--release", "--"]
+    bench_run:
+      command: ["./target/release/flashindex"]
 ignored_paths:
   - .git
   - target

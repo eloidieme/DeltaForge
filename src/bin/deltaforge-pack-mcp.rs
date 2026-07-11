@@ -300,7 +300,8 @@ fn call_tool(request: &Value) -> Result<Value> {
         "inspect_packs" => {
             let packs = discover_packs_with_options(&PackSearchOptions {
                 packs_dir: optional_path(&arguments, "packs_dir"),
-            })?;
+            })?
+            .packs;
             Ok(json!({
                 "status": "ok",
                 "packs": packs.into_iter().map(|pack| json!({

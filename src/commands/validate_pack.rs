@@ -10,13 +10,14 @@ pub fn run(args: ValidatePackArgs, options: &GlobalOptions) -> Result<()> {
     let pack_options = PackSearchOptions {
         packs_dir: options.packs_dir.clone(),
     };
-    let packs = if let Some(project) = args.project {
-        vec![load_pack(&project, &pack_options)?]
+    let (packs, discovery_problems) = if let Some(project) = args.project {
+        (vec![load_pack(&project, &pack_options)?], Vec::new())
     } else {
-        discover_packs_with_options(&pack_options)?
+        let discovery = discover_packs_with_options(&pack_options)?;
+        (discovery.packs, discovery.problems)
     };
 
-    if packs.is_empty() {
+    if packs.is_empty() && discovery_problems.is_empty() {
         if args.json {
             println!("[]");
         } else {
@@ -27,6 +28,19 @@ pub fn run(args: ValidatePackArgs, options: &GlobalOptions) -> Result<()> {
 
     let mut failed = false;
     let mut results = Vec::new();
+
+    for problem in &discovery_problems {
+        failed = true;
+        if !args.json {
+            println!("✗ {} is invalid", problem.path.display());
+            println!("  - {}", problem.error);
+        }
+        results.push(PackValidationResult {
+            id: problem.path.display().to_string(),
+            valid: false,
+            problems: vec![problem.error.clone()],
+        });
+    }
 
     for pack in packs {
         let mut problems = validate_pack(&pack);

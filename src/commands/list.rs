@@ -4,10 +4,19 @@ use crate::context::GlobalOptions;
 use crate::pack::{PackSearchOptions, discover_packs_with_options};
 
 pub fn run(options: &GlobalOptions) -> Result<()> {
-    let packs = discover_packs_with_options(&PackSearchOptions {
+    let discovery = discover_packs_with_options(&PackSearchOptions {
         packs_dir: options.packs_dir.clone(),
     })?;
 
+    for problem in &discovery.problems {
+        eprintln!(
+            "warning: skipping invalid pack {}: {}",
+            problem.path.display(),
+            problem.error
+        );
+    }
+
+    let packs = discovery.packs;
     if packs.is_empty() {
         println!("No project packs found.");
         println!("Set DELTAFORGE_PACKS_DIR or install bundled packs.");

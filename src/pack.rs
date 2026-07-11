@@ -1,13 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use include_dir::{Dir, include_dir};
+use include_dir::{Dir, DirEntry, include_dir};
 use serde::{Deserialize, Serialize};
 
-use crate::integrity::is_safe_relative_path;
+use crate::integrity::{digest_named_contents, is_safe_relative_path};
 use crate::runner::{Expectations, StageTests};
 
 static EMBEDDED_PACKS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/packs");
@@ -37,6 +38,17 @@ pub struct LanguageSpec {
     pub template: PathBuf,
     pub build: Option<CommandSpec>,
     pub run: CommandSpec,
+    /// Command used by `deltaforge bench` after the build step. Falls back to
+    /// `run` when absent so existing packs stay valid at schema_version 1.
+    #[serde(default)]
+    pub bench_run: Option<CommandSpec>,
+}
+
+impl LanguageSpec {
+    /// The command benchmarks should time: `bench_run` if set, else `run`.
+    pub fn bench_command(&self) -> &CommandSpec {
+        self.bench_run.as_ref().unwrap_or(&self.run)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,20 +157,152 @@ pub fn builtin_packs_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("packs")
 }
 
-pub fn embedded_packs_dir() -> Result<PathBuf> {
-    let path = std::env::temp_dir().join(format!(
-        "deltaforge-embedded-packs-{}",
-        env!("CARGO_PKG_VERSION")
-    ));
-    if !path.join("flashindex").join("project.yaml").is_file() {
-        EMBEDDED_PACKS.extract(&path).with_context(|| {
-            format!(
-                "failed to extract bundled packs to cache directory {}",
-                path.display()
-            )
-        })?;
+/// Per-user cache root for extracted embedded packs.
+///
+/// Uses `$XDG_CACHE_HOME` / `~/.cache/deltaforge` on Unix and
+/// `%LOCALAPPDATA%\deltaforge` on Windows, falling back to the system temp
+/// directory when neither is available. A per-user location avoids the
+/// world-writable shared temp dir, where another user could pre-create and
+/// poison packs that DeltaForge then executes build/run commands from.
+pub fn embedded_cache_root() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(local) = env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
+            return PathBuf::from(local).join("deltaforge");
+        }
     }
-    Ok(path)
+    #[cfg(not(windows))]
+    {
+        if let Some(xdg) = env::var_os("XDG_CACHE_HOME").filter(|value| !value.is_empty()) {
+            return PathBuf::from(xdg).join("deltaforge");
+        }
+        if let Some(home) = env::var_os("HOME").filter(|value| !value.is_empty()) {
+            return PathBuf::from(home).join(".cache").join("deltaforge");
+        }
+    }
+    std::env::temp_dir().join("deltaforge")
+}
+
+fn collect_embedded_entries(dir: &Dir<'_>, entries: &mut Vec<(String, Vec<u8>)>) {
+    for entry in dir.entries() {
+        match entry {
+            DirEntry::Dir(child) => collect_embedded_entries(child, entries),
+            DirEntry::File(file) => {
+                let name = file.path().to_string_lossy().replace('\\', "/");
+                entries.push((name, file.contents().to_vec()));
+            }
+        }
+    }
+}
+
+/// Content digest of the compiled-in pack tree. Same content yields the same
+/// digest (and therefore the same cache directory) regardless of crate version;
+/// changed content yields a new digest and a fresh cache directory.
+fn embedded_packs_digest() -> String {
+    let mut entries = Vec::new();
+    collect_embedded_entries(&EMBEDDED_PACKS, &mut entries);
+    digest_named_contents(entries)
+}
+
+fn embedded_staging_dir(parent: &Path) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0);
+    parent.join(format!(".packs-staging-{}-{nanos}", std::process::id()))
+}
+
+pub fn embedded_packs_dir() -> Result<PathBuf> {
+    let digest = embedded_packs_digest();
+    let hash = digest.strip_prefix("fnv1a64:").unwrap_or(&digest);
+    let target = embedded_cache_root().join(format!("packs-{hash}"));
+
+    if target.join("flashindex").join("project.yaml").is_file() {
+        return Ok(target);
+    }
+
+    let parent = target
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    fs::create_dir_all(&parent).with_context(|| {
+        format!(
+            "failed to create embedded pack cache directory {}",
+            parent.display()
+        )
+    })?;
+
+    // Extract into a unique sibling directory, then atomically rename it into
+    // place. A partially extracted staging directory never becomes the target,
+    // so an interrupted extract is repaired on the next run rather than
+    // silently reused.
+    let staging = embedded_staging_dir(&parent);
+    let _ = fs::remove_dir_all(&staging);
+    EMBEDDED_PACKS.extract(&staging).with_context(|| {
+        format!(
+            "failed to extract bundled packs to staging directory {}",
+            staging.display()
+        )
+    })?;
+
+    match fs::rename(&staging, &target) {
+        Ok(()) => Ok(target),
+        Err(error) => {
+            // Lost the race to another process (or the target already exists):
+            // discard our staging copy and use the installed directory.
+            let _ = fs::remove_dir_all(&staging);
+            if target.join("flashindex").join("project.yaml").is_file() {
+                Ok(target)
+            } else {
+                Err(error).with_context(|| {
+                    format!("failed to install bundled packs into {}", target.display())
+                })
+            }
+        }
+    }
+}
+
+/// Whether a pinned `pack_source` string refers to a bundled/embedded pack.
+///
+/// Recognizes the logical `"bundled"` marker, the current per-user cache
+/// location, the builtin dev-tree packs directory, and the legacy shared-temp
+/// cache path (`deltaforge-embedded-packs-*`) written by older versions.
+pub fn is_bundled_source(source: &str) -> bool {
+    if source == "bundled" {
+        return true;
+    }
+    is_bundled_pack_root(Path::new(source))
+}
+
+/// The logical `pack_source` label to pin for a discovered pack: `"bundled"`
+/// for embedded/builtin packs, or the canonicalized absolute path for external
+/// packs supplied via `--packs-dir` / `DELTAFORGE_PACKS_DIR`.
+pub fn pack_source_label(pack_root: &Path) -> String {
+    if is_bundled_pack_root(pack_root) {
+        "bundled".to_string()
+    } else {
+        pack_root
+            .canonicalize()
+            .unwrap_or_else(|_| pack_root.to_path_buf())
+            .display()
+            .to_string()
+    }
+}
+
+fn is_bundled_pack_root(path: &Path) -> bool {
+    if path.components().any(|component| {
+        matches!(component, Component::Normal(name)
+            if name.to_string_lossy().starts_with("deltaforge-embedded-packs"))
+    }) {
+        return true;
+    }
+    path_is_under(path, &embedded_cache_root()) || path_is_under(path, &builtin_packs_dir())
+}
+
+fn path_is_under(path: &Path, base: &Path) -> bool {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    path.starts_with(&base)
 }
 
 pub fn pack_search_dirs(options: &PackSearchOptions) -> Vec<PathBuf> {
@@ -213,8 +357,24 @@ pub fn load_pack(project_id: &str, options: &PackSearchOptions) -> Result<Loaded
     bail!("could not find project pack {project_id}. Searched:\n{searched}");
 }
 
-pub fn discover_packs_with_options(options: &PackSearchOptions) -> Result<Vec<LoadedPack>> {
-    let mut packs = Vec::new();
+/// A pack directory that could not be loaded during discovery.
+#[derive(Debug, Clone)]
+pub struct PackProblem {
+    pub path: PathBuf,
+    pub error: String,
+}
+
+/// The outcome of scanning every search directory for packs: successfully
+/// loaded packs plus a list of directories that failed to parse or validate.
+/// A single malformed pack no longer aborts discovery for every command.
+#[derive(Debug, Clone, Default)]
+pub struct PackDiscovery {
+    pub packs: Vec<LoadedPack>,
+    pub problems: Vec<PackProblem>,
+}
+
+pub fn discover_packs_with_options(options: &PackSearchOptions) -> Result<PackDiscovery> {
+    let mut discovery = PackDiscovery::default();
     let mut seen_ids = BTreeSet::new();
 
     for packs_dir in pack_search_dirs(options) {
@@ -237,22 +397,36 @@ pub fn discover_packs_with_options(options: &PackSearchOptions) -> Result<Vec<Lo
                 continue;
             }
 
-            let source = fs::read_to_string(&manifest_path).with_context(|| {
-                format!("failed to read pack manifest {}", manifest_path.display())
-            })?;
-            let manifest: ProjectPack = serde_yaml::from_str(&source).with_context(|| {
-                format!("failed to parse pack manifest {}", manifest_path.display())
-            })?;
-            validate_pack_schema(&manifest, &manifest_path)?;
-
-            if seen_ids.insert(manifest.id.clone()) {
-                packs.push(LoadedPack { root, manifest });
+            match load_discovered_pack(&manifest_path, root.clone()) {
+                Ok(pack) => {
+                    if seen_ids.insert(pack.manifest.id.clone()) {
+                        discovery.packs.push(pack);
+                    }
+                }
+                Err(error) => discovery.problems.push(PackProblem {
+                    path: manifest_path,
+                    error: format!("{error:#}"),
+                }),
             }
         }
     }
 
-    packs.sort_by(|left, right| left.manifest.id.cmp(&right.manifest.id));
-    Ok(packs)
+    discovery
+        .packs
+        .sort_by(|left, right| left.manifest.id.cmp(&right.manifest.id));
+    discovery
+        .problems
+        .sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(discovery)
+}
+
+fn load_discovered_pack(manifest_path: &Path, root: PathBuf) -> Result<LoadedPack> {
+    let source = fs::read_to_string(manifest_path)
+        .with_context(|| format!("failed to read pack manifest {}", manifest_path.display()))?;
+    let manifest: ProjectPack = serde_yaml::from_str(&source)
+        .with_context(|| format!("failed to parse pack manifest {}", manifest_path.display()))?;
+    validate_pack_schema(&manifest, manifest_path)?;
+    Ok(LoadedPack { root, manifest })
 }
 
 fn validate_pack_schema(manifest: &ProjectPack, path: &Path) -> Result<()> {
@@ -330,6 +504,12 @@ fn validate_languages(pack: &LoadedPack, problems: &mut Vec<String>) {
             && build.command.is_empty()
         {
             problems.push(format!("language {language} build command is empty"));
+        }
+
+        if let Some(bench_run) = &spec.bench_run
+            && bench_run.command.is_empty()
+        {
+            problems.push(format!("language {language} bench_run command is empty"));
         }
     }
 }

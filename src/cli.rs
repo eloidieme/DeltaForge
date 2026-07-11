@@ -36,8 +36,10 @@ pub enum Command {
     Test(TestArgs),
     /// Move to the next stage after the current stage passes.
     Next,
+    /// Re-pin the project to the currently discovered pack after an upgrade.
+    SyncPack(SyncPackArgs),
     /// Show project progress.
-    Status,
+    Status(StatusArgs),
     /// Show progressive hints for the current stage.
     Hint(HintArgs),
     /// Inspect and validate project configuration.
@@ -153,6 +155,20 @@ pub struct TestArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct SyncPackArgs {
+    /// Print machine-readable JSON only.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct StatusArgs {
+    /// Print machine-readable JSON only.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct HintArgs {
     /// Show a specific hint level.
     #[arg(long)]
@@ -225,15 +241,15 @@ pub struct ReportArgs {
     #[arg(long, value_enum, default_value_t = ReportFormat::Markdown)]
     pub format: ReportFormat,
 
-    /// Output path.
-    #[arg(long)]
+    /// Output path. Defaults to report.md.
+    #[arg(long, default_value = "report.md")]
     pub output: PathBuf,
 }
 
 #[derive(Debug, Args)]
 pub struct PortfolioArgs {
-    /// Output path.
-    #[arg(long)]
+    /// Output path. Defaults to PORTFOLIO.md.
+    #[arg(long, default_value = "PORTFOLIO.md")]
     pub output: PathBuf,
 }
 

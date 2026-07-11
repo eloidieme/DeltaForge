@@ -11,10 +11,11 @@ use crate::pack::{PackSearchOptions, discover_packs_with_options, validate_pack}
 pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
     let cargo = tool_version("cargo");
     let git = tool_version("git");
-    let packs = discover_packs_with_options(&PackSearchOptions {
+    let discovery = discover_packs_with_options(&PackSearchOptions {
         packs_dir: options.packs_dir.clone(),
     })?;
-    let pack_results = packs
+    let mut pack_results = discovery
+        .packs
         .iter()
         .map(|pack| {
             let problems = validate_pack(pack);
@@ -25,6 +26,13 @@ pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
             }
         })
         .collect::<Vec<_>>();
+    for problem in &discovery.problems {
+        pack_results.push(DoctorPack {
+            id: problem.path.display().to_string(),
+            valid: false,
+            problems: vec![problem.error.clone()],
+        });
+    }
     let (project, project_error) = match ProjectContext::load(options) {
         Ok(context) => (
             Some(DoctorProject {

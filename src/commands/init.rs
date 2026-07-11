@@ -8,7 +8,7 @@ use crate::cli::InitArgs;
 use crate::config::ProjectConfig;
 use crate::context::GlobalOptions;
 use crate::integrity::digest_tree;
-use crate::pack::{LoadedPack, PackSearchOptions, StageSpec, load_pack};
+use crate::pack::{LoadedPack, PackSearchOptions, StageSpec, load_pack, pack_source_label};
 use crate::state::ProjectState;
 
 use super::default_project_directory;
@@ -106,12 +106,7 @@ fn write_deltaforge_metadata(
         current_stage.id.clone(),
     )?;
     state.pack_version = loaded_pack.manifest.version.clone();
-    state.pack_source = loaded_pack
-        .root
-        .canonicalize()
-        .unwrap_or_else(|_| loaded_pack.root.clone())
-        .display()
-        .to_string();
+    state.pack_source = pack_source_label(&loaded_pack.root);
     state.pack_digest = digest_tree(&loaded_pack.root, &[])?;
     state.write_to(&deltaforge_dir.join("state.json"))?;
 

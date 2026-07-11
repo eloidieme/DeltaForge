@@ -43,10 +43,16 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
         });
         let capped_level = level.min(hints.len());
         print_hint(capped_level, hints.len(), &hints[capped_level - 1]);
+        let previous = context
+            .state
+            .hint_state
+            .get(&stage.id)
+            .copied()
+            .unwrap_or(0);
         context
             .state
             .hint_state
-            .insert(stage.id.clone(), capped_level);
+            .insert(stage.id.clone(), previous.max(capped_level));
     }
 
     context.state.touch()?;

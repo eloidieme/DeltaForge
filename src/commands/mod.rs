@@ -19,6 +19,7 @@ pub mod pack;
 pub mod portfolio;
 pub mod report;
 pub mod status;
+pub mod sync_pack;
 pub mod test;
 pub mod validate_pack;
 
@@ -37,7 +38,8 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Overview(args) => overview::run(args, &options),
         Command::Test(args) => test::run(args, &options),
         Command::Next => next::run(&options),
-        Command::Status => status::run(&options),
+        Command::SyncPack(args) => sync_pack::run(args, &options),
+        Command::Status(args) => status::run(args, &options),
         Command::Hint(args) => hint::run(args, &options),
         Command::Config(command) => config::run(command, &options),
         Command::Bench(args) => bench::run(args, &options),

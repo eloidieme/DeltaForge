@@ -60,7 +60,7 @@ pub fn run(command: PackCommand, options: &GlobalOptions) -> Result<()> {
 }
 
 fn list(json: bool, options: &GlobalOptions) -> Result<()> {
-    let packs = discover_packs_with_options(&pack_options(options))?;
+    let packs = discover_packs_with_options(&pack_options(options))?.packs;
     if json {
         let summaries = packs.iter().map(PackSummary::from).collect::<Vec<_>>();
         println!("{}", serde_json::to_string_pretty(&summaries)?);

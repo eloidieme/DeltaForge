@@ -15,6 +15,8 @@ languages:
       command: ["cargo", "build", "--release"]
     run:
       command: ["cargo", "run", "--release", "--"]
+    bench_run:
+      command: ["./target/release/flashindex"]
 stages:
   - id: 01_scan_files
     title: Scan files
@@ -22,6 +24,15 @@ stages:
 ```
 
 Each stage requires `instructions.md`, `hints.md`, and `tests.yaml`. `benchmarks.yaml` and `design_prompt.md` are optional.
+
+Language spec fields:
+
+- `template` (required): path to the language starter template, copied into the learner project.
+- `build` (optional): command run before tests and benchmarks.
+- `run` (required): command used by `deltaforge test` to invoke the learner's program.
+- `bench_run` (optional): command used by `deltaforge bench` to time the learner's program after the build step. It falls back to `run` when absent, so it is optional at `schema_version: 1`. Prefer pointing it directly at the built binary (for example `./target/release/<binary>`) so benchmarks measure the program rather than build-tool startup overhead. A relative first element is resolved against the project root and receives the platform executable suffix on Windows.
+
+A pack's `ignored_paths` are excluded (in addition to a built-in list: `.git`, `.deltaforge`, `target`, `build`, `node_modules`, `__pycache__`, `.venv`, `.DS_Store`) when computing the learner project digest that guards stage completion.
 
 Bundled packs currently include:
 

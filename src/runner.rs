@@ -201,6 +201,9 @@ pub fn run_stage_tests(
                 for failure in &result.failures {
                     println!("  {failure}");
                 }
+                if !args.verbose {
+                    print_actual_output(&result);
+                }
             }
             if args.verbose {
                 if !result.stdout.is_empty() {
@@ -243,6 +246,49 @@ pub fn run_stage_tests(
             && passed == total_defined
             && failed == 0,
     })
+}
+
+const ACTUAL_OUTPUT_MAX_LINES: usize = 30;
+const ACTUAL_OUTPUT_MAX_CHARS: usize = 2000;
+
+fn print_actual_output(result: &TestResult) {
+    print_actual_stream("stdout", &result.stdout);
+    if !result.stderr.trim().is_empty() {
+        print_actual_stream("stderr", &result.stderr);
+    }
+}
+
+fn print_actual_stream(label: &str, output: &str) {
+    if output.is_empty() {
+        println!("  actual {label}: (empty)");
+        return;
+    }
+
+    let (body, truncated) = truncate_output(output);
+    println!("  actual {label} (first {ACTUAL_OUTPUT_MAX_LINES} lines):");
+    for line in body.lines() {
+        println!("    {line}");
+    }
+    if truncated {
+        println!("    … truncated, run with --verbose");
+    }
+}
+
+fn truncate_output(output: &str) -> (String, bool) {
+    let mut truncated = false;
+    let mut body: String = output
+        .lines()
+        .take(ACTUAL_OUTPUT_MAX_LINES)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if output.lines().count() > ACTUAL_OUTPUT_MAX_LINES {
+        truncated = true;
+    }
+    if body.chars().count() > ACTUAL_OUTPUT_MAX_CHARS {
+        body = body.chars().take(ACTUAL_OUTPUT_MAX_CHARS).collect();
+        truncated = true;
+    }
+    (body, truncated)
 }
 
 fn run_build(
@@ -345,12 +391,26 @@ fn run_test_case_in_temp(
         .expect
         .timeout_ms
         .unwrap_or(context.config.runner.timeout_ms);
+    let stdin = test
+        .stdin
+        .as_ref()
+        .map(|value| expand_variables(value, &fixture_path, temp_dir));
+    let env = test
+        .env
+        .iter()
+        .map(|(key, value)| {
+            (
+                key.clone(),
+                expand_variables(value, &fixture_path, temp_dir),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let output = run_command_with_input_and_env(
         &full_command,
         &context.root,
         timeout_ms,
-        test.stdin.as_deref(),
-        &test.env,
+        stdin.as_deref(),
+        &env,
     )?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();

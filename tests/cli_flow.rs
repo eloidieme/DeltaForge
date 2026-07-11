@@ -1565,6 +1565,253 @@ fn assert_reference_solution_passes(pack: &str, source_path: &str, final_stage: 
     assert_stdout_contains(&all, "3 passed, 0 failed");
 }
 
+#[test]
+fn sync_pack_re_pins_project_after_pack_digest_changes() {
+    let root = temp_project_path("sync-pack");
+    let packs = root.join("packs");
+    copy_dir_recursive(
+        &repo_root().join("packs/flashindex"),
+        &packs.join("flashindex"),
+    );
+    let project = root.join("project");
+
+    assert_success(&run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    fs::write(project.join("src/main.rs"), passing_flashindex_source()).unwrap();
+
+    let test = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "test"], &project);
+    assert_success(&test);
+
+    // Simulate a pack upgrade: the pinned digest no longer matches.
+    let instructions = packs.join("flashindex/stages/01_scan_files/instructions.md");
+    let mut updated = fs::read_to_string(&instructions).unwrap();
+    updated.push_str("\n<!-- upgraded pack content -->\n");
+    fs::write(&instructions, updated).unwrap();
+
+    let stale = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "overview"],
+        &project,
+    );
+    assert_failure(&stale);
+    assert_stderr_contains(&stale, "deltaforge sync-pack");
+
+    let sync = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    );
+    assert_success(&sync);
+    assert_stdout_contains(&sync, "Re-pinned project flashindex");
+
+    // The project loads again and progression still works because the proof's
+    // pack digest was migrated while the learner's project digest was not.
+    let overview = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "overview"],
+        &project,
+    );
+    assert_success(&overview);
+    let next = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
+    assert_success(&next);
+    assert_stdout_contains(&next, "Unlocked Stage 02_filter_files");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn sync_pack_reports_changes_as_json() {
+    let root = temp_project_path("sync-pack-json");
+    let packs = root.join("packs");
+    copy_dir_recursive(
+        &repo_root().join("packs/flashindex"),
+        &packs.join("flashindex"),
+    );
+    let project = root.join("project");
+    assert_success(&run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+
+    let sync = run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "sync-pack",
+            "--json",
+        ],
+        &project,
+    );
+    assert_success(&sync);
+    let report: serde_json::Value =
+        serde_json::from_slice(&sync.stdout).expect("sync-pack --json emits valid JSON");
+    assert_eq!(report["project"], "flashindex");
+    assert!(
+        report["digest"]["new"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn symlink_in_learner_project_does_not_block_completion() {
+    let project = temp_project_path("symlink-project");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    fs::write(project.join("src/main.rs"), passing_flashindex_source()).unwrap();
+    std::os::unix::fs::symlink(project.join("Cargo.toml"), project.join("venv-link")).unwrap();
+
+    let test = run_deltaforge(["test"], &project);
+    assert_success(&test);
+    let next = run_deltaforge(["next"], &project);
+    assert_success(&next);
+    assert_stdout_contains(&next, "Unlocked Stage 02_filter_files");
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn broken_pack_in_search_dir_does_not_break_list() {
+    let root = temp_project_path("broken-pack");
+    let packs = root.join("packs");
+    fs::create_dir_all(packs.join("brokenpack")).unwrap();
+    // Missing required fields makes the manifest fail to parse.
+    fs::write(
+        packs.join("brokenpack/project.yaml"),
+        "schema_version: 1\nname: incomplete\n",
+    )
+    .unwrap();
+
+    let list = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "list"],
+        &repo_root(),
+    );
+    assert_success(&list);
+    assert_stdout_contains(&list, "flashindex");
+    assert_stderr_contains(&list, "skipping invalid pack");
+
+    // validate-pack over the same directory surfaces the failure and exits non-zero.
+    let validate = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "validate-pack"],
+        &repo_root(),
+    );
+    assert_failure(&validate);
+    assert_stdout_contains(&validate, "is invalid");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn test_failure_output_includes_actual_stdout() {
+    let project = temp_project_path("failure-output");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+
+    let test = run_deltaforge(["test"], &project);
+    assert_failure(&test);
+    assert_stdout_contains(&test, "actual stdout");
+    assert_stdout_contains(&test, "FlashIndex starter");
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn status_json_reports_per_stage_status() {
+    let project = temp_project_path("status-json");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+
+    let status = run_deltaforge(["status", "--json"], &project);
+    assert_success(&status);
+    assert!(
+        String::from_utf8_lossy(&status.stderr).is_empty(),
+        "{}",
+        output_text(&status)
+    );
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&status.stdout).expect("status --json emits valid JSON");
+    assert_eq!(parsed["project"], "flashindex");
+    assert_eq!(parsed["current_stage"], "01_scan_files");
+    assert_eq!(parsed["stages"][0]["status"], "current");
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn hint_level_never_lowers_recorded_progress() {
+    let project = temp_project_path("hint-progress");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+
+    assert_success(&run_deltaforge(["hint", "--level", "3"], &project));
+    assert_success(&run_deltaforge(["hint", "--level", "1"], &project));
+
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(project.join(".deltaforge/state.json")).unwrap())
+            .unwrap();
+    assert_eq!(state["hint_state"]["01_scan_files"], 3);
+    let _ = fs::remove_dir_all(project);
+}
+
 fn passing_flashindex_source() -> &'static str {
     r#"use std::env;
 use std::fs;

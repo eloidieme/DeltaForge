@@ -30,6 +30,22 @@ pub fn digest_tree(root: &Path, excluded_names: &[&str]) -> Result<String> {
     Ok(format!("fnv1a64:{hash:016x}"))
 }
 
+/// Digest a set of `(relative name, contents)` pairs using the same FNV-1a
+/// scheme (and framing) as [`digest_tree`]. Names are sorted for determinism so
+/// the same content always yields the same digest regardless of iteration order.
+pub fn digest_named_contents(mut entries: Vec<(String, Vec<u8>)>) -> String {
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut hash = FNV_OFFSET;
+    for (name, contents) in entries {
+        update_hash(&mut hash, name.as_bytes());
+        update_hash(&mut hash, &[0]);
+        update_hash(&mut hash, &contents);
+        update_hash(&mut hash, &[0xff]);
+    }
+    format!("fnv1a64:{hash:016x}")
+}
+
 pub fn is_safe_relative_path(path: &Path) -> bool {
     let text = path.to_string_lossy();
     !path.as_os_str().is_empty()
@@ -55,7 +71,7 @@ fn collect_files(
     {
         let entry = entry?;
         let name = entry.file_name();
-        if current == root && excluded_names.iter().any(|excluded| name == *excluded) {
+        if excluded_names.iter().any(|excluded| name == *excluded) {
             continue;
         }
         let path = entry.path();
@@ -64,12 +80,10 @@ fn collect_files(
             collect_files(root, &path, excluded_names, files)?;
         } else if file_type.is_file() {
             files.push(path.strip_prefix(root)?.to_path_buf());
-        } else {
-            bail!(
-                "integrity digest does not allow symlinks or special files: {}",
-                path.display()
-            );
         }
+        // Symlinks and other special files are skipped rather than rejected: a
+        // learner project may contain a venv, node_modules symlink, or similar,
+        // and stage completion must not be blocked by their presence.
     }
     Ok(())
 }

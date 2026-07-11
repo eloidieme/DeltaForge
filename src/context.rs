@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::ProjectConfig;
 use crate::integrity::digest_tree;
-use crate::pack::{LoadedPack, PackSearchOptions, load_pack};
+use crate::pack::{LoadedPack, PackSearchOptions, is_bundled_source, load_pack, pack_source_label};
 use crate::state::ProjectState;
 
 #[derive(Debug, Clone, Default)]
@@ -26,6 +26,16 @@ pub struct ProjectContext {
 
 impl ProjectContext {
     pub fn load(options: &GlobalOptions) -> Result<Self> {
+        Self::load_inner(options, true)
+    }
+
+    /// Load without enforcing the pack pin. Used by `deltaforge sync-pack`,
+    /// which exists precisely to re-pin a project whose pack moved or changed.
+    pub fn load_unpinned(options: &GlobalOptions) -> Result<Self> {
+        Self::load_inner(options, false)
+    }
+
+    fn load_inner(options: &GlobalOptions, verify_pin: bool) -> Result<Self> {
         let root = resolve_project_root(options)?;
         let state_path = root.join(".deltaforge").join("state.json");
         let config_path = root.join(".deltaforge").join("config.toml");
@@ -45,7 +55,9 @@ impl ProjectContext {
                 packs_dir: options.packs_dir.clone(),
             },
         )?;
-        verify_pack_pin(&state, &pack)?;
+        if verify_pin {
+            verify_pack_pin(&state, &pack)?;
+        }
 
         Ok(Self {
             root,
@@ -66,7 +78,22 @@ impl ProjectContext {
     }
 
     pub fn project_digest(&self) -> Result<String> {
-        digest_tree(&self.root, &[".git", ".deltaforge", "target"])
+        let mut excluded: Vec<&str> = vec![
+            ".git",
+            ".deltaforge",
+            "target",
+            "build",
+            "node_modules",
+            "__pycache__",
+            ".venv",
+            ".DS_Store",
+        ];
+        for ignored in &self.pack.manifest.ignored_paths {
+            if !excluded.contains(&ignored.as_str()) {
+                excluded.push(ignored.as_str());
+            }
+        }
+        digest_tree(&self.root, &excluded)
     }
 
     pub fn verify_completion_proof(&self, stage_id: &str) -> Result<()> {
@@ -96,7 +123,7 @@ impl ProjectContext {
 fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {
     if !state.pack_version.is_empty() && state.pack_version != pack.manifest.version {
         bail!(
-            "project is pinned to pack {} version {}, but discovery selected version {} from {}",
+            "project is pinned to pack {} version {}, but discovery selected version {} from {}. Run `deltaforge sync-pack` to re-pin to the current pack.",
             state.project,
             state.pack_version,
             pack.manifest.version,
@@ -104,15 +131,21 @@ fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {
         );
     }
     if !state.pack_source.is_empty() {
-        let actual = pack
-            .root
-            .canonicalize()
-            .unwrap_or_else(|_| pack.root.clone());
-        if Path::new(&state.pack_source) != actual {
+        let actual_label = pack_source_label(&pack.root);
+        let matches = if is_bundled_source(&state.pack_source) {
+            actual_label == "bundled"
+        } else {
+            let actual = pack
+                .root
+                .canonicalize()
+                .unwrap_or_else(|_| pack.root.clone());
+            Path::new(&state.pack_source) == actual
+        };
+        if !matches {
             bail!(
-                "project is pinned to pack source {}, but discovery selected {}; use the original --packs-dir",
+                "project is pinned to pack source {}, but discovery selected {}. Run `deltaforge sync-pack` to re-pin, or use the original --packs-dir.",
                 state.pack_source,
-                actual.display()
+                actual_label
             );
         }
     }
@@ -120,7 +153,7 @@ fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {
         let actual = digest_tree(&pack.root, &[])?;
         if state.pack_digest != actual {
             bail!(
-                "pack contents changed since project initialization; restore the pinned pack or initialize a new project"
+                "pack contents changed since project initialization. Run `deltaforge sync-pack` to re-pin to the current pack."
             );
         }
     }

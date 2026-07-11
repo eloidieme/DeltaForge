@@ -27,3 +27,14 @@
 - Added integration coverage proving all bundled packs are passable by reference solutions.
 - Added deterministic pack authoring commands: `pack new`, `pack add-stage`, `pack doctor`, and `pack check-reference`.
 - Added `deltaforge-pack-mcp`, a stdio MCP server for AI-assisted pack creation and validation.
+
+### Foundation repair
+
+- Pinned bundled/embedded packs logically as `"bundled"` instead of by absolute temp path, so version bumps no longer brick existing learner projects; old pins under any embedded-cache location are treated as bundled.
+- Added `deltaforge sync-pack` to re-pin a project's pack version, source, and digest after an upgrade, migrating the pack digest in existing completion proofs (learner project digests untouched). Supports `--json`. All pin-mismatch errors now point at it.
+- Moved the embedded-pack cache to a per-user directory (`$XDG_CACHE_HOME`/`~/.cache/deltaforge` on Unix, `%LOCALAPPDATA%\deltaforge` on Windows), keyed by a content digest of the embedded tree, and made extraction atomic via extract-to-sibling-then-rename.
+- Made integrity digests skip symlinks/special files instead of failing, applied digest exclusions at every directory depth, and expanded default project-digest exclusions (plus each pack's `ignored_paths`).
+- Added an optional `bench_run` command to language specs and set it for all bundled packs so benchmarks time the built binary rather than `cargo run` startup overhead.
+- Made pack discovery resilient to a single malformed pack: `list` warns, `doctor` reports it, and `validate-pack` reports and fails.
+- Showed actual program stdout/stderr beneath test failures (truncated; full output with `--verbose`).
+- Prevented `hint --level N` from lowering recorded progress, expanded `{fixture_path}`/`{temp_dir}` in test `stdin` and `env` values, defaulted `report`/`portfolio` `--output`, and added `--json` to `status`.

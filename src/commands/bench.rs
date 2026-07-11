@@ -167,17 +167,58 @@ fn run_stage_benchmarks(
         }
     }
 
+    let bench_command = resolve_bench_command(language.bench_command(), &context.root);
+
     let mut records = Vec::new();
     for benchmark in parsed.benchmarks {
         records.push(run_one_benchmark(
             context,
             stage,
-            &language.run,
+            &bench_command,
             benchmark,
             args,
         )?);
     }
     Ok(records)
+}
+
+/// Normalize a benchmark command's program so it runs correctly regardless of
+/// platform and working directory. A relative program such as
+/// `./target/release/flashindex` is resolved against the project root (avoiding
+/// the parent-vs-child cwd ambiguity when spawning) and gets the platform
+/// executable suffix appended on Windows. PATH-resolved programs (e.g. `cargo`)
+/// are left untouched.
+fn resolve_bench_command(spec: &CommandSpec, root: &Path) -> CommandSpec {
+    let mut command = spec.command.clone();
+    if let Some(program) = command.first_mut() {
+        *program = resolve_program(program, root);
+    }
+    CommandSpec { command }
+}
+
+fn resolve_program(program: &str, root: &Path) -> String {
+    let looks_relative = program.starts_with("./")
+        || program.starts_with(".\\")
+        || program.contains('/')
+        || program.contains('\\');
+    if !looks_relative {
+        return program.to_string();
+    }
+
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let with_suffix = if suffix.is_empty() || program.ends_with(suffix) {
+        program.to_string()
+    } else {
+        format!("{program}{suffix}")
+    };
+
+    let path = PathBuf::from(with_suffix);
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
+    resolved.to_string_lossy().to_string()
 }
 
 fn run_one_benchmark(
