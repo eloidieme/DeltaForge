@@ -25,10 +25,18 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
     };
 
     let mut summaries = Vec::new();
+    let mut newly_completed_current = false;
     for stage in &stages {
         let summary = runner::run_stage_tests(&context, stage, &args)?;
-        if !args.list_tests && summary.is_success() {
-            context.state.mark_completed(&stage.id)?;
+        if !args.list_tests && summary.completion_eligible {
+            let was_completed = context.state.is_completed(&stage.id);
+            context.state.record_completion_proof(
+                &stage.id,
+                context.pack_digest()?,
+                context.project_digest()?,
+                summary.total_defined,
+            )?;
+            newly_completed_current |= !was_completed && stage.id == context.state.current_stage;
         }
         if !args.list_tests {
             context.state.record_test_run(
@@ -53,12 +61,19 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
         context.save_state()?;
     }
 
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&summaries)?);
+    if summaries.iter().any(|summary| !summary.is_success()) {
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&summaries)?);
+        }
+        bail!("tests failed");
     }
 
-    if summaries.iter().any(|summary| !summary.is_success()) {
-        bail!("tests failed");
+    if newly_completed_current && context.config.git.auto_commit {
+        super::commit::run_automatic(options, args.json)?;
+    }
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&summaries)?);
     }
 
     Ok(())

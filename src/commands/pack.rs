@@ -121,19 +121,11 @@ fn install(
 ) -> Result<()> {
     let pack = load_pack(project, &pack_options(options))?;
     let destination = destination_root.join(&pack.manifest.id);
-    if destination.exists() {
-        if !force {
-            bail!(
-                "pack destination already exists: {}\nUse --force to replace it.",
-                destination.display()
-            );
-        }
-        fs::remove_dir_all(&destination).with_context(|| {
-            format!(
-                "failed to remove existing pack directory {}",
-                destination.display()
-            )
-        })?;
+    if destination.exists() && !force {
+        bail!(
+            "pack destination already exists: {}\nUse --force to replace it.",
+            destination.display()
+        );
     }
     fs::create_dir_all(destination_root).with_context(|| {
         format!(
@@ -141,13 +133,44 @@ fn install(
             destination_root.display()
         )
     })?;
-    copy_dir_recursive(&pack.root, &destination)?;
+    let prepared = unique_sibling(&destination, "prepared");
+    copy_dir_recursive(&pack.root, &prepared)?;
+    let backup = if destination.exists() {
+        let backup = unique_sibling(&destination, "backup");
+        fs::rename(&destination, &backup).with_context(|| {
+            format!("failed to preserve existing pack {}", destination.display())
+        })?;
+        Some(backup)
+    } else {
+        None
+    };
+    if let Err(error) = fs::rename(&prepared, &destination) {
+        if let Some(backup) = &backup {
+            let _ = fs::rename(backup, &destination);
+        }
+        return Err(error).context("failed to install prepared pack directory");
+    }
+    if let Some(backup) = backup {
+        fs::remove_dir_all(backup)?;
+    }
     println!(
         "Installed pack {} to {}",
         pack.manifest.id,
         destination.display()
     );
     Ok(())
+}
+
+fn unique_sibling(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("pack");
+    path.with_file_name(format!(".{name}.{}.{nanos}.{suffix}", std::process::id()))
 }
 
 fn pack_options(options: &GlobalOptions) -> PackSearchOptions {

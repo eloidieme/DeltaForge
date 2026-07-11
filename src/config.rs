@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::fs_util::atomic_write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectConfig {
     #[serde(default = "current_config_schema_version")]
     pub schema_version: u32,
@@ -20,6 +21,7 @@ pub struct ProjectConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunnerConfig {
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
@@ -30,6 +32,7 @@ pub struct RunnerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BenchConfig {
     #[serde(default = "default_bench_iterations")]
     pub iterations: u64,
@@ -38,6 +41,7 @@ pub struct BenchConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GitConfig {
     #[serde(default)]
     pub auto_commit: bool,
@@ -128,6 +132,12 @@ impl ProjectConfig {
         if self.runner.build_timeout_ms == 0 {
             bail!(
                 "invalid config {}: runner.build_timeout_ms must be greater than 0",
+                path.display()
+            );
+        }
+        if self.bench.iterations == 0 {
+            bail!(
+                "invalid config {}: bench.iterations must be greater than 0",
                 path.display()
             );
         }

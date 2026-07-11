@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::config::ProjectConfig;
+use crate::integrity::digest_tree;
 use crate::pack::{LoadedPack, PackSearchOptions, load_pack};
 use crate::state::ProjectState;
 
@@ -44,6 +45,7 @@ impl ProjectContext {
                 packs_dir: options.packs_dir.clone(),
             },
         )?;
+        verify_pack_pin(&state, &pack)?;
 
         Ok(Self {
             root,
@@ -58,6 +60,71 @@ impl ProjectContext {
     pub fn save_state(&self) -> Result<()> {
         self.state.write_to(&self.state_path)
     }
+
+    pub fn pack_digest(&self) -> Result<String> {
+        digest_tree(&self.pack.root, &[])
+    }
+
+    pub fn project_digest(&self) -> Result<String> {
+        digest_tree(&self.root, &[".git", ".deltaforge", "target"])
+    }
+
+    pub fn verify_completion_proof(&self, stage_id: &str) -> Result<()> {
+        let proof = self
+            .state
+            .completion_proofs
+            .get(stage_id)
+            .with_context(|| {
+                format!("stage {stage_id} has no integrity proof; run `deltaforge test` again")
+            })?;
+        let pack_digest = self.pack_digest()?;
+        if proof.pack_digest != pack_digest {
+            bail!(
+                "pack contents changed since stage {stage_id} passed; run `deltaforge test` again"
+            );
+        }
+        let project_digest = self.project_digest()?;
+        if proof.project_digest != project_digest {
+            bail!(
+                "learner project changed since stage {stage_id} passed; run `deltaforge test` again"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {
+    if !state.pack_version.is_empty() && state.pack_version != pack.manifest.version {
+        bail!(
+            "project is pinned to pack {} version {}, but discovery selected version {} from {}",
+            state.project,
+            state.pack_version,
+            pack.manifest.version,
+            pack.root.display()
+        );
+    }
+    if !state.pack_source.is_empty() {
+        let actual = pack
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| pack.root.clone());
+        if Path::new(&state.pack_source) != actual {
+            bail!(
+                "project is pinned to pack source {}, but discovery selected {}; use the original --packs-dir",
+                state.pack_source,
+                actual.display()
+            );
+        }
+    }
+    if !state.pack_digest.is_empty() {
+        let actual = digest_tree(&pack.root, &[])?;
+        if state.pack_digest != actual {
+            bail!(
+                "pack contents changed since project initialization; restore the pinned pack or initialize a new project"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn resolve_project_root(options: &GlobalOptions) -> Result<PathBuf> {

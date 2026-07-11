@@ -9,16 +9,25 @@ use time::format_description::well_known::Rfc3339;
 use crate::fs_util::atomic_write;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectState {
     #[serde(default = "current_state_schema_version")]
     pub schema_version: u32,
     pub project: String,
     pub language: String,
+    #[serde(default)]
+    pub pack_version: String,
+    #[serde(default)]
+    pub pack_source: String,
+    #[serde(default)]
+    pub pack_digest: String,
     pub current_stage: String,
     #[serde(default)]
     pub completed_stages: Vec<String>,
     #[serde(default)]
     pub completed_stage_timestamps: BTreeMap<String, String>,
+    #[serde(default)]
+    pub completion_proofs: BTreeMap<String, CompletionProof>,
     #[serde(default)]
     pub last_test_runs: BTreeMap<String, LastTestRunSummary>,
     #[serde(default)]
@@ -29,6 +38,15 @@ pub struct ProjectState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompletionProof {
+    pub pack_digest: String,
+    pub project_digest: String,
+    pub test_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LastTestRunSummary {
     pub stage_id: String,
     pub passed: usize,
@@ -39,6 +57,7 @@ pub struct LastTestRunSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LastFailedTest {
     pub name: String,
     pub failures: Vec<String>,
@@ -51,9 +70,13 @@ impl ProjectState {
             schema_version: current_state_schema_version(),
             project,
             language,
+            pack_version: String::new(),
+            pack_source: String::new(),
+            pack_digest: String::new(),
             current_stage,
             completed_stages: Vec::new(),
             completed_stage_timestamps: BTreeMap::new(),
+            completion_proofs: BTreeMap::new(),
             last_test_runs: BTreeMap::new(),
             hint_state: BTreeMap::new(),
             created_at: now.clone(),
@@ -118,6 +141,25 @@ impl ProjectState {
             .entry(stage_id.to_string())
             .or_insert_with(|| now.clone());
         self.updated_at = now;
+        Ok(())
+    }
+
+    pub fn record_completion_proof(
+        &mut self,
+        stage_id: &str,
+        pack_digest: String,
+        project_digest: String,
+        test_count: usize,
+    ) -> Result<()> {
+        self.mark_completed(stage_id)?;
+        self.completion_proofs.insert(
+            stage_id.to_string(),
+            CompletionProof {
+                pack_digest,
+                project_digest,
+                test_count,
+            },
+        );
         Ok(())
     }
 

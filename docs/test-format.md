@@ -28,3 +28,5 @@ tests:
 Supported expectations include `exit_code`, `stdout_exact`, `stdout_contains`, `stdout_not_contains`, `stderr_contains`, `file_exists`, `file_not_exists`, `file_contains`, `regex_match`, `json_equals`, and `timeout_ms`.
 
 Tests may provide `stdin` and per-test `env` entries. Commands are executed directly as argument vectors, not through a shell.
+
+Only a successful, unfiltered run of every test in a stage records completion. Filtered runs are diagnostic and never unlock progression. Test files reject unknown fields, zero timeouts, assertion-free cases, and fixture or expectation paths that escape the stage fixture/temporary root.

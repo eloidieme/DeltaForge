@@ -7,9 +7,13 @@ use anyhow::{Context, Result, bail};
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
 
+use crate::integrity::is_safe_relative_path;
+use crate::runner::{Expectations, StageTests};
+
 static EMBEDDED_PACKS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/packs");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectPack {
     #[serde(default = "current_pack_schema_version")]
     pub schema_version: u32,
@@ -28,6 +32,7 @@ pub struct ProjectPack {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LanguageSpec {
     pub template: PathBuf,
     pub build: Option<CommandSpec>,
@@ -35,11 +40,13 @@ pub struct LanguageSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CommandSpec {
     pub command: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StageSpec {
     pub id: String,
     pub title: String,
@@ -55,17 +62,6 @@ pub struct LoadedPack {
 #[derive(Debug, Clone, Default)]
 pub struct PackSearchOptions {
     pub packs_dir: Option<PathBuf>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ValidationTests {
-    #[serde(default)]
-    tests: Vec<ValidationTest>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ValidationTest {
-    fixture: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,6 +183,11 @@ pub fn load_builtin_pack(project_id: &str) -> Result<LoadedPack> {
 }
 
 pub fn load_pack(project_id: &str, options: &PackSearchOptions) -> Result<LoadedPack> {
+    if !is_safe_relative_path(Path::new(project_id))
+        || Path::new(project_id).components().count() != 1
+    {
+        bail!("unsafe project pack id: {project_id}");
+    }
     let mut searched_manifests = Vec::new();
 
     for packs_dir in pack_search_dirs(options) {
@@ -304,6 +305,13 @@ fn validate_languages(pack: &LoadedPack, problems: &mut Vec<String>) {
     }
 
     for (language, spec) in &pack.manifest.languages {
+        if !is_safe_relative_path(&spec.template) {
+            problems.push(format!(
+                "language {language} template path is unsafe: {}",
+                spec.template.display()
+            ));
+            continue;
+        }
         let template = pack.root.join(&spec.template);
         if !template.is_dir() {
             problems.push(format!(
@@ -340,6 +348,15 @@ fn validate_stages(pack: &LoadedPack, problems: &mut Vec<String>) {
         }
         if stage.title.trim().is_empty() {
             problems.push(format!("stage {} title is empty", stage.id));
+        }
+
+        if !is_safe_relative_path(&stage.path) {
+            problems.push(format!(
+                "stage {} path is unsafe: {}",
+                stage.id,
+                stage.path.display()
+            ));
+            continue;
         }
 
         let stage_dir = pack.stage_dir(stage);
@@ -391,7 +408,7 @@ fn validate_stage_tests(
         }
     };
 
-    let tests: ValidationTests = match serde_yaml::from_str(&source) {
+    let tests: StageTests = match serde_yaml::from_str(&source) {
         Ok(tests) => tests,
         Err(error) => {
             problems.push(format!(
@@ -408,7 +425,27 @@ fn validate_stage_tests(
     }
 
     for test in tests.tests {
+        if test.name.trim().is_empty() {
+            problems.push(format!(
+                "stage {} contains a test with an empty name",
+                stage.id
+            ));
+        }
+        if test.command.is_empty() {
+            problems.push(format!(
+                "stage {} test {} command is empty",
+                stage.id, test.name
+            ));
+        }
+        validate_expectations(stage, &test.name, &test.expect, problems);
         if let Some(fixture) = test.fixture {
+            if !is_safe_relative_path(Path::new(&fixture)) {
+                problems.push(format!(
+                    "stage {} test {} fixture path is unsafe: {}",
+                    stage.id, test.name, fixture
+                ));
+                continue;
+            }
             let fixture_path = pack.fixture_path(stage, &fixture);
             if !fixture_path.is_dir() {
                 problems.push(format!(
@@ -419,6 +456,57 @@ fn validate_stage_tests(
             }
         }
     }
+}
+
+fn validate_expectations(
+    stage: &StageSpec,
+    test_name: &str,
+    expect: &Expectations,
+    problems: &mut Vec<String>,
+) {
+    let has_assertion = expect.exit_code.is_some()
+        || expect.stdout_exact.is_some()
+        || !expect.stdout_contains.is_empty()
+        || !expect.stdout_not_contains.is_empty()
+        || !expect.stderr_contains.is_empty()
+        || !expect.file_exists.is_empty()
+        || !expect.file_not_exists.is_empty()
+        || !expect.file_contains.is_empty()
+        || !expect.regex_match.is_empty()
+        || expect.json_equals.is_some();
+    if !has_assertion {
+        problems.push(format!(
+            "stage {} test {test_name} defines no assertions",
+            stage.id
+        ));
+    }
+    if expect.timeout_ms == Some(0) {
+        problems.push(format!(
+            "stage {} test {test_name} timeout_ms must be greater than 0",
+            stage.id
+        ));
+    }
+    for value in expect
+        .file_exists
+        .iter()
+        .chain(&expect.file_not_exists)
+        .chain(expect.file_contains.iter().map(|item| &item.path))
+    {
+        if !safe_expectation_path(value) {
+            problems.push(format!(
+                "stage {} test {test_name} expectation path is unsafe: {value}",
+                stage.id
+            ));
+        }
+    }
+}
+
+pub fn safe_expectation_path(value: &str) -> bool {
+    let stripped = value.strip_prefix("{temp_dir}/").unwrap_or(value);
+    !value.starts_with('/')
+        && !value.starts_with('\\')
+        && !value.contains(':')
+        && is_safe_relative_path(Path::new(stripped))
 }
 
 fn validate_stage_benchmarks(
@@ -515,6 +603,7 @@ fn load_pack_from_manifest(
         .with_context(|| format!("failed to read pack manifest {}", manifest_path.display()))?;
     let manifest: ProjectPack = serde_yaml::from_str(&manifest_source)
         .with_context(|| format!("failed to parse pack manifest {}", manifest_path.display()))?;
+    validate_pack_schema(&manifest, manifest_path)?;
 
     if manifest.id != project_id {
         bail!(
@@ -523,7 +612,18 @@ fn load_pack_from_manifest(
         );
     }
 
-    Ok(LoadedPack { root, manifest })
+    let pack = LoadedPack { root, manifest };
+    let unsafe_problems = validate_pack(&pack)
+        .into_iter()
+        .filter(|problem| problem.contains("unsafe"))
+        .collect::<Vec<_>>();
+    if !unsafe_problems.is_empty() {
+        bail!(
+            "pack contains unsafe paths:\n{}",
+            unsafe_problems.join("\n")
+        );
+    }
+    Ok(pack)
 }
 
 #[cfg(test)]

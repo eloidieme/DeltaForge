@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Output};
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::{ExitStatus, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use regex::Regex;
@@ -13,15 +11,19 @@ use serde_json::Value;
 
 use crate::cli::TestArgs;
 use crate::context::ProjectContext;
-use crate::pack::{CommandSpec, StageSpec};
+use crate::integrity::is_safe_relative_path;
+use crate::pack::{CommandSpec, StageSpec, safe_expectation_path};
+use crate::process;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StageTests {
     #[serde(default)]
     pub tests: Vec<TestCase>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TestCase {
     pub name: String,
     pub fixture: Option<String>,
@@ -34,6 +36,7 @@ pub struct TestCase {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Expectations {
     pub exit_code: Option<i32>,
     pub stdout_exact: Option<String>,
@@ -56,6 +59,7 @@ pub struct Expectations {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileContainsExpectation {
     pub path: String,
     pub contains: String,
@@ -67,6 +71,8 @@ pub struct TestRunSummary {
     pub passed: usize,
     pub failed: usize,
     pub results: Vec<TestResult>,
+    pub total_defined: usize,
+    pub completion_eligible: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,7 +88,7 @@ pub struct TestResult {
 
 impl TestRunSummary {
     pub fn is_success(&self) -> bool {
-        self.failed == 0
+        self.failed == 0 && !self.results.is_empty()
     }
 }
 
@@ -116,6 +122,28 @@ pub fn run_stage_tests(
                 .is_none_or(|pattern| test.name.contains(pattern))
         })
         .collect();
+    if selected_tests.is_empty() && !args.list_tests {
+        bail!("no tests matched the selected filter");
+    }
+    let total_defined = stage_tests.tests.len();
+    for test in &stage_tests.tests {
+        if let Some(fixture) = &test.fixture
+            && !is_safe_relative_path(Path::new(fixture))
+        {
+            bail!("test {} uses unsafe fixture path {fixture}", test.name);
+        }
+        for path in test
+            .expect
+            .file_exists
+            .iter()
+            .chain(&test.expect.file_not_exists)
+            .chain(test.expect.file_contains.iter().map(|item| &item.path))
+        {
+            if !safe_expectation_path(path) {
+                bail!("test {} uses unsafe expectation path {path}", test.name);
+            }
+        }
+    }
 
     let human_output = !args.json;
     if human_output {
@@ -144,6 +172,8 @@ pub fn run_stage_tests(
             passed: results.len(),
             failed: 0,
             results,
+            total_defined,
+            completion_eligible: false,
         });
     }
 
@@ -207,6 +237,11 @@ pub fn run_stage_tests(
         passed,
         failed,
         results,
+        total_defined,
+        completion_eligible: args.filter.is_none()
+            && !args.no_build
+            && passed == total_defined
+            && failed == 0,
     })
 }
 
@@ -436,62 +471,7 @@ fn run_command_with_input_and_env(
     stdin: Option<&str>,
     envs: &BTreeMap<String, String>,
 ) -> Result<Output> {
-    if command.is_empty() {
-        bail!("cannot run empty command");
-    }
-
-    let mut process = Command::new(&command[0]);
-    process
-        .args(&command[1..])
-        .envs(envs)
-        .current_dir(cwd)
-        .stdin(if stdin.is_some() {
-            std::process::Stdio::piped()
-        } else {
-            std::process::Stdio::null()
-        })
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let mut child = process
-        .spawn()
-        .with_context(|| format!("failed to spawn command {}", command.join(" ")))?;
-
-    if let Some(input) = stdin
-        && let Some(mut child_stdin) = child.stdin.take()
-    {
-        child_stdin
-            .write_all(input.as_bytes())
-            .with_context(|| format!("failed to write stdin to {}", command.join(" ")))?;
-    }
-
-    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        if child
-            .try_wait()
-            .with_context(|| format!("failed to poll command {}", command.join(" ")))?
-            .is_some()
-        {
-            return child
-                .wait_with_output()
-                .with_context(|| format!("failed to collect output from {}", command.join(" ")));
-        }
-
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let output = child.wait_with_output().with_context(|| {
-                format!("failed to collect timed-out command {}", command.join(" "))
-            })?;
-            bail!(
-                "command timed out after {timeout_ms} ms: {}\nstdout:\n{}\nstderr:\n{}",
-                command.join(" "),
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        thread::sleep(Duration::from_millis(10));
-    }
+    process::run_command(command, cwd, timeout_ms, stdin, envs)
 }
 
 fn create_temp_dir(stage: &StageSpec, test_name: &str) -> Result<PathBuf> {

@@ -4,6 +4,9 @@ use crate::cli::HintArgs;
 use crate::context::{GlobalOptions, ProjectContext};
 
 pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
+    if args.level == Some(0) {
+        anyhow::bail!("hint level must be greater than 0");
+    }
     let mut context = ProjectContext::load(options)?;
     let stage_id = context.state.current_stage.clone();
     let stage = context

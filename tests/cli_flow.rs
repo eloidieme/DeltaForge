@@ -1092,6 +1092,439 @@ fn reference_solutions_pass_all_deepened_v2_packs() {
     );
 }
 
+#[test]
+fn filtered_tests_never_complete_a_stage_and_changed_code_blocks_progression() {
+    let project_dir = temp_project_path("completion-integrity");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+    fs::copy(
+        repo_root().join("tools/reference_solutions/flashindex_rust/src/main.rs"),
+        project_dir.join("src/main.rs"),
+    )
+    .unwrap();
+
+    let filtered = run_deltaforge(["test", "--filter", "basic project"], &project_dir);
+    assert_success(&filtered);
+    let state: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(project_dir.join(".deltaforge/state.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(state["completed_stages"].as_array().unwrap().is_empty());
+
+    let no_matches = run_deltaforge(["test", "--filter", "does-not-exist"], &project_dir);
+    assert_failure(&no_matches);
+    assert_stderr_contains(&no_matches, "no tests matched");
+
+    let full = run_deltaforge(["test"], &project_dir);
+    assert_success(&full);
+    let mut source = fs::read_to_string(project_dir.join("src/main.rs")).unwrap();
+    source.push_str("\n// changed after passing\n");
+    fs::write(project_dir.join("src/main.rs"), source).unwrap();
+    let next = run_deltaforge(["next"], &project_dir);
+    assert_failure(&next);
+    assert_stderr_contains(&next, "learner project changed since stage");
+
+    let _ = fs::remove_dir_all(project_dir);
+}
+
+#[test]
+fn project_pack_source_is_pinned_at_initialization() {
+    let root = temp_project_path("pack-pin");
+    let packs_a = root.join("packs-a");
+    let packs_b = root.join("packs-b");
+    copy_dir_recursive(
+        &repo_root().join("packs/flashindex"),
+        &packs_a.join("flashindex"),
+    );
+    copy_dir_recursive(
+        &repo_root().join("packs/flashindex"),
+        &packs_b.join("flashindex"),
+    );
+    let project = root.join("project");
+    let init = run_deltaforge(
+        [
+            "--packs-dir",
+            packs_a.to_str().unwrap(),
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    let overview = run_deltaforge(
+        ["--packs-dir", packs_b.to_str().unwrap(), "overview"],
+        &project,
+    );
+    assert_failure(&overview);
+    assert_stderr_contains(&overview, "pinned to pack source");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn authoring_failures_are_transactional_and_yaml_values_are_escaped() {
+    let root = temp_project_path("authoring-transaction");
+    let create = run_deltaforge(
+        [
+            "pack",
+            "new",
+            "quotedpack",
+            "--name",
+            "Sample: Pack",
+            "--description",
+            "Description: still valid",
+            "--dest",
+            root.to_str().unwrap(),
+        ],
+        &repo_root(),
+    );
+    assert_success(&create);
+    let pack = root.join("quotedpack");
+    let manifest_path = pack.join("project.yaml");
+    let manifest_before = fs::read_to_string(&manifest_path).unwrap();
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&manifest_before).unwrap();
+    assert_eq!(parsed["name"], "Sample: Pack");
+    fs::create_dir_all(pack.join("stages/02_conflict")).unwrap();
+
+    let add = run_deltaforge(
+        [
+            "pack",
+            "add-stage",
+            "--pack-dir",
+            pack.to_str().unwrap(),
+            "02_conflict",
+            "--title",
+            "Conflict",
+        ],
+        &repo_root(),
+    );
+    assert_failure(&add);
+    assert_eq!(fs::read_to_string(&manifest_path).unwrap(), manifest_before);
+
+    let reference = run_deltaforge(
+        [
+            "--packs-dir",
+            root.to_str().unwrap(),
+            "pack",
+            "check-reference",
+            "quotedpack",
+            "--reference",
+            pack.join("templates/rust/src/main.rs").to_str().unwrap(),
+            "--json",
+        ],
+        &repo_root(),
+    );
+    assert_failure(&reference);
+    assert_stdout_contains(&reference, "reference solution failed");
+    assert_stdout_not_contains(&reference, "reference init failed");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn invalid_hint_benchmark_and_config_values_are_actionable() {
+    let project = temp_project_path("invalid-values");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    let hint = run_deltaforge(["hint", "--level", "0"], &project);
+    assert_failure(&hint);
+    assert_stderr_contains(&hint, "hint level must be greater than 0");
+    let bench = run_deltaforge(["bench", "--iterations", "0", "--json"], &project);
+    assert_failure(&bench);
+    assert!(bench.stdout.is_empty());
+    assert_stderr_contains(&bench, "iterations must be greater than 0");
+
+    fs::write(
+        project.join(".deltaforge/config.toml"),
+        "schema_version = 1\nunknown_setting = true\n",
+    )
+    .unwrap();
+    let doctor = run_deltaforge(["doctor", "--json"], &project);
+    assert_success(&doctor);
+    let report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert!(
+        report["project_error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown field")
+    );
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn failed_benchmark_returns_failure_with_json_only_on_stdout() {
+    let project = temp_project_path("bench-failure");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    fs::write(
+        project.join("src/main.rs"),
+        "fn main() { std::process::exit(1); }\n",
+    )
+    .unwrap();
+    let bench = run_deltaforge(
+        ["bench", "--iterations", "1", "--warmup", "0", "--json"],
+        &project,
+    );
+    assert_failure(&bench);
+    let report: serde_json::Value = serde_json::from_slice(&bench.stdout).unwrap();
+    assert_eq!(report[0]["results"]["success"], false);
+    assert_stderr_contains(&bench, "one or more benchmarks failed");
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn mcp_recovers_after_malformed_messages_and_negotiates_protocols() {
+    let mut child = Command::new(deltaforge_pack_mcp_bin())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(b"not-json\n").unwrap();
+        stdin.write_all(br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1900-01-01"}}"#).unwrap();
+        stdin.write_all(b"\n").unwrap();
+        stdin.write_all(br#"{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#).unwrap();
+        stdin.write_all(b"\n").unwrap();
+        stdin
+            .write_all(br#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#)
+            .unwrap();
+        stdin.write_all(b"\n").unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+    assert_success(&output);
+    let responses = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(responses.len(), 4);
+    assert_eq!(responses[0]["error"]["code"], -32700);
+    assert_eq!(responses[1]["error"]["code"], -32602);
+    assert_eq!(responses[2]["result"]["protocolVersion"], "2025-06-18");
+    assert!(responses[3]["result"]["tools"].as_array().unwrap().len() >= 6);
+}
+
+#[test]
+fn auto_commit_preserves_json_stdout_and_git_tag_errors_are_reported() {
+    let project = temp_project_path("auto-commit");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+        ],
+        &repo_root(),
+    ));
+    assert_success(&run_git(
+        ["config", "user.name", "DeltaForge Test"],
+        &project,
+    ));
+    assert_success(&run_git(
+        ["config", "user.email", "deltaforge@example.invalid"],
+        &project,
+    ));
+    fs::copy(
+        repo_root().join("tools/reference_solutions/flashindex_rust/src/main.rs"),
+        project.join("src/main.rs"),
+    )
+    .unwrap();
+    fs::write(
+        project.join(".deltaforge/config.toml"),
+        "schema_version = 1\n[git]\nauto_commit = true\nauto_tag = false\n",
+    )
+    .unwrap();
+
+    let test = run_deltaforge(["test", "--json"], &project);
+    assert_success(&test);
+    serde_json::from_slice::<serde_json::Value>(&test.stdout).unwrap();
+    let log = run_git(["log", "-1", "--pretty=%s"], &project);
+    assert_success(&log);
+    assert_stdout_contains(&log, "Complete Stage 01: Scan files");
+
+    assert_success(&run_git(["tag", "deltaforge-01_scan_files"], &project));
+    fs::write(
+        project.join(".deltaforge/config.toml"),
+        "schema_version = 1\n[git]\nauto_commit = false\nauto_tag = true\n",
+    )
+    .unwrap();
+    fs::write(project.join("design.txt"), "force another commit\n").unwrap();
+    let commit = run_deltaforge(["commit", "--force"], &project);
+    assert_failure(&commit);
+    assert_stderr_contains(&commit, "git tag deltaforge-01_scan_files failed");
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn strict_pack_and_config_schemas_reject_typos_and_unsafe_paths() {
+    let root = temp_project_path("strict-schemas");
+    let packs = root.join("packs");
+    copy_dir_recursive(
+        &repo_root().join("packs/flashindex"),
+        &packs.join("flashindex"),
+    );
+    let tests_path = packs.join("flashindex/stages/01_scan_files/tests.yaml");
+    let tests = fs::read_to_string(&tests_path).unwrap();
+    fs::write(
+        &tests_path,
+        tests.replacen(
+            "    fixture:",
+            "    misspelled_field: true\n    fixture:",
+            1,
+        ),
+    )
+    .unwrap();
+    let validate = run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "validate-pack",
+            "flashindex",
+        ],
+        &repo_root(),
+    );
+    assert_failure(&validate);
+    assert_stdout_contains(&validate, "unknown field");
+
+    copy_dir_recursive(
+        &repo_root().join("packs/flashindex"),
+        &packs.join("unsafe-pack"),
+    );
+    let manifest_path = packs.join("unsafe-pack/project.yaml");
+    let manifest = fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("id: flashindex", "id: unsafe-pack")
+        .replace("path: stages/01_scan_files", "path: ../outside");
+    fs::write(&manifest_path, manifest).unwrap();
+    let unsafe_pack = run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "validate-pack",
+            "unsafe-pack",
+        ],
+        &repo_root(),
+    );
+    assert_failure(&unsafe_pack);
+    assert_stderr_contains(&unsafe_pack, "stage 01_scan_files path is unsafe");
+
+    let project = root.join("project");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "minikv",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    fs::write(
+        project.join(".deltaforge/config.toml"),
+        "schema_version = 1\n[bench]\niterations = 0\n",
+    )
+    .unwrap();
+    let config = run_deltaforge(["config", "validate"], &project);
+    assert_failure(&config);
+    assert_stderr_contains(&config, "bench.iterations must be greater than 0");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn legacy_schema_v1_state_loads_but_requires_a_fresh_completion_proof() {
+    let project = temp_project_path("legacy-state");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+
+    let state_path = project.join(".deltaforge/state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    let state_object = state.as_object_mut().unwrap();
+    state_object.remove("pack_version");
+    state_object.remove("pack_source");
+    state_object.remove("pack_digest");
+    state_object.remove("completion_proofs");
+    state_object.insert(
+        "completed_stages".to_string(),
+        serde_json::json!(["01_scan_files"]),
+    );
+    fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+    let status = run_deltaforge(["status"], &project);
+    assert_success(&status);
+    assert_stdout_contains(&status, "01_scan_files");
+    let next = run_deltaforge(["next"], &project);
+    assert_failure(&next);
+    assert_stderr_contains(&next, "has no integrity proof");
+    assert_stderr_contains(&next, "deltaforge test");
+
+    fs::copy(
+        repo_root().join("tools/reference_solutions/flashindex_rust/src/main.rs"),
+        project.join("src/main.rs"),
+    )
+    .unwrap();
+    let test = run_deltaforge(["test"], &project);
+    assert_success(&test);
+    let next = run_deltaforge(["next"], &project);
+    assert_success(&next);
+    assert_stdout_contains(&next, "Unlocked Stage 02_filter_files");
+    let migrated: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert!(migrated["completion_proofs"]["01_scan_files"].is_object());
+
+    let _ = fs::remove_dir_all(project);
+}
+
 fn assert_reference_solution_passes(pack: &str, source_path: &str, final_stage: &str) {
     let project_dir = temp_project_path(&format!("reference-{pack}"));
     let init = run_deltaforge(

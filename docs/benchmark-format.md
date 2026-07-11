@@ -13,3 +13,5 @@ benchmarks:
 ```
 
 Run `deltaforge bench --save` to append results to `.deltaforge/benchmark_history.json`.
+
+Iterations must be greater than zero. Each warmup and measured iteration starts from a fresh copy of the fixture, and any failed benchmark makes the command exit unsuccessfully while JSON mode keeps stdout machine-readable.

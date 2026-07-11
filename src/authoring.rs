@@ -80,17 +80,15 @@ pub fn create_pack(request: &NewPackRequest) -> Result<AuthoringReport> {
         bail!("only rust templates are currently scaffolded");
     }
 
-    let root = request.dest.join(&request.id);
-    if root.exists() {
-        if !request.force {
-            bail!(
-                "pack directory already exists: {}\nUse --force to replace it.",
-                root.display()
-            );
-        }
-        fs::remove_dir_all(&root)
-            .with_context(|| format!("failed to remove existing pack {}", root.display()))?;
+    let final_root = request.dest.join(&request.id);
+    if final_root.exists() && !request.force {
+        bail!(
+            "pack directory already exists: {}\nUse --force to replace it.",
+            final_root.display()
+        );
     }
+    fs::create_dir_all(&request.dest)?;
+    let root = unique_sibling(&final_root, "prepared")?;
 
     fs::create_dir_all(root.join("templates/rust/src"))?;
     fs::create_dir_all(root.join("stages/01_first_stage/fixtures/example"))?;
@@ -127,9 +125,11 @@ pub fn create_pack(request: &NewPackRequest) -> Result<AuthoringReport> {
         "hello deltaforge\n",
     )?;
 
+    replace_directory(&root, &final_root)?;
+
     Ok(AuthoringReport::ok(
         request.id.clone(),
-        &root,
+        &final_root,
         vec![
             "Edit README.md with the project context and learning outcomes.".to_string(),
             "Replace the starter stage with real behavior-specific tests.".to_string(),
@@ -170,13 +170,6 @@ pub fn add_stage(request: &AddStageRequest) -> Result<AuthoringReport> {
     }
 
     let stage_path = format!("stages/{}", request.id);
-    stages.push(serde_yaml::to_value(StageManifestEntry {
-        id: request.id.clone(),
-        title: request.title.clone(),
-        path: stage_path.clone(),
-    })?);
-    atomic_write(&manifest_path, serde_yaml::to_string(&manifest)?)?;
-
     let stage_dir = request.pack_dir.join(&stage_path);
     if stage_dir.exists() && !request.force {
         bail!(
@@ -184,23 +177,53 @@ pub fn add_stage(request: &AddStageRequest) -> Result<AuthoringReport> {
             stage_dir.display()
         );
     }
-    fs::create_dir_all(stage_dir.join("fixtures/example"))?;
+    stages.push(serde_yaml::to_value(StageManifestEntry {
+        id: request.id.clone(),
+        title: request.title.clone(),
+        path: stage_path.clone(),
+    })?);
+    let prepared_dir = unique_sibling(&stage_dir, "prepared")?;
+    fs::create_dir_all(prepared_dir.join("fixtures/example"))?;
     atomic_write(
-        stage_dir.join("instructions.md").as_path(),
+        prepared_dir.join("instructions.md").as_path(),
         stage_instructions(&request.id, &request.title),
     )?;
     atomic_write(
-        stage_dir.join("hints.md").as_path(),
+        prepared_dir.join("hints.md").as_path(),
         "# Hint 1\n\nIdentify the smallest CLI behavior that should pass this stage first.\n",
     )?;
     atomic_write(
-        stage_dir.join("tests.yaml").as_path(),
+        prepared_dir.join("tests.yaml").as_path(),
         stage_tests(&request.title),
     )?;
     atomic_write(
-        stage_dir.join("fixtures/example/input.txt").as_path(),
+        prepared_dir.join("fixtures/example/input.txt").as_path(),
         "replace me\n",
     )?;
+
+    let backup = if stage_dir.exists() {
+        let backup = unique_sibling(&stage_dir, "backup")?;
+        fs::rename(&stage_dir, &backup)?;
+        Some(backup)
+    } else {
+        None
+    };
+    if let Err(error) = fs::rename(&prepared_dir, &stage_dir) {
+        if let Some(backup) = &backup {
+            let _ = fs::rename(backup, &stage_dir);
+        }
+        return Err(error).context("failed to install prepared stage scaffold");
+    }
+    if let Err(error) = atomic_write(&manifest_path, serde_yaml::to_string(&manifest)?) {
+        let _ = fs::remove_dir_all(&stage_dir);
+        if let Some(backup) = &backup {
+            let _ = fs::rename(backup, &stage_dir);
+        }
+        return Err(error).context("failed to update manifest; restored previous stage directory");
+    }
+    if let Some(backup) = backup {
+        fs::remove_dir_all(backup)?;
+    }
 
     Ok(AuthoringReport::ok(
         request.id.clone(),
@@ -279,14 +302,21 @@ pub fn check_reference(request: &CheckReferenceRequest) -> Result<AuthoringRepor
     let project_dir = create_temp_project_dir(&request.project)?;
     let binary = deltaforge_binary().context("failed to resolve deltaforge executable")?;
     let init_output = Command::new(&binary)
+        .args(
+            request
+                .packs_dir
+                .as_ref()
+                .into_iter()
+                .flat_map(|packs_dir| ["--packs-dir".to_string(), packs_dir.display().to_string()]),
+        )
         .args([
-            "init",
-            &request.project,
-            "--lang",
-            &request.language,
-            "--name",
-            &project_dir.display().to_string(),
-            "--no-git",
+            "init".to_string(),
+            request.project.clone(),
+            "--lang".to_string(),
+            request.language.clone(),
+            "--name".to_string(),
+            project_dir.display().to_string(),
+            "--no-git".to_string(),
         ])
         .output()
         .context("failed to run deltaforge init for reference check")?;
@@ -370,6 +400,51 @@ fn create_temp_project_dir(project: &str) -> Result<PathBuf> {
     )))
 }
 
+fn unique_sibling(path: &Path, suffix: &str) -> Result<PathBuf> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_nanos();
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("deltaforge");
+    Ok(path.with_file_name(format!(
+        ".{name}.{}.{timestamp}.{suffix}",
+        std::process::id()
+    )))
+}
+
+fn replace_directory(prepared: &Path, destination: &Path) -> Result<()> {
+    let backup = if destination.exists() {
+        let backup = unique_sibling(destination, "backup")?;
+        fs::rename(destination, &backup).with_context(|| {
+            format!(
+                "failed to preserve existing directory {}",
+                destination.display()
+            )
+        })?;
+        Some(backup)
+    } else {
+        None
+    };
+    if let Err(error) = fs::rename(prepared, destination) {
+        if let Some(backup) = &backup {
+            let _ = fs::rename(backup, destination);
+        }
+        return Err(error).with_context(|| {
+            format!(
+                "failed to install prepared directory {}",
+                destination.display()
+            )
+        });
+    }
+    if let Some(backup) = backup {
+        fs::remove_dir_all(backup)?;
+    }
+    Ok(())
+}
+
 fn deltaforge_binary() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os("DELTAFORGE_BIN") {
         return Ok(PathBuf::from(path));
@@ -392,33 +467,41 @@ fn deltaforge_binary() -> Result<PathBuf> {
 }
 
 fn project_yaml(request: &NewPackRequest) -> String {
-    format!(
-        r#"schema_version: 1
-id: {id}
-name: {name}
-version: 0.1.0
-description: {description}
-topics:
-  - systems
-languages:
-  rust:
-    template: templates/rust
-    build:
-      command: ["cargo", "build", "--release"]
-    run:
-      command: ["cargo", "run", "--release", "--"]
-ignored_paths:
-  - .git
-  - target
-stages:
-  - id: 01_first_stage
-    title: First stage
-    path: stages/01_first_stage
+    let manifest = serde_yaml::Mapping::from_iter([
+        ("schema_version".into(), 1.into()),
+        ("id".into(), request.id.clone().into()),
+        ("name".into(), request.name.clone().into()),
+        ("version".into(), "0.1.0".into()),
+        ("description".into(), request.description.clone().into()),
+        ("topics".into(), vec!["systems"].into()),
+        (
+            "languages".into(),
+            serde_yaml::from_str::<serde_yaml::Value>(
+                r#"rust:
+  template: templates/rust
+  build:
+    command: [cargo, build, --release]
+  run:
+    command: [cargo, run, --release, --]
 "#,
-        id = request.id,
-        name = request.name,
-        description = request.description
-    )
+            )
+            .expect("static language YAML is valid"),
+        ),
+        ("ignored_paths".into(), vec![".git", "target"].into()),
+        (
+            "stages".into(),
+            vec![
+                serde_yaml::to_value(StageManifestEntry {
+                    id: "01_first_stage".to_string(),
+                    title: "First stage".to_string(),
+                    path: "stages/01_first_stage".to_string(),
+                })
+                .expect("stage entry serializes"),
+            ]
+            .into(),
+        ),
+    ]);
+    serde_yaml::to_string(&manifest).expect("pack manifest serializes")
 }
 
 fn readme(request: &NewPackRequest) -> String {

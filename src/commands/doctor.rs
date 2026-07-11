@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::Result;
@@ -24,14 +25,18 @@ pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
             }
         })
         .collect::<Vec<_>>();
-    let project = match ProjectContext::load(options) {
-        Ok(context) => Some(DoctorProject {
-            root: context.root.display().to_string(),
-            project: context.state.project,
-            language: context.state.language,
-            current_stage: context.state.current_stage,
-        }),
-        Err(_) => None,
+    let (project, project_error) = match ProjectContext::load(options) {
+        Ok(context) => (
+            Some(DoctorProject {
+                root: context.root.display().to_string(),
+                project: context.state.project,
+                language: context.state.language,
+                current_stage: context.state.current_stage,
+            }),
+            None,
+        ),
+        Err(error) if project_state_exists(options) => (None, Some(format!("{error:#}"))),
+        Err(_) => (None, None),
     };
 
     let report = DoctorReport {
@@ -40,6 +45,7 @@ pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
         pack_count: pack_results.len(),
         packs: pack_results,
         project,
+        project_error,
     };
 
     if args.json {
@@ -64,10 +70,24 @@ pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
             println!("  current stage: {}", project.current_stage);
         } else {
             println!("project: none detected");
+            if let Some(error) = &report.project_error {
+                println!("  error: {error}");
+            }
         }
     }
 
     Ok(())
+}
+
+fn project_state_exists(options: &GlobalOptions) -> bool {
+    let start = options
+        .project_dir
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    start
+        .ancestors()
+        .any(|path| path.join(".deltaforge/state.json").is_file())
 }
 
 fn tool_version(tool: &str) -> Option<String> {
@@ -93,6 +113,7 @@ struct DoctorReport {
     pack_count: usize,
     packs: Vec<DoctorPack>,
     project: Option<DoctorProject>,
+    project_error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

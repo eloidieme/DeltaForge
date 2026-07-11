@@ -11,6 +11,7 @@ pub fn run(options: &GlobalOptions) -> Result<()> {
         println!("Run: deltaforge test");
         return Ok(());
     }
+    context.verify_completion_proof(&current_stage)?;
 
     if let Some(next_stage) = context.pack.manifest.next_stage(&current_stage) {
         context.state.current_stage = next_stage.id.clone();

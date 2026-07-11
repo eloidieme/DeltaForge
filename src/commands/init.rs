@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use crate::cli::InitArgs;
 use crate::config::ProjectConfig;
 use crate::context::GlobalOptions;
+use crate::integrity::digest_tree;
 use crate::pack::{LoadedPack, PackSearchOptions, StageSpec, load_pack};
 use crate::state::ProjectState;
 
@@ -55,7 +56,7 @@ pub fn run(args: InitArgs, options: &GlobalOptions) -> Result<()> {
         )
     })?;
 
-    write_deltaforge_metadata(&target_directory, &args, current_stage)?;
+    write_deltaforge_metadata(&target_directory, &loaded_pack, &args, current_stage)?;
     write_readme(&target_directory, &loaded_pack, current_stage)?;
 
     if !args.no_git {
@@ -87,6 +88,7 @@ pub fn run(args: InitArgs, options: &GlobalOptions) -> Result<()> {
 
 fn write_deltaforge_metadata(
     target_directory: &Path,
+    loaded_pack: &LoadedPack,
     args: &InitArgs,
     current_stage: &StageSpec,
 ) -> Result<()> {
@@ -98,11 +100,19 @@ fn write_deltaforge_metadata(
         )
     })?;
 
-    let state = ProjectState::new(
+    let mut state = ProjectState::new(
         args.project.clone(),
         args.lang.clone(),
         current_stage.id.clone(),
     )?;
+    state.pack_version = loaded_pack.manifest.version.clone();
+    state.pack_source = loaded_pack
+        .root
+        .canonicalize()
+        .unwrap_or_else(|_| loaded_pack.root.clone())
+        .display()
+        .to_string();
+    state.pack_digest = digest_tree(&loaded_pack.root, &[])?;
     state.write_to(&deltaforge_dir.join("state.json"))?;
 
     ProjectConfig::default().write_to(&deltaforge_dir.join("config.toml"))?;

@@ -7,6 +7,14 @@ use crate::cli::CommitArgs;
 use crate::context::{GlobalOptions, ProjectContext};
 
 pub fn run(args: CommitArgs, options: &GlobalOptions) -> Result<()> {
+    run_impl(args, options, false)
+}
+
+pub fn run_automatic(options: &GlobalOptions, quiet: bool) -> Result<()> {
+    run_impl(CommitArgs { force: false }, options, quiet)
+}
+
+fn run_impl(args: CommitArgs, options: &GlobalOptions, quiet: bool) -> Result<()> {
     let context = ProjectContext::load(options)?;
     ensure_git_repo(&context.root)?;
 
@@ -27,6 +35,9 @@ pub fn run(args: CommitArgs, options: &GlobalOptions) -> Result<()> {
             stage.id
         );
     }
+    if !args.force {
+        context.verify_completion_proof(&stage.id)?;
+    }
 
     run_git(&context.root, &["add", "-A"])?;
     let message = format!(
@@ -39,11 +50,13 @@ pub fn run(args: CommitArgs, options: &GlobalOptions) -> Result<()> {
 
     if context.config.git.auto_tag {
         let tag = format!("deltaforge-{}", stage.id);
-        let _ = run_git(&context.root, &["tag", &tag]);
+        run_git(&context.root, &["tag", &tag])?;
     }
 
-    println!("Created commit: {}", hash.trim());
-    println!("{message}");
+    if !quiet {
+        println!("Created commit: {}", hash.trim());
+        println!("{message}");
+    }
     Ok(())
 }
 

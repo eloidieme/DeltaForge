@@ -8,6 +8,12 @@
 
 ## V2 working tree
 
+- Hardened stage completion with full-run eligibility, pinned pack identity, and learner/pack integrity proofs.
+- Made pack scaffolding and installation transactional and tightened path/schema validation.
+- Added bounded concurrent process capture, process-tree timeouts, isolated benchmark fixtures, and truthful benchmark exit statuses.
+- Added MCP protocol negotiation and malformed-message recovery.
+- Added legacy state compatibility coverage and strict Ubuntu, macOS, and Windows CI.
+
 - Added `pack list`, `pack show`, and local `pack install`.
 - Added `doctor` and `explain-failure`.
 - Added JSON report output.

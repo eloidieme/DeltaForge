@@ -21,7 +21,21 @@ fn run() -> Result<()> {
     let mut reader = BufReader::new(stdin.lock());
     let mut stdout = std::io::stdout().lock();
 
-    while let Some(request) = read_message(&mut reader)? {
+    while let Some(message) = read_message(&mut reader)? {
+        let request = match message {
+            Ok(request) => request,
+            Err(error) => {
+                write_message(
+                    &mut stdout,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": null,
+                        "error": {"code": -32700, "message": error}
+                    }),
+                )?;
+                continue;
+            }
+        };
         let response = handle_request(request);
         if let Some(response) = response {
             write_message(&mut stdout, &response)?;
@@ -37,11 +51,15 @@ fn handle_request(request: Value) -> Option<Value> {
 
     match method {
         "initialize" => id.map(|id| {
-            json!({
+            let requested = request
+                .pointer("/params/protocolVersion")
+                .and_then(Value::as_str);
+            match negotiate_protocol(requested) {
+                Ok(protocol_version) => json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": protocol_version,
                     "capabilities": {
                         "tools": {}
                     },
@@ -51,7 +69,13 @@ fn handle_request(request: Value) -> Option<Value> {
                         "version": env!("CARGO_PKG_VERSION")
                     }
                 }
-            })
+                }),
+                Err(message) => json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32602, "message": message}
+                }),
+            }
         }),
         "initialized" | "notifications/initialized" => None,
         "tools/list" => id.map(|id| {
@@ -341,7 +365,23 @@ fn optional_bool(arguments: &Value, key: &str) -> bool {
     arguments.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
-fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
+fn negotiate_protocol(requested: Option<&str>) -> std::result::Result<&'static str, String> {
+    const SUPPORTED: [&str; 3] = ["2024-11-05", "2025-03-26", "2025-06-18"];
+    let requested =
+        requested.ok_or_else(|| "initialize params.protocolVersion is required".to_string())?;
+    SUPPORTED
+        .iter()
+        .copied()
+        .find(|version| *version == requested)
+        .ok_or_else(|| {
+            format!(
+                "unsupported MCP protocol version {requested}; supported versions: {}",
+                SUPPORTED.join(", ")
+            )
+        })
+}
+
+fn read_message(reader: &mut impl BufRead) -> Result<Option<std::result::Result<Value, String>>> {
     loop {
         let mut line = String::new();
         let bytes = reader.read_line(&mut line)?;
@@ -352,9 +392,9 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>> {
         if trimmed.is_empty() {
             continue;
         }
-        return serde_json::from_str(trimmed)
-            .context("failed to parse newline-delimited MCP message")
-            .map(Some);
+        return Ok(Some(serde_json::from_str(trimmed).map_err(|error| {
+            format!("failed to parse newline-delimited MCP message: {error}")
+        })));
     }
 }
 

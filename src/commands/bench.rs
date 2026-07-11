@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -14,14 +13,17 @@ use crate::cli::BenchArgs;
 use crate::context::{GlobalOptions, ProjectContext};
 use crate::fs_util::atomic_write;
 use crate::pack::{CommandSpec, StageSpec};
+use crate::process;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BenchmarksFile {
     #[serde(default)]
     benchmarks: Vec<BenchmarkSpec>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BenchmarkSpec {
     name: String,
     fixture: String,
@@ -57,6 +59,9 @@ pub struct BenchmarkResult {
 }
 
 pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
+    if args.iterations == Some(0) {
+        bail!("benchmark iterations must be greater than 0");
+    }
     let context = ProjectContext::load(options)?;
     let stages = if args.all {
         context.pack.manifest.stages.clone()
@@ -115,6 +120,9 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
         }
     }
 
+    if records.iter().any(|record| !record.results.success) {
+        bail!("one or more benchmarks failed");
+    }
     Ok(())
 }
 
@@ -201,6 +209,12 @@ fn run_one_benchmark(
         .iterations
         .or(benchmark.iterations)
         .unwrap_or(context.config.bench.iterations);
+    if iterations == 0 {
+        bail!(
+            "benchmark {} iterations must be greater than 0",
+            benchmark.name
+        );
+    }
     let warmup = args
         .warmup
         .or(benchmark.warmup)
@@ -209,13 +223,18 @@ fn run_one_benchmark(
         .timeout_ms
         .unwrap_or(context.config.runner.timeout_ms);
 
+    let fixture = BenchmarkFixture {
+        bytes: fixture_bytes,
+        source: &source_fixture,
+        path: &fixture_path,
+    };
     let result = run_iterations(
         &command,
         &context.root,
         iterations,
         warmup,
         timeout_ms,
-        fixture_bytes,
+        &fixture,
     );
 
     let _ = fs::remove_dir_all(&temp_dir);
@@ -233,15 +252,24 @@ fn run_one_benchmark(
     })
 }
 
+struct BenchmarkFixture<'a> {
+    bytes: u64,
+    source: &'a Path,
+    path: &'a Path,
+}
+
 fn run_iterations(
     command: &[String],
     cwd: &Path,
     iterations: u64,
     warmup: u64,
     timeout_ms: u64,
-    fixture_bytes: u64,
+    fixture: &BenchmarkFixture<'_>,
 ) -> BenchmarkResult {
     for _ in 0..warmup {
+        if let Err(error) = reset_fixture(fixture.source, fixture.path) {
+            return failed_result(iterations, warmup, error);
+        }
         if let Err(error) = run_timed_command(command, cwd, timeout_ms) {
             return failed_result(iterations, warmup, error);
         }
@@ -249,6 +277,9 @@ fn run_iterations(
 
     let mut durations = Vec::new();
     for _ in 0..iterations {
+        if let Err(error) = reset_fixture(fixture.source, fixture.path) {
+            return failed_result(iterations, warmup, error);
+        }
         match run_timed_command(command, cwd, timeout_ms) {
             Ok(duration) => durations.push(duration.as_secs_f64() * 1000.0),
             Err(error) => return failed_result(iterations, warmup, error),
@@ -260,7 +291,7 @@ fn run_iterations(
     let p95 = percentile(&durations, 0.95);
     let throughput = median.and_then(|ms| {
         if ms > 0.0 {
-            Some((fixture_bytes as f64 / 1_048_576.0) / (ms / 1000.0))
+            Some((fixture.bytes as f64 / 1_048_576.0) / (ms / 1000.0))
         } else {
             None
         }
@@ -275,6 +306,18 @@ fn run_iterations(
         throughput_mb_s: throughput,
         error: None,
     }
+}
+
+fn reset_fixture(source: &Path, destination: &Path) -> Result<()> {
+    if destination.exists() {
+        fs::remove_dir_all(destination).with_context(|| {
+            format!(
+                "failed to reset benchmark fixture {}",
+                destination.display()
+            )
+        })?;
+    }
+    copy_dir_recursive(source, destination)
 }
 
 fn failed_result(iterations: u64, warmup: u64, error: anyhow::Error) -> BenchmarkResult {
@@ -336,37 +379,7 @@ fn run_timed_command(command: &[String], cwd: &Path, timeout_ms: u64) -> Result<
 }
 
 fn run_command(command: &[String], cwd: &Path, timeout_ms: u64) -> Result<Output> {
-    if command.is_empty() {
-        bail!("cannot run empty command");
-    }
-
-    let mut child = Command::new(&command[0])
-        .args(&command[1..])
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to spawn command {}", command.join(" ")))?;
-
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        if child.try_wait()?.is_some() {
-            return child
-                .wait_with_output()
-                .with_context(|| format!("failed to collect output from {}", command.join(" ")));
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let output = child.wait_with_output()?;
-            bail!(
-                "command timed out after {timeout_ms} ms: {}\nstdout:\n{}\nstderr:\n{}",
-                command.join(" "),
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    process::run_command(command, cwd, timeout_ms, None, &BTreeMap::new())
 }
 
 fn create_temp_dir(stage: &StageSpec, name: &str) -> Result<PathBuf> {
@@ -460,4 +473,31 @@ fn current_timestamp() -> Result<String> {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .context("failed to format current timestamp")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resetting_fixture_discards_mutation() {
+        let root =
+            std::env::temp_dir().join(format!("deltaforge-bench-reset-{}", std::process::id()));
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("input.txt"), "original").unwrap();
+        copy_dir_recursive(&source, &destination).unwrap();
+        fs::write(destination.join("input.txt"), "mutated").unwrap();
+        fs::write(destination.join("extra.txt"), "extra").unwrap();
+
+        reset_fixture(&source, &destination).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(destination.join("input.txt")).unwrap(),
+            "original"
+        );
+        assert!(!destination.join("extra.txt").exists());
+        let _ = fs::remove_dir_all(root);
+    }
 }
