@@ -1,0 +1,1264 @@
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+
+fn deltaforge_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_deltaforge"))
+}
+
+fn deltaforge_pack_mcp_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_deltaforge-pack-mcp"))
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn temp_project_path(name: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "deltaforge-it-{name}-{}-{nanos}",
+        std::process::id()
+    ))
+}
+
+fn run_deltaforge<I, S>(args: I, cwd: &Path) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    Command::new(deltaforge_bin())
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap()
+}
+
+fn run_deltaforge_with_env<I, S>(args: I, cwd: &Path, envs: &[(&str, &Path)]) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    let mut command = Command::new(deltaforge_bin());
+    command.args(args).current_dir(cwd);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command.output().unwrap()
+}
+
+fn output_text(output: &Output) -> String {
+    format!(
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+fn assert_success(output: &Output) {
+    assert!(
+        output.status.success(),
+        "expected success, got status {:?}\n{}",
+        output.status.code(),
+        output_text(output)
+    );
+}
+
+fn assert_failure(output: &Output) {
+    assert!(
+        !output.status.success(),
+        "expected failure, got success\n{}",
+        output_text(output)
+    );
+}
+
+fn assert_stdout_contains(output: &Output, expected: &str) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(expected),
+        "expected stdout to contain {expected:?}\n{}",
+        output_text(output)
+    );
+}
+
+fn assert_stdout_not_contains(output: &Output, unexpected: &str) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains(unexpected),
+        "expected stdout not to contain {unexpected:?}\n{}",
+        output_text(output)
+    );
+}
+
+fn assert_stderr_contains(output: &Output, expected: &str) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(expected),
+        "expected stderr to contain {expected:?}\n{}",
+        output_text(output)
+    );
+}
+
+fn cleanup_kept_temp_dirs(output: &Output) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if let Some(path) = line.strip_prefix("Kept temp dir: ") {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
+fn run_git<I, S>(args: I, cwd: &Path) -> Output
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap()
+}
+
+fn run_mcp_request(request: serde_json::Value) -> serde_json::Value {
+    let body = serde_json::to_vec(&request).unwrap();
+    let mut child = Command::new(deltaforge_pack_mcp_bin())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        stdin.write_all(&body).unwrap();
+        stdin.write_all(b"\n").unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+    assert_success(&output);
+    parse_mcp_response(&output.stdout)
+}
+
+fn parse_mcp_response(bytes: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(bytes).unwrap()
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) {
+    fs::create_dir_all(destination).unwrap();
+
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type().unwrap();
+
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path);
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &destination_path).unwrap();
+        }
+    }
+}
+
+#[test]
+fn starter_project_initializes_and_fails_current_stage() {
+    let project_dir = temp_project_path("starter-fails");
+
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+    assert_stdout_contains(&init, "Created project.");
+
+    assert!(project_dir.join("Cargo.toml").is_file());
+    assert!(project_dir.join("src/main.rs").is_file());
+    assert!(project_dir.join(".deltaforge/state.json").is_file());
+    assert!(project_dir.join(".deltaforge/config.toml").is_file());
+    let project_readme = fs::read_to_string(project_dir.join("README.md")).unwrap();
+    assert!(project_readme.contains("## What you are building"));
+    assert!(project_readme.contains("## Why this is useful"));
+    assert!(project_readme.contains("## Stage Roadmap"));
+    assert!(project_readme.contains("deltaforge overview"));
+
+    let config = fs::read_to_string(project_dir.join(".deltaforge/config.toml")).unwrap();
+    assert!(config.contains("timeout_ms = 5000"));
+    assert!(config.contains("build_timeout_ms = 120000"));
+    assert!(config.contains("keep_temp = false"));
+
+    let state = fs::read_to_string(project_dir.join(".deltaforge/state.json")).unwrap();
+    assert!(state.contains(r#""project": "flashindex""#));
+    assert!(state.contains(r#""current_stage": "01_scan_files""#));
+    let state_json: serde_json::Value = serde_json::from_str(&state).unwrap();
+    assert_eq!(state_json["schema_version"], 1);
+    let created_at = state_json["created_at"].as_str().unwrap();
+    assert!(!created_at.starts_with("unix:"));
+    assert!(created_at.ends_with('Z'));
+    OffsetDateTime::parse(created_at, &Rfc3339).unwrap();
+
+    let instructions = run_deltaforge(["instructions"], &project_dir);
+    assert_success(&instructions);
+    assert_stdout_contains(&instructions, "Stage 01_scan_files: Scan files");
+    assert_stdout_contains(&instructions, "flashindex scan <path>");
+
+    let overview = run_deltaforge(["overview"], &project_dir);
+    assert_success(&overview);
+    assert_stdout_contains(&overview, "What you are building");
+    assert_stdout_contains(&overview, "Why this is useful");
+    assert_stdout_contains(&overview, "Stage roadmap:");
+    assert_stdout_contains(&overview, "→ 01_scan_files - Scan files");
+
+    let overview_json = run_deltaforge(["overview", "--json"], &project_dir);
+    assert_success(&overview_json);
+    let parsed_overview: serde_json::Value = serde_json::from_slice(&overview_json.stdout).unwrap();
+    assert_eq!(parsed_overview["project"], "flashindex");
+    assert_eq!(parsed_overview["roadmap"].as_array().unwrap().len(), 8);
+
+    let status = run_deltaforge(["status"], &project_dir);
+    assert_success(&status);
+    assert_stdout_contains(&status, "→ 01_scan_files - Scan files");
+
+    let hint = run_deltaforge(["hint"], &project_dir);
+    assert_success(&hint);
+    assert_stdout_contains(&hint, "Hint 1/3:");
+
+    let next = run_deltaforge(["next"], &project_dir);
+    assert_success(&next);
+    assert_stdout_contains(&next, "Current stage has not passed yet.");
+
+    let test = run_deltaforge(["test"], &project_dir);
+    assert_failure(&test);
+    assert_stdout_contains(&test, "0 passed, 3 failed");
+    assert_stderr_contains(&test, "error: tests failed");
+
+    let json_test = run_deltaforge(["test", "--json"], &project_dir);
+    assert_failure(&json_test);
+    assert_stdout_not_contains(&json_test, "Stage 01_scan_files: Scan files");
+    assert_stdout_not_contains(&json_test, "✗ scans files in a basic project");
+    assert_stderr_contains(&json_test, "error: tests failed");
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&json_test.stdout).expect("test --json should emit valid JSON");
+    assert_eq!(parsed[0]["stage_id"], "01_scan_files");
+    assert_eq!(parsed[0]["passed"], 0);
+    assert_eq!(parsed[0]["failed"], 3);
+    assert_eq!(parsed[0]["results"].as_array().unwrap().len(), 3);
+
+    let config_json = run_deltaforge(["config", "show", "--json"], &project_dir);
+    assert_success(&config_json);
+    assert!(
+        String::from_utf8_lossy(&config_json.stderr).is_empty(),
+        "{}",
+        output_text(&config_json)
+    );
+    let parsed_config: serde_json::Value =
+        serde_json::from_slice(&config_json.stdout).expect("config show --json is valid JSON");
+    assert_eq!(parsed_config["schema_version"], 1);
+}
+
+#[test]
+fn list_and_validate_pack_are_user_facing() {
+    let list = run_deltaforge(["list"], &repo_root());
+    assert_success(&list);
+    assert_stdout_contains(&list, "Available projects:");
+    assert_stdout_contains(&list, "flashindex");
+    assert_stdout_contains(&list, "minikv");
+    assert_stdout_contains(&list, "tinyhttp");
+    assert_stdout_contains(&list, "byteforgevm");
+    assert_stdout_contains(&list, "Languages: rust");
+
+    let validate = run_deltaforge(["validate-pack", "flashindex"], &repo_root());
+    assert_success(&validate);
+    assert_stdout_contains(&validate, "✓ flashindex is valid");
+
+    let validate_json = run_deltaforge(["validate-pack", "flashindex", "--json"], &repo_root());
+    assert_success(&validate_json);
+    assert!(
+        String::from_utf8_lossy(&validate_json.stderr).is_empty(),
+        "{}",
+        output_text(&validate_json)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&validate_json.stdout).unwrap();
+    assert_eq!(parsed[0]["id"], "flashindex");
+    assert_eq!(parsed[0]["valid"], true);
+}
+
+#[test]
+fn v2_pack_commands_doctor_and_json_report_work() {
+    let pack_list = run_deltaforge(["pack", "list", "--json"], &repo_root());
+    assert_success(&pack_list);
+    let packs: serde_json::Value = serde_json::from_slice(&pack_list.stdout).unwrap();
+    let ids = packs
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pack| pack["id"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&"flashindex"));
+    assert!(ids.contains(&"minikv"));
+    assert!(ids.contains(&"tinyhttp"));
+    assert!(ids.contains(&"byteforgevm"));
+
+    let show = run_deltaforge(["pack", "show", "minikv", "--json"], &repo_root());
+    assert_success(&show);
+    let shown: serde_json::Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert_eq!(shown["id"], "minikv");
+
+    let install_root = temp_project_path("installed-packs");
+    let install = run_deltaforge(
+        [
+            "pack",
+            "install",
+            "minikv",
+            "--dest",
+            install_root.to_str().unwrap(),
+        ],
+        &repo_root(),
+    );
+    assert_success(&install);
+    assert!(install_root.join("minikv/project.yaml").is_file());
+
+    let validate_installed = run_deltaforge(
+        [
+            "--packs-dir",
+            install_root.to_str().unwrap(),
+            "validate-pack",
+            "minikv",
+        ],
+        &repo_root(),
+    );
+    assert_success(&validate_installed);
+
+    let doctor = run_deltaforge(["doctor", "--json"], &repo_root());
+    assert_success(&doctor);
+    let doctor_json: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert!(doctor_json["pack_count"].as_u64().unwrap() >= 4);
+
+    let project_dir = temp_project_path("json-report");
+    let init = run_deltaforge(
+        [
+            "init",
+            "minikv",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    let report = run_deltaforge(
+        ["report", "--format", "json", "--output", "report.json"],
+        &project_dir,
+    );
+    assert_success(&report);
+    let report_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(project_dir.join("report.json")).unwrap())
+            .unwrap();
+    assert_eq!(report_json["project"], "minikv");
+}
+
+#[test]
+fn pack_authoring_cli_scaffolds_and_diagnoses_packs() {
+    let packs_root = temp_project_path("authoring-packs");
+    let new_pack = run_deltaforge(
+        [
+            "pack",
+            "new",
+            "samplepack",
+            "--name",
+            "Sample Pack",
+            "--description",
+            "Sample generated pack",
+            "--dest",
+            packs_root.to_str().unwrap(),
+            "--json",
+        ],
+        &repo_root(),
+    );
+    assert_success(&new_pack);
+    let report: serde_json::Value = serde_json::from_slice(&new_pack.stdout).unwrap();
+    assert_eq!(report["status"], "ok");
+    assert!(packs_root.join("samplepack/project.yaml").is_file());
+
+    let add_stage = run_deltaforge(
+        [
+            "pack",
+            "add-stage",
+            "--pack-dir",
+            packs_root.join("samplepack").to_str().unwrap(),
+            "02_second_stage",
+            "--title",
+            "Second stage",
+            "--json",
+        ],
+        &repo_root(),
+    );
+    assert_success(&add_stage);
+    let add_report: serde_json::Value = serde_json::from_slice(&add_stage.stdout).unwrap();
+    assert_eq!(add_report["status"], "ok");
+    assert!(
+        packs_root
+            .join("samplepack/stages/02_second_stage/tests.yaml")
+            .is_file()
+    );
+
+    let validate = run_deltaforge(
+        [
+            "--packs-dir",
+            packs_root.to_str().unwrap(),
+            "validate-pack",
+            "samplepack",
+        ],
+        &repo_root(),
+    );
+    assert_success(&validate);
+
+    let doctor = run_deltaforge(
+        [
+            "--packs-dir",
+            packs_root.to_str().unwrap(),
+            "pack",
+            "doctor",
+            "samplepack",
+            "--json",
+        ],
+        &repo_root(),
+    );
+    assert_success(&doctor);
+    let doctor_report: serde_json::Value = serde_json::from_slice(&doctor.stdout).unwrap();
+    assert_eq!(doctor_report["pack"], "samplepack");
+}
+
+#[test]
+fn pack_mcp_lists_tools_and_creates_pack_with_structured_report() {
+    let tools = run_mcp_request(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list"
+    }));
+    let tool_names = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(tool_names.contains(&"create_pack"));
+    assert!(tool_names.contains(&"check_reference"));
+    let inspect = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "inspect_packs")
+        .unwrap();
+    assert_eq!(inspect["annotations"]["readOnlyHint"], true);
+    let create_tool = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "create_pack")
+        .unwrap();
+    assert_eq!(create_tool["annotations"]["destructiveHint"], true);
+
+    let packs_root = temp_project_path("mcp-packs");
+    let create = run_mcp_request(serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "create_pack",
+            "arguments": {
+                "id": "mcppack",
+                "name": "MCP Pack",
+                "description": "Generated through MCP",
+                "dest": packs_root.to_str().unwrap()
+            }
+        }
+    }));
+    assert_eq!(create["result"]["isError"], false);
+    let text = create["result"]["content"][0]["text"].as_str().unwrap();
+    let report: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(report["status"], "ok");
+    assert!(packs_root.join("mcppack/project.yaml").is_file());
+}
+
+#[test]
+fn explain_failure_uses_last_failed_test_details() {
+    let project_dir = temp_project_path("explain-failure");
+    let init = run_deltaforge(
+        [
+            "init",
+            "minikv",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    let test = run_deltaforge(["test"], &project_dir);
+    assert_failure(&test);
+
+    let explain = run_deltaforge(["explain-failure"], &project_dir);
+    assert_success(&explain);
+    assert_stdout_contains(&explain, "Stage 01_memory_commands");
+    assert_stdout_contains(&explain, "Failed:");
+    assert_stdout_contains(&explain, "Suggested next steps:");
+
+    let explain_json = run_deltaforge(["explain-failure", "--json"], &project_dir);
+    assert_success(&explain_json);
+    let parsed: serde_json::Value = serde_json::from_slice(&explain_json.stdout).unwrap();
+    assert_eq!(parsed["stage_id"], "01_memory_commands");
+    assert!(parsed["failed"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn validate_pack_reports_invalid_external_pack() {
+    let packs_root = temp_project_path("invalid-pack-root");
+    let external_pack = packs_root.join("flashindex");
+    copy_dir_recursive(&repo_root().join("packs/flashindex"), &external_pack);
+
+    let tests_path = external_pack.join("stages/01_scan_files/tests.yaml");
+    let tests = fs::read_to_string(&tests_path).unwrap();
+    fs::write(
+        &tests_path,
+        tests.replace("fixture: basic_project", "fixture: missing_fixture"),
+    )
+    .unwrap();
+
+    let validate = run_deltaforge_with_env(
+        ["validate-pack", "flashindex"],
+        &repo_root(),
+        &[("DELTAFORGE_PACKS_DIR", &packs_root)],
+    );
+
+    assert_failure(&validate);
+    assert_stdout_contains(&validate, "✗ flashindex is invalid");
+    assert_stdout_contains(&validate, "references missing fixture");
+    assert_stderr_contains(&validate, "error: pack validation failed");
+}
+
+#[test]
+fn validate_pack_reports_invalid_benchmark_fixture() {
+    let packs_root = temp_project_path("invalid-benchmark-pack-root");
+    let external_pack = packs_root.join("flashindex");
+    copy_dir_recursive(&repo_root().join("packs/flashindex"), &external_pack);
+
+    fs::write(
+        external_pack.join("stages/01_scan_files/benchmarks.yaml"),
+        r#"
+benchmarks:
+  - name: broken
+    fixture: missing_fixture
+    command: ["scan", "{fixture_path}"]
+"#,
+    )
+    .unwrap();
+
+    let validate = run_deltaforge_with_env(
+        ["validate-pack", "flashindex", "--json"],
+        &repo_root(),
+        &[("DELTAFORGE_PACKS_DIR", &packs_root)],
+    );
+
+    assert_failure(&validate);
+    let parsed: serde_json::Value = serde_json::from_slice(&validate.stdout).unwrap();
+    assert_eq!(parsed[0]["valid"], false);
+    assert!(
+        parsed[0]["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|problem| problem.as_str().unwrap().contains("missing fixture"))
+    );
+}
+
+#[test]
+fn project_commands_explain_when_run_outside_deltaforge_project() {
+    let outside_dir = temp_project_path("outside-project");
+    fs::create_dir_all(&outside_dir).unwrap();
+
+    let status = run_deltaforge(["status"], &outside_dir);
+
+    assert_failure(&status);
+    assert_stderr_contains(&status, "not inside a DeltaForge project");
+    assert_stderr_contains(&status, ".deltaforge/state.json");
+    assert_stderr_contains(&status, "deltaforge init <project> --lang <language>");
+}
+
+#[test]
+fn project_commands_work_from_nested_dirs_and_project_dir_flag() {
+    let project_dir = temp_project_path("nested-discovery");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    let nested_dir = project_dir.join("src/nested/deeper");
+    fs::create_dir_all(&nested_dir).unwrap();
+
+    let nested_status = run_deltaforge(["status"], &nested_dir);
+    assert_success(&nested_status);
+    assert_stdout_contains(&nested_status, "Project: FlashIndex");
+    assert_stdout_contains(&nested_status, "Current stage: 01_scan_files");
+
+    let outside_dir = temp_project_path("project-dir-outside");
+    fs::create_dir_all(&outside_dir).unwrap();
+    let status_with_project_dir = run_deltaforge(
+        ["--project-dir", project_dir.to_str().unwrap(), "status"],
+        &outside_dir,
+    );
+    assert_success(&status_with_project_dir);
+    assert_stdout_contains(&status_with_project_dir, "Project: FlashIndex");
+}
+
+#[test]
+fn cli_packs_dir_overrides_env_and_dev_fallback() {
+    let env_packs_root = temp_project_path("env-packs");
+    let cli_packs_root = temp_project_path("cli-packs");
+    let env_pack = env_packs_root.join("flashindex");
+    let cli_pack = cli_packs_root.join("flashindex");
+    copy_dir_recursive(&repo_root().join("packs/flashindex"), &env_pack);
+    copy_dir_recursive(&repo_root().join("packs/flashindex"), &cli_pack);
+
+    let env_manifest_path = env_pack.join("project.yaml");
+    let env_manifest = fs::read_to_string(&env_manifest_path).unwrap();
+    fs::write(
+        &env_manifest_path,
+        env_manifest.replace(
+            "description: Local source-code search engine",
+            "description: Env Pack",
+        ),
+    )
+    .unwrap();
+
+    let cli_manifest_path = cli_pack.join("project.yaml");
+    let cli_manifest = fs::read_to_string(&cli_manifest_path).unwrap();
+    fs::write(
+        &cli_manifest_path,
+        cli_manifest.replace(
+            "description: Local source-code search engine",
+            "description: CLI Pack",
+        ),
+    )
+    .unwrap();
+
+    let list = run_deltaforge_with_env(
+        ["--packs-dir", cli_packs_root.to_str().unwrap(), "list"],
+        &repo_root(),
+        &[("DELTAFORGE_PACKS_DIR", &env_packs_root)],
+    );
+
+    assert_success(&list);
+    assert_stdout_contains(&list, "CLI Pack");
+    assert_stdout_not_contains(&list, "Env Pack");
+}
+
+#[test]
+fn test_runner_selection_flags_are_user_facing() {
+    let project_dir = temp_project_path("runner-flags");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    let list = run_deltaforge(["test", "--list-tests", "--json"], &project_dir);
+    assert_success(&list);
+    let listed: serde_json::Value =
+        serde_json::from_slice(&list.stdout).expect("test --list-tests --json is valid JSON");
+    assert_eq!(listed[0]["results"].as_array().unwrap().len(), 3);
+    assert_stdout_contains(&list, "scans files in a basic project");
+
+    let filtered = run_deltaforge(["test", "--filter", "nested"], &project_dir);
+    assert_failure(&filtered);
+    assert_stdout_contains(&filtered, "0 passed, 1 failed");
+    assert_stdout_contains(&filtered, "scans nested directories");
+    assert_stdout_not_contains(&filtered, "skips ignored directories");
+
+    let fail_fast = run_deltaforge(["test", "--fail-fast"], &project_dir);
+    assert_failure(&fail_fast);
+    assert_stdout_contains(&fail_fast, "0 passed, 1 failed");
+    assert_stdout_not_contains(&fail_fast, "scans nested directories");
+}
+
+#[test]
+fn bench_report_and_portfolio_generate_project_artifacts() {
+    let project_dir = temp_project_path("bench-report");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    let bench = run_deltaforge(
+        [
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+            "--save",
+            "--json",
+        ],
+        &project_dir,
+    );
+    assert_success(&bench);
+    let bench_json: serde_json::Value =
+        serde_json::from_slice(&bench.stdout).expect("bench --json is valid JSON");
+    assert_eq!(bench_json[0]["benchmark"], "scan_basic_project");
+    assert!(
+        project_dir
+            .join(".deltaforge/benchmark_history.json")
+            .is_file()
+    );
+
+    let markdown_report = run_deltaforge(
+        ["report", "--format", "markdown", "--output", "report.md"],
+        &project_dir,
+    );
+    assert_success(&markdown_report);
+    let report = fs::read_to_string(project_dir.join("report.md")).unwrap();
+    assert!(report.contains("## Project Metadata"));
+    assert!(report.contains("## Benchmark History"));
+
+    let html_report = run_deltaforge(
+        ["report", "--format", "html", "--output", "report.html"],
+        &project_dir,
+    );
+    assert_success(&html_report);
+    let html = fs::read_to_string(project_dir.join("report.html")).unwrap();
+    assert!(html.contains("<!doctype html>"));
+
+    let portfolio = run_deltaforge(["portfolio", "--output", "PORTFOLIO.md"], &project_dir);
+    assert_success(&portfolio);
+    let portfolio_text = fs::read_to_string(project_dir.join("PORTFOLIO.md")).unwrap();
+    assert!(portfolio_text.contains("## Project Summary"));
+    assert!(portfolio_text.contains("scan_basic_project"));
+}
+
+#[test]
+fn design_command_renders_prompt_and_note_path() {
+    let project_dir = temp_project_path("design");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    let design = run_deltaforge(["design"], &project_dir);
+    assert_success(&design);
+    assert_stdout_contains(&design, "Design notes:");
+    assert_stdout_contains(&design, ".deltaforge");
+    assert_stdout_contains(&design, "Explain how your scanner walks directories");
+}
+
+#[test]
+fn commit_requires_git_and_passed_stage_unless_forced() {
+    let no_git_project = temp_project_path("commit-no-git");
+    let init_no_git = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            no_git_project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init_no_git);
+    let no_git_commit = run_deltaforge(["commit", "--force"], &no_git_project);
+    assert_failure(&no_git_commit);
+    assert_stderr_contains(&no_git_commit, "not a git repository");
+
+    let git_project = temp_project_path("commit-git");
+    let init_git = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            git_project.to_str().unwrap(),
+        ],
+        &repo_root(),
+    );
+    assert_success(&init_git);
+    assert_success(&run_git(
+        ["config", "user.email", "deltaforge@example.com"],
+        &git_project,
+    ));
+    assert_success(&run_git(
+        ["config", "user.name", "DeltaForge Tests"],
+        &git_project,
+    ));
+
+    let refused = run_deltaforge(["commit"], &git_project);
+    assert_failure(&refused);
+    assert_stderr_contains(&refused, "has not passed");
+
+    let forced = run_deltaforge(["commit", "--force"], &git_project);
+    assert_success(&forced);
+    assert_stdout_contains(&forced, "Complete Stage 01: Scan files");
+}
+
+#[test]
+fn pack_lookup_uses_env_override_before_dev_fallback() {
+    let packs_root = temp_project_path("external-packs");
+    let external_pack = packs_root.join("flashindex");
+    copy_dir_recursive(&repo_root().join("packs/flashindex"), &external_pack);
+
+    let manifest_path = external_pack.join("project.yaml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    fs::write(
+        &manifest_path,
+        manifest.replace(
+            "description: Local source-code search engine",
+            "description: External FlashIndex Pack",
+        ),
+    )
+    .unwrap();
+
+    let project_dir = temp_project_path("external-pack-init");
+    let init = run_deltaforge_with_env(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+        &[("DELTAFORGE_PACKS_DIR", &packs_root)],
+    );
+
+    assert_success(&init);
+    let readme = fs::read_to_string(project_dir.join("README.md")).unwrap();
+    assert!(readme.contains("External FlashIndex Pack"));
+}
+
+#[test]
+fn missing_pack_error_lists_external_and_dev_search_paths() {
+    let packs_root = temp_project_path("empty-packs");
+    fs::create_dir_all(&packs_root).unwrap();
+    let project_dir = temp_project_path("missing-pack-target");
+
+    let init = run_deltaforge_with_env(
+        [
+            "init",
+            "missingpack",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+        &[("DELTAFORGE_PACKS_DIR", &packs_root)],
+    );
+
+    assert_failure(&init);
+    assert_stderr_contains(&init, "could not find project pack missingpack");
+    assert_stderr_contains(
+        &init,
+        &packs_root
+            .join("missingpack/project.yaml")
+            .display()
+            .to_string(),
+    );
+    assert_stderr_contains(
+        &init,
+        &repo_root()
+            .join("packs/missingpack/project.yaml")
+            .display()
+            .to_string(),
+    );
+}
+
+#[test]
+fn runner_config_controls_keep_temp_and_timeout() {
+    let keep_temp_project = temp_project_path("config-keep-temp");
+    let init_keep_temp = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            keep_temp_project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init_keep_temp);
+
+    fs::write(
+        keep_temp_project.join(".deltaforge/config.toml"),
+        r#"
+[runner]
+timeout_ms = 5000
+build_timeout_ms = 120000
+keep_temp = true
+"#,
+    )
+    .unwrap();
+
+    let keep_temp = run_deltaforge(["test", "--verbose"], &keep_temp_project);
+    assert_failure(&keep_temp);
+    assert_stdout_contains(&keep_temp, "Kept temp dir:");
+    cleanup_kept_temp_dirs(&keep_temp);
+
+    let timeout_project = temp_project_path("config-timeout");
+    let init_timeout = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            timeout_project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init_timeout);
+
+    fs::write(
+        timeout_project.join(".deltaforge/config.toml"),
+        r#"
+[runner]
+timeout_ms = 1
+build_timeout_ms = 120000
+keep_temp = false
+"#,
+    )
+    .unwrap();
+
+    let timeout = run_deltaforge(["test"], &timeout_project);
+    assert_failure(&timeout);
+    assert_stdout_contains(&timeout, "command timed out after 1 ms");
+    assert_stdout_contains(&timeout, "0 passed, 3 failed");
+    assert_stderr_contains(&timeout, "error: tests failed");
+}
+
+#[test]
+fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
+    let project_dir = temp_project_path("passes-all");
+
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    fs::write(project_dir.join("src/main.rs"), passing_flashindex_source()).unwrap();
+
+    let stage1 = run_deltaforge(["test"], &project_dir);
+    assert_success(&stage1);
+    assert_stdout_contains(&stage1, "Stage 01_scan_files: Scan files");
+    assert_stdout_contains(&stage1, "3 passed");
+
+    let next1 = run_deltaforge(["next"], &project_dir);
+    assert_success(&next1);
+    assert_stdout_contains(
+        &next1,
+        "Unlocked Stage 02_filter_files: Filter source files",
+    );
+
+    let stage2 = run_deltaforge(["test"], &project_dir);
+    assert_success(&stage2);
+    assert_stdout_contains(&stage2, "Stage 02_filter_files: Filter source files");
+    assert_stdout_contains(&stage2, "3 passed");
+
+    let next2 = run_deltaforge(["next"], &project_dir);
+    assert_success(&next2);
+    assert_stdout_contains(&next2, "Unlocked Stage 03_tokenize: Tokenize files");
+
+    let stage3 = run_deltaforge(["test"], &project_dir);
+    assert_success(&stage3);
+    assert_stdout_contains(&stage3, "Stage 03_tokenize: Tokenize files");
+    assert_stdout_contains(&stage3, "3 passed");
+
+    let next3 = run_deltaforge(["next"], &project_dir);
+    assert_success(&next3);
+    assert_stdout_contains(&next3, "Unlocked Stage 04_exact_search: Exact token search");
+
+    let status = run_deltaforge(["status"], &project_dir);
+    assert_success(&status);
+    assert_stdout_contains(&status, "✓ 01_scan_files - Scan files");
+    assert_stdout_contains(&status, "✓ 02_filter_files - Filter source files");
+    assert_stdout_contains(&status, "✓ 03_tokenize - Tokenize files");
+
+    let all = run_deltaforge(["test", "--all"], &project_dir);
+    assert_failure(&all);
+    assert_stdout_contains(&all, "Stage 01_scan_files: Scan files");
+    assert_stdout_contains(&all, "Stage 02_filter_files: Filter source files");
+    assert_stdout_contains(&all, "Stage 03_tokenize: Tokenize files");
+
+    let state = fs::read_to_string(project_dir.join(".deltaforge/state.json")).unwrap();
+    assert!(state.contains(r#""01_scan_files""#));
+    assert!(state.contains(r#""02_filter_files""#));
+    assert!(state.contains(r#""03_tokenize""#));
+}
+
+#[test]
+fn reference_solution_passes_all_flashindex_v1_stages() {
+    assert_reference_solution_passes(
+        "flashindex",
+        "tools/reference_solutions/flashindex_rust/src/main.rs",
+        "Stage 08_report_summary: Report summary",
+    );
+}
+
+#[test]
+fn reference_solutions_pass_all_deepened_v2_packs() {
+    assert_reference_solution_passes(
+        "minikv",
+        "tools/reference_solutions/minikv_rust/src/main.rs",
+        "Stage 06_log_statistics: Log statistics",
+    );
+    assert_reference_solution_passes(
+        "tinyhttp",
+        "tools/reference_solutions/tinyhttp_rust/src/main.rs",
+        "Stage 06_range_requests: Range requests",
+    );
+    assert_reference_solution_passes(
+        "byteforgevm",
+        "tools/reference_solutions/byteforgevm_rust/src/main.rs",
+        "Stage 06_trace_mode: Trace mode",
+    );
+}
+
+fn assert_reference_solution_passes(pack: &str, source_path: &str, final_stage: &str) {
+    let project_dir = temp_project_path(&format!("reference-{pack}"));
+    let init = run_deltaforge(
+        [
+            "init",
+            pack,
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    fs::copy(
+        repo_root().join(source_path),
+        project_dir.join("src/main.rs"),
+    )
+    .unwrap();
+
+    let all = run_deltaforge(["test", "--all"], &project_dir);
+    assert_success(&all);
+    assert_stdout_contains(&all, final_stage);
+    assert_stdout_contains(&all, "3 passed, 0 failed");
+}
+
+fn passing_flashindex_source() -> &'static str {
+    r#"use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if args.len() != 2 {
+        eprintln!("usage: flashindex <scan|tokenize> <path>");
+        return ExitCode::FAILURE;
+    }
+
+    let root = PathBuf::from(&args[1]);
+    let result = match args[0].as_str() {
+        "scan" => scan(&root),
+        "tokenize" => tokenize(&root),
+        command => {
+            eprintln!("unknown command: {command}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn scan(root: &Path) -> Result<(), String> {
+    let mut files = collect_files(root)?;
+    files.sort();
+
+    for file in files {
+        if is_source_like(&file) {
+            println!("{}", display_relative(&file));
+        }
+    }
+
+    Ok(())
+}
+
+fn tokenize(root: &Path) -> Result<(), String> {
+    let mut files = collect_files(root)?;
+    files.sort();
+
+    for file in files {
+        if !is_source_like(&file) {
+            continue;
+        }
+
+        let path = root.join(&file);
+        let source = fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+
+        for (line_index, line) in source.lines().enumerate() {
+            let mut start_column = None;
+            let mut token = String::new();
+
+            for (column_index, ch) in line.chars().chain(std::iter::once(' ')).enumerate() {
+                let column = column_index + 1;
+                if ch == '_' || ch.is_ascii_alphanumeric() {
+                    if token.is_empty() && ch.is_ascii_digit() {
+                        continue;
+                    }
+                    if token.is_empty() {
+                        start_column = Some(column);
+                    }
+                    token.push(ch);
+                } else if !token.is_empty() {
+                    println!(
+                        "{}:{}:{} {}",
+                        display_relative(&file),
+                        line_index + 1,
+                        start_column.unwrap(),
+                        token
+                    );
+                    token.clear();
+                    start_column = None;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = Vec::new();
+    visit(root, root, &mut files)?;
+    Ok(files)
+}
+
+fn visit(root: &Path, current: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    for entry in fs::read_dir(current)
+        .map_err(|error| format!("failed to read {}: {error}", current.display()))?
+    {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+
+        if file_type.is_dir() {
+            if matches!(name.as_ref(), ".git" | "target" | "build" | "node_modules") {
+                continue;
+            }
+            visit(root, &path, files)?;
+        } else if file_type.is_file() {
+            files.push(
+                path.strip_prefix(root)
+                    .map_err(|error| error.to_string())?
+                    .to_path_buf(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn is_source_like(path: &Path) -> bool {
+    if path.file_name().and_then(|name| name.to_str()) == Some("CMakeLists.txt") {
+        return true;
+    }
+
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("c" | "cpp" | "h" | "hpp" | "rs" | "py" | "glsl" | "md" | "txt" | "cmake")
+    )
+}
+
+fn display_relative(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+"#
+}

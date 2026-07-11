@@ -1,0 +1,38 @@
+schema_version: 1
+id: byteforgevm
+name: ByteForgeVM
+version: 0.2.0
+description: Tiny stack-based bytecode virtual machine
+topics:
+  - interpreters
+  - virtual-machines
+  - bytecode
+languages:
+  rust:
+    template: templates/rust
+    build:
+      command: ["cargo", "build", "--release"]
+    run:
+      command: ["cargo", "run", "--release", "--"]
+ignored_paths:
+  - .git
+  - target
+stages:
+  - id: 01_disassemble
+    title: Disassemble bytecode
+    path: stages/01_disassemble
+  - id: 02_stack_arithmetic
+    title: Stack arithmetic
+    path: stages/02_stack_arithmetic
+  - id: 03_control_flow
+    title: Control flow
+    path: stages/03_control_flow
+  - id: 04_errors
+    title: Runtime errors
+    path: stages/04_errors
+  - id: 05_call_return
+    title: Call and return
+    path: stages/05_call_return
+  - id: 06_trace_mode
+    title: Trace mode
+    path: stages/06_trace_mode

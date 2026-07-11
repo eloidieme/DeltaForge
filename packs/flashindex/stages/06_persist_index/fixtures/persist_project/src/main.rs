@@ -1,0 +1,1 @@
+fn durable_token() {}

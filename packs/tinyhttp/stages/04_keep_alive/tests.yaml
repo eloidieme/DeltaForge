@@ -1,0 +1,21 @@
+tests:
+  - name: http11 defaults to keep alive
+    stdin: "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n"
+    command: ["keep-alive"]
+    expect:
+      exit_code: 0
+      stdout_exact: "keep-alive: true\n"
+
+  - name: connection close disables keep alive
+    stdin: "GET / HTTP/1.1\r\nConnection: close\r\n\r\n"
+    command: ["keep-alive"]
+    expect:
+      exit_code: 0
+      stdout_exact: "keep-alive: false\n"
+
+  - name: http10 keep alive is explicit
+    stdin: "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n"
+    command: ["keep-alive"]
+    expect:
+      exit_code: 0
+      stdout_exact: "keep-alive: true\n"

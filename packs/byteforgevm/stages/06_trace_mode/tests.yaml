@@ -1,0 +1,27 @@
+tests:
+  - name: traces arithmetic instructions
+    fixture: trace
+    command: ["trace", "{fixture_path}/simple.bvm"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "ip=0 op=PUSH stack=[]"
+        - "ip=2 op=ADD stack=[2, 5]"
+        - "7"
+
+  - name: traces jumps
+    fixture: trace
+    command: ["trace", "{fixture_path}/jump.bvm"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "ip=0 op=JMP stack=[]"
+        - "ip=2 op=PUSH stack=[]"
+
+  - name: trace keeps runtime errors
+    fixture: trace
+    command: ["trace", "{fixture_path}/bad.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "unknown opcode"

@@ -1,0 +1,47 @@
+schema_version: 1
+id: flashindex
+name: FlashIndex
+version: 0.1.0
+description: Local source-code search engine
+topics:
+  - indexing
+  - data structures
+  - cli
+  - performance
+languages:
+  rust:
+    template: templates/rust
+    build:
+      command: ["cargo", "build", "--release"]
+    run:
+      command: ["cargo", "run", "--release", "--"]
+ignored_paths:
+  - .git
+  - target
+  - build
+  - node_modules
+stages:
+  - id: 01_scan_files
+    title: Scan files
+    path: stages/01_scan_files
+  - id: 02_filter_files
+    title: Filter source files
+    path: stages/02_filter_files
+  - id: 03_tokenize
+    title: Tokenize files
+    path: stages/03_tokenize
+  - id: 04_exact_search
+    title: Exact token search
+    path: stages/04_exact_search
+  - id: 05_inverted_index
+    title: Build inverted index
+    path: stages/05_inverted_index
+  - id: 06_persist_index
+    title: Persist index
+    path: stages/06_persist_index
+  - id: 07_benchmark_mode
+    title: Benchmark mode
+    path: stages/07_benchmark_mode
+  - id: 08_report_summary
+    title: Report summary
+    path: stages/08_report_summary

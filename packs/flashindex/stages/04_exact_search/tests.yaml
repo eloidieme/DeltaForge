@@ -1,0 +1,27 @@
+tests:
+  - name: finds exact token matches
+    fixture: search_project
+    command: ["search", "{fixture_path}", "main"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "src/main.rs:1:4 main"
+      stdout_not_contains:
+        - "main_index"
+
+  - name: preserves token boundaries
+    fixture: search_project
+    command: ["search", "{fixture_path}", "main_index"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "src/lib.rs:1:8 main_index"
+      stdout_not_contains:
+        - "src/main.rs:1:4 main"
+
+  - name: reports no matches cleanly
+    fixture: search_project
+    command: ["search", "{fixture_path}", "missing_token"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""

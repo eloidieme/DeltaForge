@@ -1,0 +1,26 @@
+tests:
+  - name: writes persisted index file
+    fixture: persist_project
+    command: ["index", "{fixture_path}", "--out", "{temp_dir}/index.fi"]
+    expect:
+      exit_code: 0
+      file_exists:
+        - "{temp_dir}/index.fi"
+
+  - name: persisted index contains token data
+    fixture: persist_project
+    command: ["index", "{fixture_path}", "--out", "{temp_dir}/index.fi"]
+    expect:
+      exit_code: 0
+      file_exists:
+        - "{temp_dir}/index.fi"
+      stdout_contains:
+        - "wrote"
+
+  - name: query reads persisted index
+    fixture: persisted_query
+    command: ["query", "{fixture_path}/index.fi", "durable_token"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "src/main.rs"

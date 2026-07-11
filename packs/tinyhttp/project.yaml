@@ -1,0 +1,39 @@
+schema_version: 1
+id: tinyhttp
+name: TinyHTTP
+version: 0.2.0
+description: HTTP parser and static response engine
+topics:
+  - networking
+  - protocols
+  - parsing
+  - concurrency
+languages:
+  rust:
+    template: templates/rust
+    build:
+      command: ["cargo", "build", "--release"]
+    run:
+      command: ["cargo", "run", "--release", "--"]
+ignored_paths:
+  - .git
+  - target
+stages:
+  - id: 01_parse_request
+    title: Parse HTTP requests
+    path: stages/01_parse_request
+  - id: 02_static_response
+    title: Serve static responses
+    path: stages/02_static_response
+  - id: 03_headers
+    title: Handle headers
+    path: stages/03_headers
+  - id: 04_keep_alive
+    title: Keep-alive decisions
+    path: stages/04_keep_alive
+  - id: 05_mime_types
+    title: MIME types
+    path: stages/05_mime_types
+  - id: 06_range_requests
+    title: Range requests
+    path: stages/06_range_requests

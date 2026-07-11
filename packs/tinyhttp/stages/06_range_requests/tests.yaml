@@ -1,0 +1,26 @@
+tests:
+  - name: returns partial content
+    fixture: range_site
+    command: ["range", "{fixture_path}/public", "/letters.txt", "2", "5"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "HTTP/1.1 206 Partial Content"
+        - "Content-Range: bytes 2-5/11"
+        - "cdef"
+
+  - name: rejects reversed range
+    fixture: range_site
+    command: ["range", "{fixture_path}/public", "/letters.txt", "7", "2"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid range"
+
+  - name: rejects out of bounds range
+    fixture: range_site
+    command: ["range", "{fixture_path}/public", "/letters.txt", "0", "99"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid range"

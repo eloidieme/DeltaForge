@@ -1,0 +1,21 @@
+tests:
+  - name: recovers latest value
+    fixture: recovered_store
+    command: ["get", "{fixture_path}/store.log", "alpha"]
+    expect:
+      exit_code: 0
+      stdout_exact: "three\n"
+
+  - name: returns another key
+    fixture: recovered_store
+    command: ["get", "{fixture_path}/store.log", "beta"]
+    expect:
+      exit_code: 0
+      stdout_exact: "two\n"
+
+  - name: missing key is empty success
+    fixture: recovered_store
+    command: ["get", "{fixture_path}/store.log", "missing"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""

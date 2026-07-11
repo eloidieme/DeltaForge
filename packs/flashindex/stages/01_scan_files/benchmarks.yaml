@@ -1,0 +1,7 @@
+benchmarks:
+  - name: scan_basic_project
+    fixture: basic_project
+    command: ["scan", "{fixture_path}"]
+    iterations: 3
+    warmup: 1
+    timeout_ms: 5000

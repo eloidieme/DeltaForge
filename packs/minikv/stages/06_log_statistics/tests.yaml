@@ -1,0 +1,25 @@
+tests:
+  - name: reports entries and live keys
+    fixture: stats_store
+    command: ["stats", "{fixture_path}/store.log"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "entries: 4"
+        - "live_keys: 2"
+
+  - name: reports tombstones
+    fixture: stats_store
+    command: ["stats", "{fixture_path}/store.log"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "tombstones: 1"
+
+  - name: stats output is line oriented
+    fixture: stats_store
+    command: ["stats", "{fixture_path}/store.log"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - "(?m)^live_keys: [0-9]+$"

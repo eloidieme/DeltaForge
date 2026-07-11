@@ -1,0 +1,22 @@
+tests:
+  - name: calls function and returns
+    fixture: calls
+    command: ["run", "{fixture_path}/call.bvm"]
+    expect:
+      exit_code: 0
+      stdout_exact: "12\n"
+
+  - name: supports nested calls
+    fixture: calls
+    command: ["run", "{fixture_path}/nested.bvm"]
+    expect:
+      exit_code: 0
+      stdout_exact: "21\n"
+
+  - name: empty return stack fails clearly
+    fixture: calls
+    command: ["run", "{fixture_path}/bad_ret.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "call stack underflow"

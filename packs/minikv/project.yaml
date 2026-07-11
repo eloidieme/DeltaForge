@@ -1,0 +1,39 @@
+schema_version: 1
+id: minikv
+name: MiniKV
+version: 0.2.0
+description: Persistent command-line key-value store
+topics:
+  - storage
+  - persistence
+  - recovery
+  - compaction
+languages:
+  rust:
+    template: templates/rust
+    build:
+      command: ["cargo", "build", "--release"]
+    run:
+      command: ["cargo", "run", "--release", "--"]
+ignored_paths:
+  - .git
+  - target
+stages:
+  - id: 01_memory_commands
+    title: In-memory commands
+    path: stages/01_memory_commands
+  - id: 02_append_log
+    title: Append-only log
+    path: stages/02_append_log
+  - id: 03_recovery
+    title: Recover values
+    path: stages/03_recovery
+  - id: 04_compaction
+    title: Compact stale entries
+    path: stages/04_compaction
+  - id: 05_delete_tombstones
+    title: Delete tombstones
+    path: stages/05_delete_tombstones
+  - id: 06_log_statistics
+    title: Log statistics
+    path: stages/06_log_statistics

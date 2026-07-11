@@ -1,0 +1,26 @@
+tests:
+  - name: builds token to file mapping
+    fixture: index_project
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "alpha src/a.rs src/b.rs"
+        - "beta src/a.rs"
+        - "gamma src/b.rs"
+
+  - name: deduplicates repeated file entries
+    fixture: index_project
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_not_contains:
+        - "beta src/a.rs src/a.rs"
+
+  - name: keeps output searchable by regex
+    fixture: index_project
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - "(?m)^alpha src/a\\.rs src/b\\.rs$"

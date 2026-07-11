@@ -1,0 +1,28 @@
+tests:
+  - name: appends delete tombstone
+    command: ["delete-log", "{temp_dir}/store.log", "alpha"]
+    expect:
+      exit_code: 0
+      file_exists:
+        - "{temp_dir}/store.log"
+      file_contains:
+        - path: "{temp_dir}/store.log"
+          contains: "DEL alpha"
+
+  - name: get respects latest tombstone
+    fixture: deleted_store
+    command: ["get", "{fixture_path}/store.log", "alpha"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""
+
+  - name: compact omits deleted keys
+    fixture: deleted_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/compact.log"
+          contains: "SET beta two"
+      stdout_contains:
+        - "compacted"

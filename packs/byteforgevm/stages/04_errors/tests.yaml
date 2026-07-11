@@ -1,0 +1,24 @@
+tests:
+  - name: unknown opcode fails clearly
+    fixture: errors
+    command: ["run", "{fixture_path}/unknown.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "unknown opcode"
+
+  - name: stack underflow fails clearly
+    fixture: errors
+    command: ["run", "{fixture_path}/underflow.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "stack underflow"
+
+  - name: bad jump fails clearly
+    fixture: errors
+    command: ["run", "{fixture_path}/bad_jump.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid jump"

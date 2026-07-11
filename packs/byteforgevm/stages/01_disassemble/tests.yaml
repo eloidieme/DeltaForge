@@ -1,0 +1,24 @@
+tests:
+  - name: disassembles numbered instructions
+    fixture: programs
+    command: ["disasm", "{fixture_path}/simple.bvm"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "0000 PUSH 2"
+        - "0001 PUSH 5"
+        - "0002 ADD"
+
+  - name: keeps halt instruction
+    fixture: programs
+    command: ["disasm", "{fixture_path}/simple.bvm"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "0003 HALT"
+
+  - name: missing file fails
+    fixture: programs
+    command: ["disasm", "{fixture_path}/missing.bvm"]
+    expect:
+      exit_code: 1

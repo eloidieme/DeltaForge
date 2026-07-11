@@ -1,0 +1,27 @@
+tests:
+  - name: prints benchmark json
+    fixture: bench_project
+    command: ["bench", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "\"files\""
+        - "\"runtime_ms\""
+      regex_match:
+        - "\\{.*\\}"
+
+  - name: benchmark json includes source file count
+    fixture: bench_project
+    command: ["bench", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "\"files\":2"
+
+  - name: benchmark ignores assets
+    fixture: bench_project
+    command: ["bench", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_not_contains:
+        - "\"files\":3"

@@ -1,0 +1,25 @@
+tests:
+  - name: returns 200 for existing file
+    fixture: site
+    command: ["serve-file", "{fixture_path}/public", "/index.html"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "HTTP/1.1 200 OK"
+        - "hello tinyhttp"
+
+  - name: returns 404 for missing file
+    fixture: site
+    command: ["serve-file", "{fixture_path}/public", "/missing.html"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "HTTP/1.1 404 Not Found"
+
+  - name: does not expose parent paths
+    fixture: site
+    command: ["serve-file", "{fixture_path}/public", "/../secret.txt"]
+    expect:
+      exit_code: 1
+      stdout_not_contains:
+        - "secret"

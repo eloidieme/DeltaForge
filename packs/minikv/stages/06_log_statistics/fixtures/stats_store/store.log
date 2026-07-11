@@ -1,0 +1,4 @@
+SET alpha one
+SET beta two
+DEL alpha
+SET gamma three

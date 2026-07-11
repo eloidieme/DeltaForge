@@ -1,0 +1,26 @@
+tests:
+  - name: parses get request line
+    stdin: "GET /index.html HTTP/1.1\r\nHost: example.test\r\n\r\n"
+    command: ["parse"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "method: GET"
+        - "path: /index.html"
+        - "version: HTTP/1.1"
+
+  - name: parses post request line
+    stdin: "POST /submit HTTP/1.0\r\n\r\n"
+    command: ["parse"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "method: POST"
+        - "path: /submit"
+        - "version: HTTP/1.0"
+
+  - name: rejects malformed request line
+    stdin: "BROKEN\r\n\r\n"
+    command: ["parse"]
+    expect:
+      exit_code: 1

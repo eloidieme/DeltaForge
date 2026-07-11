@@ -1,0 +1,34 @@
+tests:
+  - name: tokenizes simple Rust identifiers
+    fixture: simple_tokens
+    command: ["tokenize", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "src/main.rs:1:1 fn"
+        - "src/main.rs:1:4 main"
+        - "src/main.rs:2:9 fetch_or"
+        - "src/main.rs:2:20 value_32"
+
+  - name: ignores punctuation while preserving underscores
+    fixture: punctuation_project
+    command: ["tokenize", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "src/flags.cpp:1:5 main"
+        - "src/flags.cpp:2:8 uint32_t"
+        - "src/flags.cpp:3:10 memory_order_relaxed"
+      stdout_not_contains:
+        - "::"
+        - ";"
+        - "("
+
+  - name: tokenizes nested source files in stable relative paths
+    fixture: nested_sources
+    command: ["tokenize", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "src/lib.rs:1:5 alpha"
+        - "src/nested/mod.rs:1:5 beta_token"

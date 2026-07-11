@@ -1,0 +1,24 @@
+tests:
+  - name: writes one log entry
+    command: ["write-log", "{temp_dir}/store.log", "alpha", "one"]
+    expect:
+      exit_code: 0
+      file_exists:
+        - "{temp_dir}/store.log"
+      file_contains:
+        - path: "{temp_dir}/store.log"
+          contains: "SET alpha one"
+
+  - name: creates nested parent directory
+    command: ["write-log", "{temp_dir}/data/store.log", "beta", "two"]
+    expect:
+      exit_code: 0
+      file_exists:
+        - "{temp_dir}/data/store.log"
+
+  - name: prints written marker
+    command: ["write-log", "{temp_dir}/store.log", "gamma", "three"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "wrote"

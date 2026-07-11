@@ -1,0 +1,18 @@
+tests:
+  - name: stores and prints one value
+    command: ["memory", "alpha", "one"]
+    expect:
+      exit_code: 0
+      stdout_exact: "alpha=one\n"
+
+  - name: preserves spaces inside value argument
+    command: ["memory", "title", "hello world"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "title=hello world"
+
+  - name: rejects missing value
+    command: ["memory", "alpha"]
+    expect:
+      exit_code: 1

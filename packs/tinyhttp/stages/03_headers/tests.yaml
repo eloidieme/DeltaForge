@@ -1,0 +1,25 @@
+tests:
+  - name: prints host header
+    stdin: "GET / HTTP/1.1\r\nHost: example.test\r\nUser-Agent: DeltaForge\r\n\r\n"
+    command: ["headers"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "host: example.test"
+        - "user-agent: DeltaForge"
+
+  - name: trims header whitespace
+    stdin: "GET / HTTP/1.1\r\nAccept:   text/plain  \r\n\r\n"
+    command: ["headers"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "accept: text/plain"
+
+  - name: ignores request line
+    stdin: "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n"
+    command: ["headers"]
+    expect:
+      exit_code: 0
+      stdout_not_contains:
+        - "GET /"

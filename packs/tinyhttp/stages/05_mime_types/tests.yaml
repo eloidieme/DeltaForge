@@ -1,0 +1,24 @@
+tests:
+  - name: html files use text html
+    fixture: mime_site
+    command: ["serve-file", "{fixture_path}/public", "/index.html"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Content-Type: text/html"
+
+  - name: json files use application json
+    fixture: mime_site
+    command: ["serve-file", "{fixture_path}/public", "/data.json"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Content-Type: application/json"
+
+  - name: unknown files use octet stream
+    fixture: mime_site
+    command: ["serve-file", "{fixture_path}/public", "/asset.bin"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Content-Type: application/octet-stream"

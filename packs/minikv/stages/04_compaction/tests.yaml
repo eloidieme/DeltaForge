@@ -1,0 +1,28 @@
+tests:
+  - name: writes compacted log
+    fixture: stale_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    expect:
+      exit_code: 0
+      file_exists:
+        - "{temp_dir}/compact.log"
+      file_contains:
+        - path: "{temp_dir}/compact.log"
+          contains: "SET alpha three"
+
+  - name: keeps live beta value
+    fixture: stale_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/compact.log"
+          contains: "SET beta two"
+
+  - name: reports compacted marker
+    fixture: stale_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "compacted"

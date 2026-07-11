@@ -1,0 +1,26 @@
+tests:
+  - name: prints file and token counts
+    fixture: summary_project
+    command: ["summary", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "files: 2"
+        - "tokens:"
+        - "unique_tokens:"
+
+  - name: summary ignores non-source assets
+    fixture: summary_project
+    command: ["summary", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_not_contains:
+        - "files: 3"
+
+  - name: summary format is line oriented
+    fixture: summary_project
+    command: ["summary", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - "(?m)^unique_tokens: [0-9]+$"
