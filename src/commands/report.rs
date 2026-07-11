@@ -79,17 +79,28 @@ fn render_markdown(
     if history.is_empty() {
         out.push_str("No benchmark history recorded yet.\n");
     } else {
-        out.push_str("| Stage | Benchmark | Median ms | P95 ms | Throughput MB/s |\n");
-        out.push_str("| --- | --- | ---: | ---: | ---: |\n");
+        out.push_str(
+            "| Stage | Benchmark | Params | Median ms | P95 ms | Throughput MB/s | Peak MB |\n",
+        );
+        out.push_str("| --- | --- | --- | ---: | ---: | ---: | ---: |\n");
         for record in history {
-            out.push_str(&format!(
-                "| `{}` | {} | {} | {} | {} |\n",
-                record.stage,
-                record.benchmark,
-                format_optional(record.results.runtime_median_ms),
-                format_optional(record.results.runtime_p95_ms),
-                format_optional(record.results.throughput_mb_s)
-            ));
+            for point in &record.points {
+                let label = point.params_label();
+                out.push_str(&format!(
+                    "| `{}` | {} | {} | {} | {} | {} | {} |\n",
+                    record.stage,
+                    record.benchmark,
+                    if label.is_empty() {
+                        "-".to_string()
+                    } else {
+                        label
+                    },
+                    format_optional(point.runtime_median_ms),
+                    format_optional(point.runtime_p95_ms),
+                    format_optional(point.throughput_mb_s),
+                    format_optional(point.peak_memory_mb)
+                ));
+            }
         }
     }
 

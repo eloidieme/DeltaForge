@@ -38,3 +38,7 @@
 - Made pack discovery resilient to a single malformed pack: `list` warns, `doctor` reports it, and `validate-pack` reports and fails.
 - Showed actual program stdout/stderr beneath test failures (truncated; full output with `--verbose`).
 - Prevented `hint --level N` from lowering recorded progress, expanded `{fixture_path}`/`{temp_dir}` in test `stdin` and `env` values, defaulted `report`/`portfolio` `--output`, and added `--json` to `status`.
+
+### Benchmark engine v2
+
+- Versioned `.deltaforge/benchmark_history.json` as `{"schema_version": 2, "runs": [...]}`; each run now carries per-configuration `points` (with `params` and a reserved `peak_memory_mb`) instead of a single flat `results` object. Legacy bare-array history files convert losslessly on read; newer schema versions are rejected. `bench --json` emits the new `points` shape.

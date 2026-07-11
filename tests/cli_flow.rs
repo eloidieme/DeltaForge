@@ -762,10 +762,18 @@ fn bench_report_and_portfolio_generate_project_artifacts() {
     let bench_json: serde_json::Value =
         serde_json::from_slice(&bench.stdout).expect("bench --json is valid JSON");
     assert_eq!(bench_json[0]["benchmark"], "scan_basic_project");
+    assert_eq!(bench_json[0]["points"][0]["success"], true);
+    let history_path = project_dir.join(".deltaforge/benchmark_history.json");
+    let history: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&history_path).unwrap())
+            .expect("benchmark history is valid JSON");
+    assert_eq!(history["schema_version"], 2);
+    assert_eq!(history["runs"][0]["benchmark"], "scan_basic_project");
     assert!(
-        project_dir
-            .join(".deltaforge/benchmark_history.json")
-            .is_file()
+        history["runs"][0]["points"][0]["params"]
+            .as_object()
+            .expect("points carry a params object")
+            .is_empty()
     );
 
     let markdown_report = run_deltaforge(
@@ -790,6 +798,61 @@ fn bench_report_and_portfolio_generate_project_artifacts() {
     let portfolio_text = fs::read_to_string(project_dir.join("PORTFOLIO.md")).unwrap();
     assert!(portfolio_text.contains("## Project Summary"));
     assert!(portfolio_text.contains("scan_basic_project"));
+}
+
+#[test]
+fn legacy_benchmark_history_is_converted_on_save() {
+    let project_dir = temp_project_path("bench-legacy-history");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+    fs::copy(
+        repo_root().join("tests/fixtures/legacy_benchmark_history.json"),
+        project_dir.join(".deltaforge/benchmark_history.json"),
+    )
+    .unwrap();
+
+    let bench = run_deltaforge(
+        [
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+            "--save",
+            "--json",
+        ],
+        &project_dir,
+    );
+    assert_success(&bench);
+
+    let history: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(project_dir.join(".deltaforge/benchmark_history.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(history["schema_version"], 2);
+    let runs = history["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 3);
+    assert!(
+        runs[0]["points"][0]["params"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(runs[0]["points"][0]["runtime_median_ms"], 12.5);
+    assert_eq!(runs[1]["points"][0]["success"], false);
+    assert_eq!(runs[2]["points"][0]["success"], true);
+    let _ = fs::remove_dir_all(project_dir);
 }
 
 #[test]
@@ -1314,7 +1377,7 @@ fn failed_benchmark_returns_failure_with_json_only_on_stdout() {
     );
     assert_failure(&bench);
     let report: serde_json::Value = serde_json::from_slice(&bench.stdout).unwrap();
-    assert_eq!(report[0]["results"]["success"], false);
+    assert_eq!(report[0]["points"][0]["success"], false);
     assert_stderr_contains(&bench, "one or more benchmarks failed");
     let _ = fs::remove_dir_all(project);
 }

@@ -51,14 +51,24 @@ fn render(context: &ProjectContext, history: &[crate::commands::bench::Benchmark
         out.push_str("No benchmark data has been recorded yet.\n\n");
     } else {
         for record in history.iter().rev().take(5) {
-            if record.results.success {
+            for point in &record.points {
+                if !point.success {
+                    continue;
+                }
+                let label = point.params_label();
+                let params_suffix = if label.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({label})")
+                };
                 out.push_str(&format!(
-                    "- `{}` / `{}`: median {:.2} ms",
+                    "- `{}` / `{}`{}: median {:.2} ms",
                     record.stage,
                     record.benchmark,
-                    record.results.runtime_median_ms.unwrap_or_default()
+                    params_suffix,
+                    point.runtime_median_ms.unwrap_or_default()
                 ));
-                if let Some(throughput) = record.results.throughput_mb_s {
+                if let Some(throughput) = point.throughput_mb_s {
                     out.push_str(&format!(", {:.2} MB/s", throughput));
                 }
                 out.push('\n');
