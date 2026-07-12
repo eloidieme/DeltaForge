@@ -40,6 +40,12 @@ produces:
 
 All `deltaforge test` cases pass and value-stack operations cannot consume or forge return addresses.
 
+### Reflection
+
+1. State the relationship between a successful `CALL` and the later `RET` that matches it.
+2. What state must remain unchanged when a call target is rejected?
+3. Which additional facts would a real stack frame need for arguments and local variables?
+
 ## Non-goals
 
 - Arguments, local variables, stack frames, tail calls, or recursion limits.

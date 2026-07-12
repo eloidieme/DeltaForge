@@ -86,6 +86,20 @@ Same bytes, different worker counts. That equality is the deliverable.
   threads. The gate is deliberately lenient — laptops and CI runners are noisy,
   and this stage rewards a sound parallel structure, not a tuned number.
 
+### Benchmark interpretation worksheet
+
+For each thread count, record median runtime, speedup relative to one thread, and parallel efficiency (`speedup / threads`), then answer:
+
+1. At which point do additional workers stop helping proportionally?
+2. Which serial work—discovery, task setup, merge, ordering, or output—could explain the curve?
+3. Does peak memory grow with workers, and is that consistent with worker-local indexes?
+4. Would a tiny corpus and a large corpus produce the same scaling shape?
+5. If one run misses the gate, what repeated evidence would distinguish noise from a structural bottleneck?
+
+### Reflection
+
+Compare your design note with the measurements. Name one prediction that survived and one that changed. Most importantly, confirm that every matrix point produced byte-identical index output before interpreting speedup.
+
 ## Non-goals
 
 - A thread pool, work-stealing scheduler, or async runtime — plain OS threads

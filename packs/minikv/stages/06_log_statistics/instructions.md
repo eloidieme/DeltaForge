@@ -37,6 +37,10 @@ tombstones: 1
 
 All `deltaforge test` cases pass and the three counters remain internally consistent with Stage 05 replay semantics.
 
+### Reflection
+
+Choose a log with repeated sets and deletes. Predict all three counters without running the program, then explain which counter compaction should reduce and which logical quantity it must preserve.
+
 ## Non-goals
 
 - File-size, latency, or per-key histograms.

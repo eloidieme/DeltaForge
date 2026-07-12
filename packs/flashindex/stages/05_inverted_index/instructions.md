@@ -31,6 +31,19 @@ gamma src/b.rs
 
 All `deltaforge test` cases pass, output is deterministic, and the index benchmark runs successfully.
 
+### Benchmark interpretation worksheet
+
+After `deltaforge bench`, record corpus bytes, distinct tokens, printed postings, median, and p95, then answer:
+
+1. Would a corpus with the same bytes but a much larger vocabulary stress the same operations?
+2. How does repeating one token within one file affect tokenization work versus final posting count?
+3. Which costs belong to index construction and which belong only to deterministic serialization?
+4. What measurement would help identify whether ordering or allocation dominates?
+
+### Reflection
+
+Describe the information discarded when occurrences become file-only postings. Why is that loss acceptable for this stage but not for Stage 04 output?
+
 ## Non-goals
 
 - Recording positions or term frequencies in the printed index.

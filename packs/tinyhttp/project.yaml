@@ -1,7 +1,7 @@
 schema_version: 1
 id: tinyhttp
 name: TinyHTTP
-version: 0.3.0
+version: 0.3.1
 description: HTTP parser and static response engine
 topics:
   - networking

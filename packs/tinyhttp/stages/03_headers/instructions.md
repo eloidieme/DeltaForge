@@ -31,6 +31,10 @@ host: Example.test
 
 All `deltaforge test` cases pass and the printed header stream is stable enough for Stage 04 to consume conceptually.
 
+### Reflection
+
+Explain why lowercasing the entire header line would be wrong even though field names are case-insensitive. Which blank line determines when normalization must stop?
+
 ## Non-goals
 
 - Combining duplicate fields or parsing comma-separated field grammars.

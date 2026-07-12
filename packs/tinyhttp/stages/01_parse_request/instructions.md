@@ -39,6 +39,19 @@ version: HTTP/1.1
 
 All `deltaforge test` cases pass, stdin and file forms agree for equal bytes, and `deltaforge bench` completes against the large request fixture.
 
+### Benchmark interpretation worksheet
+
+After `deltaforge bench`, record request bytes, median, and p95, then answer:
+
+1. The command reports only the first line; why does the fixture still contain headers and a body?
+2. Is the measurement dominated by request parsing, file reading, process startup, or output formatting at this size?
+3. What larger or repeated-input experiment would isolate parsing throughput more clearly?
+4. Why should the file and stdin forms be checked for semantic equivalence before their performance is compared?
+
+### Reflection
+
+What ambiguity would arise if the parser accepted both three-field and four-field request lines? State the boundary in terms of observable accepted input, not parser structure.
+
 ## Non-goals
 
 - Validating the complete HTTP method or URI grammar.

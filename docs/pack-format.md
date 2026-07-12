@@ -27,6 +27,8 @@ Each stage requires `instructions.md`, `hints.md`, and `tests.yaml`. `benchmarks
 
 Learner-facing instructions use seven sections in order: `Goal`, `Background`, `Requirements`, `Example`, `Edge cases`, `Success criteria`, and `Non-goals`. They define observable behavior and motivation without prescribing an implementation. Every listed edge case should have a deterministic black-box test. Hint files use exactly three progressive `# Hint 1`, `# Hint 2`, and `# Hint 3` sections, moving from concept to structure to a concrete standard-library direction without supplying full code.
 
+The pack `README.md` is active curriculum content: `deltaforge overview` renders it, and `deltaforge init` includes it in the learner project's generated README. Bundled overviews therefore carry cumulative glossaries, concept maps, historical field notes, and failure-analysis exercises. Stage `Success criteria` sections may contain reflection prompts and benchmark interpretation worksheets as `###` subsections; these prompts ask learners to explain evidence and invariants without changing the stage's observable contract.
+
 `pack doctor` and `validate-pack --strict` report authoring-quality findings when `Edge cases` or `Non-goals` headings are absent, a stage has fewer than three hint headings, or a stage defines fewer than two tests. These are strict/doctor findings rather than base schema failures so incomplete work-in-progress packs remain editable.
 
 Language spec fields:

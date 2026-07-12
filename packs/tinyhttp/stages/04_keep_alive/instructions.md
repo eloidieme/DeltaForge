@@ -31,6 +31,12 @@ keep-alive: false
 
 All `deltaforge test` cases pass and every supported version/header combination yields exactly one unambiguous line.
 
+### Reflection
+
+1. Rewrite the requirements as a four-row truth table before considering any control flow.
+2. Why is absence of a header meaningful rather than equivalent to an empty value?
+3. Which result would change if HTTP/1.0 accidentally inherited HTTP/1.1's default?
+
 ## Non-goals
 
 - Serving multiple requests on a socket.

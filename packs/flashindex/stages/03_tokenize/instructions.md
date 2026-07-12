@@ -33,6 +33,19 @@ src/main.rs:2:9 fetch_or
 
 All `deltaforge test` cases pass, every position points at the first byte of the printed token, and the tokenizer benchmark completes.
 
+### Benchmark interpretation worksheet
+
+After measuring tokenization, record fixture bytes, number of printed occurrences, median, and p95, then answer:
+
+1. How much measured work belongs to scanning bytes versus formatting and writing occurrence lines?
+2. Would a file containing a few enormous tokens behave like one containing many short tokens?
+3. What fixture pair could reveal allocation sensitivity while keeping total bytes similar?
+4. Which correctness check must remain unchanged after any tokenizer optimization?
+
+### Reflection
+
+Choose a punctuation-heavy line and mark every transition into and out of a token. Why are byte columns an explicit part of this pack's contract?
+
 ## Non-goals
 
 - Full language parsing, keyword classification, or comment/string removal.

@@ -29,6 +29,10 @@ Expose `flashindex bench <path>`. Scan the Stage 02 corpus and print exactly one
 
 All `deltaforge test` cases pass and repeated invocations retain the same schema even though timing values may vary.
 
+### Reflection
+
+Explain the difference between a stable measurement schema and stable measurement values. Which claims can one `runtime_ms` observation support, and which require repeated controlled comparisons?
+
 ## Non-goals
 
 - Microbenchmark precision or a promised runtime threshold.

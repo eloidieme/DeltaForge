@@ -32,6 +32,15 @@ src/main.rs
 
 All `deltaforge test` cases pass, paths are portable and ordered, and the existing scan benchmark runs successfully.
 
+### Benchmark interpretation worksheet
+
+After `deltaforge bench`, record file count, fixture bytes, median, and p95, then answer:
+
+1. Is this workload large enough to distinguish traversal cost from process startup?
+2. Which filesystem effects—directory cache, metadata cache, storage medium—could change a rerun?
+3. Why would adding file-content reads make the benchmark answer a different question?
+4. What larger fixture would remain deterministic without becoming expensive to embed and copy?
+
 ## Non-goals
 
 - Filtering by extension or reading file contents.

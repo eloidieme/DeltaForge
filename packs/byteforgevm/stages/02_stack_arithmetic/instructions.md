@@ -32,6 +32,12 @@ $ byteforgevm run subtract.bvm
 
 All `deltaforge test` cases pass and straight-line programs have deterministic output.
 
+### Reflection
+
+1. Write the stack effect of every opcode you now support. Which instruction is the first whose operand order is observable?
+2. Why does `PRINT` consume its value rather than merely inspect it in this machine model?
+3. What invariant should be true before and after dispatching any successful straight-line instruction?
+
 ## Non-goals
 
 - Jumps, calls, variables, or heap memory.

@@ -39,6 +39,12 @@ The second command prints nothing and succeeds.
 
 All `deltaforge test` cases pass and no replay or compaction path can resurrect a key whose latest operation is deletion.
 
+### Reflection
+
+1. Why is “remove the key from the map” sometimes an insufficient description of deleted state?
+2. Identify the exact record ordering in which a deleted key becomes live again legitimately.
+3. What additional knowledge would a replicated store need before discarding a tombstone everywhere?
+
 ## Non-goals
 
 - Expiring keys automatically or retaining deletion timestamps.

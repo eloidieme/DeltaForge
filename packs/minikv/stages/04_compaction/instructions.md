@@ -38,6 +38,19 @@ SET beta two
 
 All `deltaforge test` cases pass, replaying input and output yields equal live state, and `deltaforge bench` measures the supplied stale-log workload successfully.
 
+### Benchmark interpretation worksheet
+
+After measuring compaction, record input bytes, output bytes, median, and p95, then answer:
+
+1. What stale-record ratio does the fixture represent, and how might that affect the usefulness of compaction?
+2. Which phases can contribute to elapsed time: parsing, state reconstruction, ordering, and writing?
+3. Would a smaller output necessarily mean a faster compaction run?
+4. What second fixture would help distinguish CPU-bound parsing from output I/O?
+
+### Reflection
+
+Write a one-sentence equivalence claim for the original and compacted logs. Which test provides evidence for the claim, and which crash scenario remains outside it?
+
 ## Non-goals
 
 - Mutating the input log in place.

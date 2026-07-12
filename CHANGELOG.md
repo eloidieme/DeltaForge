@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Curriculum study aids (all bundled packs 0.3.1)
+
+- Expanded every pack overview with a cumulative concept map or protocol/opcode reference, a focused glossary, historical field notes, diagnostic failure-analysis labs, and optional extensions. Corrected the MiniKV, TinyHTTP, and ByteForgeVM summaries so their final-stage capabilities match the actual roadmaps.
+- Added post-stage reflection questions at the major design boundaries: recovery and compaction, HTTP parsing/security/connection/range semantics, VM stack/control/error/call/trace semantics, and search token/index/persistence/parallel/ranking semantics.
+- Added interpretation worksheets to every targeted benchmark stage. Learners now record fixture shape and observed metrics, distinguish startup/output/I/O effects from the algorithm under study, and check correctness before drawing performance conclusions.
+- Bumped all bundled packs to `0.3.1`. This release changes only manifests and learner-facing documentation: existing projects should run `deltaforge sync-pack`, but completed stages retain valid behavioral proofs and require no revalidation.
+
 ### Content depth pass (all bundled packs 0.3.0)
 
 - Rewrote all 28 stage guides across FlashIndex, MiniKV, TinyHTTP, and ByteForgeVM into the seven-section learning template, with deeper conceptual background, historical context, precise observable contracts, worked examples, explicit tested edge cases, success criteria, and bounded non-goals. Every stage now has exactly three progressive hints.

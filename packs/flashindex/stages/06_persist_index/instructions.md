@@ -32,6 +32,12 @@ src/main.rs
 
 All `deltaforge test` cases pass, a written artifact can be queried by a later process, and the design prompt has been considered before choosing a format.
 
+### Reflection
+
+1. Identify every assumption the reader makes about record and field boundaries.
+2. How do you know rebuilding a shorter index cannot leave valid-looking stale records at the end?
+3. Which format change could a future reader detect, and which change would be silently ambiguous without a version marker?
+
 ## Non-goals
 
 - A prescribed binary format, compression, checksums, or memory mapping.

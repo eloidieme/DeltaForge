@@ -1,7 +1,7 @@
 schema_version: 1
 id: flashindex
 name: FlashIndex
-version: 0.3.0
+version: 0.3.1
 description: Local source-code search engine
 topics:
   - indexing

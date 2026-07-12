@@ -34,6 +34,19 @@ ip=4 op=HALT stack=[]
 
 All `deltaforge test` cases pass, trace ordering is stable, and `deltaforge bench` can measure the trace workload.
 
+### Benchmark interpretation worksheet
+
+After running `deltaforge bench`, record the median and p95, then answer:
+
+1. How much of the measured work is instruction dispatch, and how much is formatting or writing trace lines?
+2. Would a longer arithmetic-only program measure the same bottleneck as a program containing many `PRINT` instructions?
+3. If redirecting stdout changes the result, what does that reveal about the workload rather than the VM semantics?
+4. Which comparison would be fair: trace versus trace after an optimization, or trace versus silent `run`? Explain.
+
+### Reflection
+
+Pick one trace from the tests and reconstruct why each instruction pointer follows the previous one. Which line gives the strongest evidence that tracing observes state before execution?
+
 ## Non-goals
 
 - Breakpoints, watches, stepping, or an interactive debugger.

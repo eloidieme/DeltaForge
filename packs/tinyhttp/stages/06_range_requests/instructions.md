@@ -42,6 +42,13 @@ cdef
 
 All `deltaforge test` cases pass, byte counts remain correct with LF fixtures on every CI operating system, and range failures never emit a misleading partial response.
 
+### Reflection
+
+1. For a file of length 11, list the first and last valid one-byte ranges.
+2. Explain why `end == file_length` is invalid even though an exclusive slice often permits that endpoint.
+3. Which validation must happen before any outside path could be opened?
+4. What additional response semantics would be needed if this CLI modeled HTTP's `416` response instead of treating invalid ranges as command errors?
+
 ## Non-goals
 
 - Parsing an HTTP `Range` header or returning `416 Range Not Satisfiable`.

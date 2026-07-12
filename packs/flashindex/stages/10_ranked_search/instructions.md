@@ -103,6 +103,13 @@ denser one ranks higher; `one.rs` matches least.
 - Output is deterministic: the same directory and query always produce the same
   bytes.
 
+### Reflection
+
+1. Build the ranking tuple for each file in the example before sorting it.
+2. Which result could outrank another through coverage even with fewer total occurrences?
+3. Why does a final path comparison turn a partial relevance order into a total deterministic order?
+4. Which user expectation would change first if the pack moved from this score to TF-IDF or BM25?
+
 ## Non-goals
 
 - TF-IDF, BM25, or any statistical weighting — the ranking function is exactly

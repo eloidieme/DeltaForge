@@ -32,6 +32,12 @@ $ echo $?
 
 All `deltaforge test` cases pass, no tested invalid program panics, and successful program stdout remains uncontaminated by diagnostics.
 
+### Reflection
+
+1. Classify each failure as loading, parsing, or execution. Where does your current boundary lie?
+2. Which invalid guest action would still be capable of panicking the host if one check were removed?
+3. Why is stderr part of the VM's observable isolation boundary rather than merely a presentation choice?
+
 ## Non-goals
 
 - Recovering and continuing after an error.

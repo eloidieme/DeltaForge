@@ -38,6 +38,12 @@ hello
 
 All `deltaforge test` cases pass, response framing matches the body bytes, and no tested traversal exposes data outside the root.
 
+### Reflection
+
+1. Separate the three decisions in this stage: path safety, resource existence, and response formatting.
+2. Why is a missing file an HTTP result while an unsafe path is a command failure in this contract?
+3. Which assertion would catch a character-count implementation of `Content-Length`?
+
 ## Non-goals
 
 - Directory listings, redirects, index-file discovery, or URL decoding.

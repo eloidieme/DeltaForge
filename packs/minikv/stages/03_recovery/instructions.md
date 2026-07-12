@@ -44,6 +44,12 @@ green
 
 All `deltaforge test` cases pass and replay produces the same answer every time for unchanged log bytes.
 
+### Reflection
+
+1. Express recovery as a fold over records: what is the state, and what does one `SET` do to it?
+2. Why is reading the file backward attractive for one lookup, and which later stages would still need a complete state model?
+3. What information is lost if malformed lines are silently skipped?
+
 ## Non-goals
 
 - Repairing or silently skipping malformed records.

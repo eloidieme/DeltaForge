@@ -41,6 +41,12 @@ prints:
 
 All `deltaforge test` cases pass and both branch paths produce the specified output without double-advancing the instruction pointer.
 
+### Reflection
+
+1. Describe “the next instruction” without assuming that it is `ip + 1`.
+2. Why must `JZ` have the same stack effect whether or not its branch is taken?
+3. Which observable symptom would distinguish a bad target from an accidental second increment?
+
 ## Non-goals
 
 - Named labels or assembly-time target resolution.
