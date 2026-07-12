@@ -40,7 +40,7 @@ Stage completion proofs pin a per-stage behavioral digest covering the stage's `
 
 Bundled packs currently include:
 
-- `flashindex`: 8 stages, with reference solution coverage.
+- `flashindex`: 10 stages (including parallel indexing with a thread-scaling benchmark and speedup gate, and ranked multi-token search), with reference solution coverage.
 - `minikv`: 6 stages, with reference solution coverage.
 - `tinyhttp`: 6 stages, with reference solution coverage.
 - `byteforgevm`: 6 stages, with reference solution coverage.

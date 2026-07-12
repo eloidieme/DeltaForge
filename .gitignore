@@ -1,1 +1,5 @@
 /target
+
+# Reference-solution build artifacts (built ad hoc, never bundled)
+tools/reference_solutions/*/target/
+tools/reference_solutions/*/Cargo.lock

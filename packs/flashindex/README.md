@@ -2,7 +2,7 @@
 
 ## What you are building
 
-FlashIndex is a local source-code search engine. By the end, you will have a command-line tool that can scan a project, filter source files, tokenize identifiers, search for exact symbols, build an inverted index, persist it, benchmark indexing work, and summarize what was indexed.
+FlashIndex is a local source-code search engine. By the end, you will have a command-line tool that can scan a project, filter source files, tokenize identifiers, search for exact symbols, build an inverted index, persist it, benchmark indexing work, summarize what was indexed, index in parallel across threads, and answer ranked multi-token queries.
 
 ## Why this is useful
 
@@ -20,6 +20,8 @@ The project starts with a simple scanner and gradually turns it into a small sea
 6. Persist and query the index.
 7. Expose benchmark output.
 8. Produce a summary report.
+9. Index in parallel across worker threads with byte-identical output and a thread-scaling benchmark.
+10. Answer ranked multi-token queries with a deterministic relevance ordering.
 
 ## What good looks like
 

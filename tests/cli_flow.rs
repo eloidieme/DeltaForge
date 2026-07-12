@@ -225,7 +225,7 @@ fn starter_project_initializes_and_fails_current_stage() {
     assert_success(&overview_json);
     let parsed_overview: serde_json::Value = serde_json::from_slice(&overview_json.stdout).unwrap();
     assert_eq!(parsed_overview["project"], "flashindex");
-    assert_eq!(parsed_overview["roadmap"].as_array().unwrap().len(), 8);
+    assert_eq!(parsed_overview["roadmap"].as_array().unwrap().len(), 10);
 
     let status = run_deltaforge(["status"], &project_dir);
     assert_success(&status);
@@ -911,6 +911,80 @@ fn bench_matrix_prints_table_speedup_and_saves_per_point_history() {
     assert_stdout_contains(&comparison, "median:");
 
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn parallel_indexing_stage_benchmark_matrix_evaluates_gate_per_thread_count() {
+    // The stage 09 benchmark declares a threads:[1,2,4,8] matrix and a speedup
+    // gate. This exercises the machinery end to end against the reference
+    // solution: every thread point is measured and saved, and the gate is
+    // evaluated and reported. We deliberately do NOT assert the speedup value —
+    // CI runners are noisy and the point is that the gate ran, not that a
+    // particular ratio was hit.
+    let project_dir = temp_project_path("parallel-bench");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+    fs::copy(
+        repo_root().join("tools/reference_solutions/flashindex_rust/src/main.rs"),
+        project_dir.join("src/main.rs"),
+    )
+    .unwrap();
+
+    let bench = run_deltaforge(
+        [
+            "bench",
+            "--stage",
+            "09_parallel_indexing",
+            "--iterations",
+            "2",
+            "--warmup",
+            "0",
+            "--save",
+            "--json",
+        ],
+        &project_dir,
+    );
+    assert_success(&bench);
+    let json: serde_json::Value = serde_json::from_slice(&bench.stdout).unwrap();
+    let record = &json[0];
+    assert_eq!(record["benchmark"], "index_with_threads");
+
+    let points = record["points"].as_array().unwrap();
+    assert_eq!(points.len(), 4);
+    let thread_values: Vec<&str> = points
+        .iter()
+        .map(|point| point["params"]["threads"].as_str().unwrap())
+        .collect();
+    assert_eq!(thread_values, ["1", "2", "4", "8"]);
+    assert!(points.iter().all(|point| point["success"] == true));
+
+    // The gate was evaluated and reported for the speedup metric.
+    let gate = &record["gate_results"][0];
+    assert_eq!(gate["metric"], "speedup");
+    assert_eq!(gate["name"], "parallel speedup");
+    assert!(gate["passed"].is_boolean());
+    assert!(record["performance"].is_string());
+
+    // Per-thread points are persisted to versioned history.
+    let history: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(project_dir.join(".deltaforge/benchmark_history.json")).unwrap(),
+    )
+    .unwrap();
+    let saved_points = history["runs"][0]["points"].as_array().unwrap();
+    assert_eq!(saved_points.len(), 4);
+
+    let _ = fs::remove_dir_all(project_dir);
 }
 
 #[test]
@@ -1619,7 +1693,7 @@ fn reference_solution_passes_all_flashindex_v1_stages() {
     assert_reference_solution_passes(
         "flashindex",
         "tools/reference_solutions/flashindex_rust/src/main.rs",
-        "Stage 08_report_summary: Report summary",
+        "Stage 10_ranked_search: Ranked search",
     );
 }
 

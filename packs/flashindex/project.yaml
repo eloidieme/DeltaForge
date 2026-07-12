@@ -1,7 +1,7 @@
 schema_version: 1
 id: flashindex
 name: FlashIndex
-version: 0.1.0
+version: 0.2.0
 description: Local source-code search engine
 topics:
   - indexing
@@ -47,3 +47,9 @@ stages:
   - id: 08_report_summary
     title: Report summary
     path: stages/08_report_summary
+  - id: 09_parallel_indexing
+    title: Parallel indexing
+    path: stages/09_parallel_indexing
+  - id: 10_ranked_search
+    title: Ranked search
+    path: stages/10_ranked_search
