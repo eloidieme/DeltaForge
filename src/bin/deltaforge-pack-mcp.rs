@@ -615,6 +615,16 @@ fn benchmark_definition_schema() -> Value {
                 "minItems": 1,
                 "items": {"type": "string"}
             },
+            "matrix": {
+                "type": "object",
+                "description": "Optional parameter matrix: name -> non-empty list of scalar values. The cartesian product of all parameters is measured; {name} placeholders in command args are expanded per point.",
+                "propertyNames": {"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+                "additionalProperties": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": ["string", "number", "boolean"]}
+                }
+            },
             "iterations": {"type": "integer", "minimum": 1},
             "warmup": {"type": "integer", "minimum": 0},
             "timeout_ms": {"type": "integer", "minimum": 1}

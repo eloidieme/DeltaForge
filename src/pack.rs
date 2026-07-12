@@ -90,9 +90,77 @@ struct ValidationBenchmark {
     fixture: Option<String>,
     #[serde(default)]
     command: Vec<String>,
+    #[serde(default)]
+    matrix: BTreeMap<String, Vec<serde_yaml::Value>>,
     iterations: Option<u64>,
     warmup: Option<u64>,
     timeout_ms: Option<u64>,
+}
+
+/// Placeholders always available in benchmark command args, independent of the
+/// benchmark's `matrix` declaration.
+pub const BENCHMARK_BUILTIN_PLACEHOLDERS: [&str; 2] = ["fixture_path", "temp_dir"];
+
+/// Check a benchmark `matrix` declaration; an empty return means it is valid.
+pub fn benchmark_matrix_problems(matrix: &BTreeMap<String, Vec<serde_yaml::Value>>) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (name, values) in matrix {
+        if !is_identifier(name) {
+            problems.push(format!(
+                "matrix parameter {name} is not a valid identifier (expected [A-Za-z_][A-Za-z0-9_]*)"
+            ));
+        } else if BENCHMARK_BUILTIN_PLACEHOLDERS.contains(&name.as_str()) {
+            problems.push(format!(
+                "matrix parameter {name} shadows a built-in placeholder"
+            ));
+        }
+        if values.is_empty() {
+            problems.push(format!("matrix parameter {name} has no values"));
+        }
+        for value in values {
+            if benchmark_scalar_to_string(value).is_none() {
+                problems.push(format!(
+                    "matrix parameter {name} has a non-scalar value; only strings, numbers, and booleans are allowed"
+                ));
+            }
+        }
+    }
+    problems
+}
+
+/// Render a matrix value as the string substituted into command args.
+pub fn benchmark_scalar_to_string(value: &serde_yaml::Value) -> Option<String> {
+    match value {
+        serde_yaml::Value::String(text) => Some(text.clone()),
+        serde_yaml::Value::Number(number) => Some(number.to_string()),
+        serde_yaml::Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+/// Identifier-shaped `{name}` placeholders in a command arg. Braces around
+/// anything else (e.g. JSON literals) are not treated as placeholders.
+fn placeholder_identifiers(arg: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut rest = arg;
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else {
+            break;
+        };
+        let candidate = &after[..end];
+        if is_identifier(candidate) {
+            found.push(candidate.to_string());
+        }
+        rest = &after[end + 1..];
+    }
+    found
 }
 
 impl ProjectPack {
@@ -770,6 +838,23 @@ pub fn validate_stage_benchmarks_source(
                 stage.id, name
             ));
         }
+        problems.extend(
+            benchmark_matrix_problems(&benchmark.matrix)
+                .into_iter()
+                .map(|problem| format!("stage {} benchmark {} {problem}", stage.id, name)),
+        );
+        for arg in &benchmark.command {
+            for placeholder in placeholder_identifiers(arg) {
+                if !benchmark.matrix.contains_key(&placeholder)
+                    && !BENCHMARK_BUILTIN_PLACEHOLDERS.contains(&placeholder.as_str())
+                {
+                    problems.push(format!(
+                        "stage {} benchmark {} command references undeclared parameter {{{placeholder}}}",
+                        stage.id, name
+                    ));
+                }
+            }
+        }
         if let Some(fixture) = benchmark.fixture {
             if !is_safe_relative_path(Path::new(&fixture)) {
                 problems.push(format!(
@@ -857,5 +942,56 @@ mod tests {
     fn embedded_flashindex_pack_is_available() {
         let dir = embedded_packs_dir().unwrap();
         assert!(dir.join("flashindex/project.yaml").is_file());
+    }
+
+    #[test]
+    fn valid_benchmark_matrix_passes_validation() {
+        let pack = load_builtin_pack("flashindex").unwrap();
+        let stage = pack.manifest.first_stage().unwrap().clone();
+        let source = r#"
+benchmarks:
+  - name: scan_threads
+    fixture: basic_project
+    command: ["scan", "{fixture_path}", "--threads", "{threads}", "--mode", "{mode}"]
+    matrix:
+      threads: [1, 2, 4]
+      mode: ["fast", "safe"]
+"#;
+        assert_eq!(
+            validate_stage_benchmarks_source(&pack, &stage, source),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn invalid_benchmark_matrix_reports_each_problem() {
+        let pack = load_builtin_pack("flashindex").unwrap();
+        let stage = pack.manifest.first_stage().unwrap().clone();
+        let source = r#"
+benchmarks:
+  - name: matrix_bad
+    fixture: basic_project
+    command: ["scan", "{fixture_path}", "--threads", "{threads}", "{undeclared}"]
+    matrix:
+      threads: []
+      bad-name: [1]
+      temp_dir: [2]
+      nested: [[1, 2]]
+"#;
+        let problems = validate_stage_benchmarks_source(&pack, &stage, source);
+        let all = problems.join("\n");
+        assert!(all.contains("threads has no values"), "{all}");
+        assert!(all.contains("bad-name is not a valid identifier"), "{all}");
+        assert!(all.contains("temp_dir shadows a built-in"), "{all}");
+        assert!(all.contains("nested has a non-scalar value"), "{all}");
+        assert!(all.contains("undeclared parameter {undeclared}"), "{all}");
+        assert!(
+            !all.contains("{threads}"),
+            "declared placeholder flagged: {all}"
+        );
+        assert!(
+            !all.contains("{fixture_path}"),
+            "built-in placeholder flagged: {all}"
+        );
     }
 }

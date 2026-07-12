@@ -42,3 +42,4 @@
 ### Benchmark engine v2
 
 - Versioned `.deltaforge/benchmark_history.json` as `{"schema_version": 2, "runs": [...]}`; each run now carries per-configuration `points` (with `params` and a reserved `peak_memory_mb`) instead of a single flat `results` object. Legacy bare-array history files convert losslessly on read; newer schema versions are rejected. `bench --json` emits the new `points` shape.
+- Added optional benchmark parameter matrices (`matrix: { threads: [1, 2, 4] }` in `benchmarks.yaml`): the cartesian product of all parameters is measured independently, `{name}` placeholders in command args expand per point, and each saved history entry records its `params`. Matrix declarations are validated by `validate-pack` (identifier names, non-empty scalar value lists, no undeclared command placeholders) and by the MCP `replace_stage_benchmarks` schema.

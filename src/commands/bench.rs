@@ -12,7 +12,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::cli::BenchArgs;
 use crate::context::{GlobalOptions, ProjectContext};
 use crate::fs_util::atomic_write;
-use crate::pack::{CommandSpec, StageSpec};
+use crate::pack::{CommandSpec, StageSpec, benchmark_matrix_problems, benchmark_scalar_to_string};
 use crate::process;
 
 #[derive(Debug, Deserialize)]
@@ -29,6 +29,8 @@ struct BenchmarkSpec {
     fixture: String,
     #[serde(default)]
     command: Vec<String>,
+    #[serde(default)]
+    matrix: BTreeMap<String, Vec<serde_yaml::Value>>,
     iterations: Option<u64>,
     warmup: Option<u64>,
     timeout_ms: Option<u64>,
@@ -181,12 +183,10 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
             println!("{} / {}", record.stage, record.benchmark);
             for point in &record.points {
                 let label = point.params_label();
-                let indent = if label.is_empty() {
-                    "  ".to_string()
-                } else {
+                if !label.is_empty() {
                     println!("  [{label}]");
-                    "    ".to_string()
-                };
+                }
+                let indent = if label.is_empty() { "  " } else { "    " };
                 if point.success {
                     println!(
                         "{indent}median: {:.2} ms",
@@ -330,12 +330,16 @@ fn run_one_benchmark(
         bail!("benchmark {} command is empty", benchmark.name);
     }
 
+    let matrix = normalize_matrix(&benchmark)?;
+
     let temp_dir = create_temp_dir(stage, &benchmark.name)?;
     let source_fixture = context.pack.fixture_path(stage, &benchmark.fixture);
     let fixture_path = temp_dir.join("fixture");
     copy_dir_recursive(&source_fixture, &fixture_path)?;
     let fixture_bytes = directory_size(&fixture_path)?;
 
+    // Matrix placeholders stay intact here; they are expanded per point. The
+    // record stores this base command since the expanded argv differs per point.
     let mut command = run_spec.command.clone();
     command.extend(
         benchmark
@@ -367,14 +371,23 @@ fn run_one_benchmark(
         source: &source_fixture,
         path: &fixture_path,
     };
-    let point = run_iterations(
-        &command,
-        &context.root,
-        iterations,
-        warmup,
-        timeout_ms,
-        &fixture,
-    );
+
+    let mut points = Vec::new();
+    for params in cartesian_points(&matrix) {
+        let point_command: Vec<String> = command
+            .iter()
+            .map(|arg| expand_params(arg, &params))
+            .collect();
+        points.push(run_iterations(
+            &point_command,
+            &context.root,
+            iterations,
+            warmup,
+            timeout_ms,
+            &fixture,
+            params,
+        ));
+    }
 
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -386,7 +399,7 @@ fn run_one_benchmark(
         timestamp: current_timestamp()?,
         git_commit: current_git_commit(&context.root),
         command,
-        points: vec![point],
+        points,
         machine: machine_metadata(),
     })
 }
@@ -397,6 +410,57 @@ struct BenchmarkFixture<'a> {
     path: &'a Path,
 }
 
+/// Validate the benchmark's matrix declaration and stringify its scalar values.
+fn normalize_matrix(benchmark: &BenchmarkSpec) -> Result<BTreeMap<String, Vec<String>>> {
+    let problems = benchmark_matrix_problems(&benchmark.matrix);
+    if !problems.is_empty() {
+        bail!(
+            "benchmark {} has an invalid matrix: {}",
+            benchmark.name,
+            problems.join("; ")
+        );
+    }
+    Ok(benchmark
+        .matrix
+        .iter()
+        .map(|(name, values)| {
+            let values = values
+                .iter()
+                .map(|value| benchmark_scalar_to_string(value).expect("values checked scalar"))
+                .collect();
+            (name.clone(), values)
+        })
+        .collect())
+}
+
+/// Cartesian product of all matrix parameters: parameters in name order,
+/// values in listed order (later parameters vary fastest). An empty matrix
+/// yields a single point with no params.
+fn cartesian_points(matrix: &BTreeMap<String, Vec<String>>) -> Vec<BTreeMap<String, String>> {
+    let mut points = vec![BTreeMap::new()];
+    for (name, values) in matrix {
+        let mut expanded = Vec::with_capacity(points.len() * values.len());
+        for point in &points {
+            for value in values {
+                let mut point = point.clone();
+                point.insert(name.clone(), value.clone());
+                expanded.push(point);
+            }
+        }
+        points = expanded;
+    }
+    points
+}
+
+fn expand_params(value: &str, params: &BTreeMap<String, String>) -> String {
+    let mut expanded = value.to_string();
+    for (name, replacement) in params {
+        expanded = expanded.replace(&format!("{{{name}}}"), replacement);
+    }
+    expanded
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_iterations(
     command: &[String],
     cwd: &Path,
@@ -404,24 +468,25 @@ fn run_iterations(
     warmup: u64,
     timeout_ms: u64,
     fixture: &BenchmarkFixture<'_>,
+    params: BTreeMap<String, String>,
 ) -> BenchmarkPoint {
     for _ in 0..warmup {
         if let Err(error) = reset_fixture(fixture.source, fixture.path) {
-            return failed_point(iterations, warmup, error);
+            return failed_point(iterations, warmup, &params, error);
         }
         if let Err(error) = run_timed_command(command, cwd, timeout_ms) {
-            return failed_point(iterations, warmup, error);
+            return failed_point(iterations, warmup, &params, error);
         }
     }
 
     let mut durations = Vec::new();
     for _ in 0..iterations {
         if let Err(error) = reset_fixture(fixture.source, fixture.path) {
-            return failed_point(iterations, warmup, error);
+            return failed_point(iterations, warmup, &params, error);
         }
         match run_timed_command(command, cwd, timeout_ms) {
             Ok(duration) => durations.push(duration.as_secs_f64() * 1000.0),
-            Err(error) => return failed_point(iterations, warmup, error),
+            Err(error) => return failed_point(iterations, warmup, &params, error),
         }
     }
 
@@ -437,7 +502,7 @@ fn run_iterations(
     });
 
     BenchmarkPoint {
-        params: BTreeMap::new(),
+        params,
         success: true,
         iterations,
         warmup,
@@ -461,9 +526,14 @@ fn reset_fixture(source: &Path, destination: &Path) -> Result<()> {
     copy_dir_recursive(source, destination)
 }
 
-fn failed_point(iterations: u64, warmup: u64, error: anyhow::Error) -> BenchmarkPoint {
+fn failed_point(
+    iterations: u64,
+    warmup: u64,
+    params: &BTreeMap<String, String>,
+    error: anyhow::Error,
+) -> BenchmarkPoint {
     BenchmarkPoint {
-        params: BTreeMap::new(),
+        params: params.clone(),
         success: false,
         iterations,
         warmup,
@@ -749,6 +819,100 @@ mod tests {
     fn history_object_without_version_is_rejected() {
         let error = parse_history(r#"{"runs": []}"#).unwrap_err();
         assert!(format!("{error:#}").contains("missing schema_version"));
+    }
+
+    fn string_matrix(entries: &[(&str, &[&str])]) -> BTreeMap<String, Vec<String>> {
+        entries
+            .iter()
+            .map(|(name, values)| {
+                (
+                    name.to_string(),
+                    values.iter().map(|value| value.to_string()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn cartesian_points_expands_all_combinations_in_order() {
+        let matrix = string_matrix(&[("threads", &["1", "2"]), ("mode", &["fast", "safe"])]);
+        let points = cartesian_points(&matrix);
+        let labels: Vec<String> = points
+            .iter()
+            .map(|params| {
+                params
+                    .iter()
+                    .map(|(name, value)| format!("{name}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .collect();
+        // BTreeMap iterates parameters alphabetically: mode, then threads.
+        assert_eq!(
+            labels,
+            vec![
+                "mode=fast,threads=1",
+                "mode=fast,threads=2",
+                "mode=safe,threads=1",
+                "mode=safe,threads=2",
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_matrix_yields_single_empty_point() {
+        let points = cartesian_points(&BTreeMap::new());
+        assert_eq!(points.len(), 1);
+        assert!(points[0].is_empty());
+    }
+
+    #[test]
+    fn expand_params_substitutes_declared_placeholders_only() {
+        let params = BTreeMap::from([("threads".to_string(), "4".to_string())]);
+        assert_eq!(expand_params("--threads={threads}", &params), "--threads=4");
+        assert_eq!(expand_params("{threads}{threads}", &params), "44");
+        assert_eq!(expand_params("{unknown}", &params), "{unknown}");
+        assert_eq!(expand_params("plain", &params), "plain");
+    }
+
+    #[test]
+    fn invalid_matrix_fails_benchmark_with_named_problems() {
+        let spec: BenchmarkSpec = serde_yaml::from_str(
+            r#"
+name: bad_matrix
+fixture: basic_project
+command: ["scan"]
+matrix:
+  threads: []
+  temp_dir: [1]
+"#,
+        )
+        .unwrap();
+        let error = format!("{:#}", normalize_matrix(&spec).unwrap_err());
+        assert!(error.contains("bad_matrix"), "{error}");
+        assert!(error.contains("threads has no values"), "{error}");
+        assert!(error.contains("temp_dir shadows a built-in"), "{error}");
+    }
+
+    #[test]
+    fn scalar_matrix_values_are_stringified() {
+        let spec: BenchmarkSpec = serde_yaml::from_str(
+            r#"
+name: ok_matrix
+fixture: basic_project
+command: ["scan", "--threads", "{threads}"]
+matrix:
+  threads: [1, 2]
+  fast: [true, false]
+  label: ["a"]
+"#,
+        )
+        .unwrap();
+        let matrix = normalize_matrix(&spec).unwrap();
+        assert_eq!(matrix["threads"], vec!["1", "2"]);
+        assert_eq!(matrix["fast"], vec!["true", "false"]);
+        assert_eq!(matrix["label"], vec!["a"]);
+        assert_eq!(cartesian_points(&matrix).len(), 4);
     }
 
     #[test]

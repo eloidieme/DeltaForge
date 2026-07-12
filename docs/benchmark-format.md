@@ -16,6 +16,21 @@ Run `deltaforge bench --save` to append results to `.deltaforge/benchmark_histor
 
 Iterations must be greater than zero. Each warmup and measured iteration starts from a fresh copy of the fixture, and any failed benchmark makes the command exit unsuccessfully while JSON mode keeps stdout machine-readable.
 
+## Parameter matrix
+
+A benchmark may declare an optional `matrix`: a map from parameter name to a non-empty list of scalar values (strings, numbers, or booleans).
+
+```yaml
+benchmarks:
+  - name: scan_parallel
+    fixture: basic_project
+    command: ["scan", "{fixture_path}", "--threads", "{threads}"]
+    matrix:
+      threads: [1, 2, 4, 8]
+```
+
+The cartesian product of all parameters is measured — each point independently, with its own warmup, iterations, and fixture reset. `{name}` placeholders in command args are expanded per point, alongside the built-in `{fixture_path}` and `{temp_dir}`. Parameter names must be identifiers (`[A-Za-z_][A-Za-z0-9_]*`) and must not shadow the built-ins; `validate-pack` also rejects command placeholders that reference undeclared parameters. Benchmarks without a `matrix` behave exactly as before and produce a single point.
+
 ## History file
 
 `.deltaforge/benchmark_history.json` is versioned:

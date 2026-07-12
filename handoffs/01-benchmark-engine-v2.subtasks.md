@@ -72,6 +72,11 @@ Foundational restructure; every later subtask writes into this shape.
   compute speedup = median(min threads) / median(max threads); report as
   `speedup_1_to_8`-style key in JSON (record-level derived metric) and as a
   line after the table in human output. Skip when either median is missing.
+- Compute speedup at display time from `points` rather than persisting it —
+  the history records use `deny_unknown_fields`, so any additive persisted
+  field would break older binaries reading newer files despite the
+  schema_version gate passing (S1 review finding). If persisting ever becomes
+  necessary, bump `schema_version` to 3 and accept 2 on read.
 - Human output becomes an aligned table per benchmark: one row per point
   (param values, median ms, p95 ms, throughput MB/s, peak mem MB), then the
   speedup line. `--json` still emits JSON only on stdout.
