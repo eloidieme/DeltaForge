@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use cap_fs_ext::{DirExt, FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions};
 use serde::{Deserialize, Serialize};
@@ -1137,6 +1137,7 @@ fn open_pack_root_capability(root: &Path) -> Result<Dir> {
 
     #[cfg(unix)]
     {
+        use cap_fs_ext::MetadataExt;
         let actual = opened.dir_metadata()?;
         if expected.dev() != actual.dev() || expected.ino() != actual.ino() {
             bail!("pack root changed while opening: {}", root.display());
