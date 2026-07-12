@@ -32,3 +32,11 @@ tests:
       stdout_not_contains:
         - "data/blob.bin"
         - "data/archive.dat"
+
+  - name: source files inside ignored directories stay excluded
+    fixture: mixed_files
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_not_contains:
+        - "target/generated.rs"

@@ -1,11 +1,11 @@
 # Hint 1
 
-Reuse your source-file filtering from Stage 02, then process each selected file as text.
+Tokenization is a state transition between “outside a token” and “inside a token”; positions are easiest to capture at the transition in.
 
 # Hint 2
 
-Track line and column as you scan characters. Record the column where a token starts.
+Scan each line in byte-index order, flush a token on a separator, and treat leading digits as separators until a legal starting character appears.
 
 # Hint 3
 
-When you see a digit, it can continue an existing token but should not start a new token.
+`char_indices` supplies byte columns; `is_ascii_alphabetic`, `is_ascii_digit`, and an optional start index are enough for this grammar.

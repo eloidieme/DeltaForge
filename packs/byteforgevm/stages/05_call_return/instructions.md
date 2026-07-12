@@ -1,17 +1,47 @@
-# Call and return
+# Stage 05 — Call and return
 
-Add `CALL <addr>` and `RET`.
+## Goal
 
-`CALL` should push the return address to a call stack and jump to the target address. `RET` should return to the latest saved address.
+Support reusable bytecode routines with `CALL` and `RET`, including nested calls, without mixing return addresses into the program's value stack.
 
-Edge cases:
+## Background
 
-- returning with an empty call stack should fail
-- invalid call targets should fail
-- normal `HALT` still stops execution
+Subroutines transformed programming by letting one sequence serve many callers. A call transfers control while remembering where execution should resume; a return restores the most recent address, giving calls their last-in, first-out shape. Real machines often store richer stack frames, but a separate return-address stack exposes the essential mechanism cleanly and prevents arithmetic from corrupting control state.
 
-Non-goals:
+## Requirements
 
-- local variables
-- function arguments
-- recursion limits
+Extend `run` with `CALL <addr>` and `RET`. `CALL` validates the zero-based target, records the address immediately after the call, and transfers control to the target. `RET` removes the most recently recorded return address and resumes there. Calls may nest. `HALT` still ends the whole program immediately. Invalid call targets exit non-zero with text containing `invalid jump`; `RET` without a saved address exits non-zero with `call stack underflow`.
+
+## Example
+
+```text
+CALL 3
+PRINT
+HALT
+PUSH 12
+RET
+```
+
+produces:
+
+```text
+12
+```
+
+## Edge cases
+
+- A normal call resumes at the instruction after `CALL`.
+- Nested calls return in last-in, first-out order.
+- `RET` with an empty call stack fails clearly.
+- A negative or out-of-program call target fails before changing call state.
+- `HALT` inside a called routine stops execution instead of returning.
+
+## Success criteria
+
+All `deltaforge test` cases pass and value-stack operations cannot consume or forge return addresses.
+
+## Non-goals
+
+- Arguments, local variables, stack frames, tail calls, or recursion limits.
+- Named functions or a linker.
+- Exceptions or unwinding.

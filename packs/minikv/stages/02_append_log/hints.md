@@ -1,7 +1,11 @@
 # Hint 1
 
-Use append mode rather than rewriting the full file.
+An append-only log records history: a new write belongs after every byte already present, never in place of them.
 
 # Hint 2
 
-Create the parent directory before opening the log file.
+Resolve the parent-directory case first, then open the destination with create-and-append semantics and write one complete record.
+
+# Hint 3
+
+`std::fs::create_dir_all`, `OpenOptions::new().create(true).append(true)`, and `writeln!` provide the needed filesystem operations.

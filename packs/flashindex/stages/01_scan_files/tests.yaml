@@ -18,6 +18,16 @@ tests:
         - "src/lib.rs"
         - "crates/core/src/index.rs"
 
+  - name: prints paths in stable lexical order
+    fixture: nested_project
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        crates/core/src/index.rs
+        src/lib.rs
+        src/main.rs
+
   - name: skips ignored directories
     fixture: ignored_dirs
     command: ["scan", "{fixture_path}"]
@@ -29,3 +39,10 @@ tests:
         - "target/debug/cache.o"
         - "build/output.o"
         - "node_modules/pkg/index.js"
+
+  - name: ignored only tree produces empty output
+    fixture: ignored_only
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""

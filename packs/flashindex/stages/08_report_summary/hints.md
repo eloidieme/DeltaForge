@@ -1,11 +1,11 @@
 # Hint 1
 
-This stage is a small aggregation over the scanner and tokenizer.
+The three figures are projections of data you already produce; avoid creating a second definition of “source file” or “token.”
 
 # Hint 2
 
-Use deterministic labels so output can be consumed by tools.
+Count selected paths, count occurrence records, and insert each occurrence's token text into a set for the vocabulary size.
 
 # Hint 3
 
-You do not need to include every token in the summary.
+A `BTreeSet<String>` or `HashSet<String>` gives `unique_tokens`; print labels in the specified order with one `println!` per field.

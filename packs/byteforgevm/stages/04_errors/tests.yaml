@@ -22,3 +22,27 @@ tests:
       exit_code: 1
       stderr_contains:
         - "invalid jump"
+
+  - name: negative jump fails clearly
+    fixture: errors
+    command: ["run", "{fixture_path}/negative_jump.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid jump"
+
+  - name: missing operand fails clearly
+    fixture: errors
+    command: ["run", "{fixture_path}/missing_operand.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "missing argument"
+
+  - name: malformed integer operand fails clearly
+    fixture: errors
+    command: ["run", "{fixture_path}/bad_operand.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid argument"

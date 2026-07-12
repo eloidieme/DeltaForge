@@ -1,7 +1,11 @@
 # Hint 1
 
-Headers end at the first empty line.
+HTTP divides a message into regions: request line, header fields, blank delimiter, then optional body. Keep those boundaries explicit.
 
 # Hint 2
 
-Normalize header names to lowercase for stable output.
+Iterate after the first line, stop on the first empty line after removing a possible carriage return, and split each remaining line once.
+
+# Hint 3
+
+`split_once(':')`, `trim`, and `to_ascii_lowercase` express the required normalization without changing the value's internal characters.

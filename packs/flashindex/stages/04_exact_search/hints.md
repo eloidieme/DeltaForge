@@ -1,11 +1,11 @@
 # Hint 1
 
-Reuse the tokenizer from stage 03 and filter token occurrences by exact token text.
+Exact search is a filter over token occurrences, not another pass with different boundary rules.
 
 # Hint 2
 
-Do not search raw source strings. Token boundaries matter for this stage.
+Reuse one tokenizer result and retain occurrences whose token equals the query before invoking the existing formatter.
 
 # Hint 3
 
-Sort files before processing so output order stays stable.
+A direct `occurrence.token == query` comparison preserves case sensitivity and prevents substring matches such as `main_index`.

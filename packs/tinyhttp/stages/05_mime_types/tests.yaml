@@ -22,3 +22,29 @@ tests:
       exit_code: 0
       stdout_contains:
         - "Content-Type: application/octet-stream"
+
+  - name: text files use text plain
+    fixture: mime_site
+    command: ["serve-file", "{fixture_path}/public", "/notes.txt"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Content-Type: text/plain"
+
+  - name: extensionless files use octet stream
+    fixture: mime_site
+    command: ["serve-file", "{fixture_path}/public", "/LICENSE"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Content-Type: application/octet-stream"
+
+  - name: missing files remain not found
+    fixture: mime_site
+    command: ["serve-file", "{fixture_path}/public", "/missing.json"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "HTTP/1.1 404 Not Found"
+      stdout_not_contains:
+        - "application/json"

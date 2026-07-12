@@ -24,3 +24,18 @@ tests:
       exit_code: 0
       regex_match:
         - "(?m)^alpha src/a\\.rs src/b\\.rs$"
+
+  - name: token and path ordering is canonical
+    fixture: index_project
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - "(?s)^alpha src/a\\.rs src/b\\.rs.*beta src/a\\.rs.*gamma src/b\\.rs"
+
+  - name: empty source corpus prints nothing
+    fixture: empty_index
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""

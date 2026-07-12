@@ -1,7 +1,11 @@
 # Hint 1
 
-Start with argument parsing and direct output formatting.
+Treat this stage as a contract exercise: identify the exact two inputs and the one output line before choosing any data structure.
 
 # Hint 2
 
-A `HashMap` or direct formatting is enough for this first stage.
+Keep argument validation separate from formatting so an incomplete command cannot fall through to the success path.
+
+# Hint 3
+
+Rust's `std::env::args` preserves a quoted value as one argument; format the successful pair with a single `println!`.

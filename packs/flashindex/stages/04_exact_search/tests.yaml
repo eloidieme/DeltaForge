@@ -25,3 +25,20 @@ tests:
     expect:
       exit_code: 0
       stdout_exact: ""
+
+  - name: matching is case sensitive
+    fixture: search_project
+    command: ["search", "{fixture_path}", "Main"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""
+
+  - name: multiple matches keep path and source order
+    fixture: ordered_search
+    command: ["search", "{fixture_path}", "needle"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/a.rs:1:1 needle
+        src/b.rs:1:1 needle
+        src/b.rs:1:8 needle

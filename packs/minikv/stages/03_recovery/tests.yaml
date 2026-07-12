@@ -19,3 +19,11 @@ tests:
     expect:
       exit_code: 0
       stdout_exact: ""
+
+  - name: malformed log fails clearly
+    fixture: malformed_store
+    command: ["get", "{fixture_path}/store.log", "alpha"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "malformed"

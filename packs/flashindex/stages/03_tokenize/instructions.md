@@ -1,35 +1,40 @@
-# Stage 03 - Tokenize Files
+# Stage 03 — Tokenize files
 
 ## Goal
 
-Extract identifier-like tokens from source files and report their positions.
+Turn the selected source corpus into identifier-like token occurrences, recording each token's portable path and precise one-based source position.
+
+## Background
+
+Tokenization is the bridge from bytes to searchable units. Compiler lexers use rich language grammars; search tools often prefer a smaller, language-neutral rule so one index can cover Rust, C++, Python, and documentation. Position reporting follows the long tradition of concordances and compiler diagnostics: a match is more useful when it takes a reader directly to its line and column.
 
 ## Requirements
 
-Your program should expose:
+Expose `flashindex tokenize <path>`. In Stage 02 files, recognize maximal runs of ASCII letters, digits, and `_` that contain an ASCII letter or underscore before any leading digits; leading digit runs are not tokens. Print every occurrence as `relative/path:line:column token`, with one-based line and byte-column positions. Preserve original token case. Order by sorted path, then source order. Comments and string literals are ordinary text at this stage.
 
-```bash
-flashindex tokenize <path>
+## Example
+
+```console
+$ flashindex tokenize project
+src/main.rs:1:1 fn
+src/main.rs:1:4 main
+src/main.rs:2:9 fetch_or
 ```
 
-For every token occurrence in source-like files, print:
+## Edge cases
 
-```txt
-relative/path:line:column token
-```
+- `_` remains part of identifiers such as `fetch_or` and `value_32`.
+- Punctuation separates tokens and is never emitted.
+- A digit-leading run such as `123abc` emits `abc` at its actual column, never `123abc` or `123`.
+- Empty source files produce no occurrences.
+- Nested files and occurrences have stable path/source ordering.
 
-Token rules:
+## Success criteria
 
-- Tokens contain ASCII letters, ASCII digits, and underscores.
-- Tokens may not start with a digit.
-- Preserve underscores inside identifiers, such as `fetch_or`.
-- Use 1-based line and column numbers.
-- Print output in stable path order, then source order within each file.
-
-## Success Criteria
-
-`deltaforge test` should pass all Stage 03 tests.
+All `deltaforge test` cases pass, every position points at the first byte of the printed token, and the tokenizer benchmark completes.
 
 ## Non-goals
 
-Do not implement a full parser. Do not remove comments or string literals yet. Do not support Unicode identifiers.
+- Full language parsing, keyword classification, or comment/string removal.
+- Unicode identifiers or grapheme-based columns.
+- Case folding, stemming, or deduplication.

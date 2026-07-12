@@ -22,3 +22,14 @@ tests:
       exit_code: 0
       stdout_contains:
         - "wrote"
+
+  - name: appends after existing records and preserves spaces
+    fixture: existing_store
+    command: ["write-log", "{fixture_path}/store.log", "title", "hello world"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/fixture/store.log"
+          contains: |
+            SET alpha one
+            SET title hello world

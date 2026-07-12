@@ -1,11 +1,11 @@
 # Hint 1
 
-Represent recovered values as `Option<String>` so a tombstone can overwrite an older value.
+A tombstone is state: while replaying, “deleted” must overwrite “present” just as a newer value would.
 
 # Hint 2
 
-Compaction should write only keys whose latest value is `Some`.
+Represent each key's latest state so it can express either a live value or deletion, and let every log operation replace that state.
 
 # Hint 3
 
-Keep the log format line-oriented and easy to inspect.
+`Option<String>` inside the recovery map is enough: `Some(value)` for `SET`, `None` for `DEL`; compaction serializes only `Some` entries.

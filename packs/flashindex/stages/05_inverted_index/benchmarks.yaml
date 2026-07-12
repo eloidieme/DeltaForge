@@ -1,0 +1,7 @@
+benchmarks:
+  - name: build_small_inverted_index
+    fixture: benchmark_code
+    command: ["index", "{fixture_path}"]
+    iterations: 7
+    warmup: 2
+    timeout_ms: 5000

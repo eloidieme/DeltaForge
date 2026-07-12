@@ -1,0 +1,7 @@
+benchmarks:
+  - name: append_to_existing_log
+    fixture: existing_store
+    command: ["write-log", "{fixture_path}/store.log", "benchmark-key", "benchmark value"]
+    iterations: 7
+    warmup: 2
+    timeout_ms: 5000

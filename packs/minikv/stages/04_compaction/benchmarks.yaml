@@ -1,0 +1,7 @@
+benchmarks:
+  - name: compact_stale_log
+    fixture: stale_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    iterations: 7
+    warmup: 2
+    timeout_ms: 5000

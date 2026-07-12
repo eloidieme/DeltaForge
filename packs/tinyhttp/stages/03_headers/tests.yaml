@@ -23,3 +23,21 @@ tests:
       exit_code: 0
       stdout_not_contains:
         - "GET /"
+
+  - name: stops at blank line before body
+    stdin: "POST / HTTP/1.1\r\nHost: example.test\r\n\r\nBody-Key: not-a-header\r\n"
+    command: ["headers"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "host: example.test"
+      stdout_not_contains:
+        - "body-key"
+
+  - name: rejects malformed header line
+    stdin: "GET / HTTP/1.1\r\nBroken Header\r\n\r\n"
+    command: ["headers"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "malformed header"

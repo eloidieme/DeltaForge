@@ -24,3 +24,23 @@ tests:
       exit_code: 0
       regex_match:
         - "(?m)^unique_tokens: [0-9]+$"
+
+  - name: summary counts occurrences and unique tokens exactly
+    fixture: summary_project
+    command: ["summary", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        files: 2
+        tokens: 9
+        unique_tokens: 7
+
+  - name: empty corpus reports zero counters
+    fixture: empty_summary
+    command: ["summary", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        files: 0
+        tokens: 0
+        unique_tokens: 0

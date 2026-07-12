@@ -1,11 +1,11 @@
 # Hint 1
 
-Keep the Stage 01 traversal behavior, then add a predicate that decides whether a file should be printed.
+Corpus selection is a predicate over the already discovered relative paths; keep it separate from recursion.
 
 # Hint 2
 
-Check both the extension and special filenames like `CMakeLists.txt`.
+Check the exceptional exact filename first, then compare the optional extension against the fixed allow-list.
 
 # Hint 3
 
-For binary-looking files, reading a small prefix is enough for this stage. A NUL byte is a strong signal to skip.
+`Path::file_name` and `Path::extension().and_then(OsStr::to_str)` let a small `matches!` expression describe the rules.

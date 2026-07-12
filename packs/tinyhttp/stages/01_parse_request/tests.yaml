@@ -24,3 +24,29 @@ tests:
     command: ["parse"]
     expect:
       exit_code: 1
+
+  - name: parses the benchmarkable request file form
+    fixture: request_files
+    command: ["parse", "{fixture_path}/request.http"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        method: GET
+        path: /from-file
+        version: HTTP/1.1
+
+  - name: rejects empty input
+    stdin: ""
+    command: ["parse"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "missing request line"
+
+  - name: rejects extra request line fields
+    stdin: "GET / HTTP/1.1 EXTRA\r\n\r\n"
+    command: ["parse"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "malformed request line"

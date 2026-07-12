@@ -23,3 +23,23 @@ tests:
       exit_code: 0
       regex_match:
         - "(?m)^live_keys: [0-9]+$"
+
+  - name: repeated operations count physically but latest state wins
+    fixture: repeated_store
+    command: ["stats", "{fixture_path}/store.log"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        entries: 5
+        live_keys: 1
+        tombstones: 2
+
+  - name: blank log reports zero counters
+    fixture: blank_store
+    command: ["stats", "{fixture_path}/store.log"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        entries: 0
+        live_keys: 0
+        tombstones: 0

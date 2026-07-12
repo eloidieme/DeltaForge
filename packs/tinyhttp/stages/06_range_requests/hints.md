@@ -1,11 +1,11 @@
 # Hint 1
 
-Treat the end offset as inclusive.
+Reason in byte offsets, and remember that both endpoints belong to the requested interval.
 
 # Hint 2
 
-Use byte slices; do not assume UTF-8 for arbitrary files.
+Validate path and numeric bounds before slicing; compute response length from the validated slice rather than duplicating arithmetic.
 
 # Hint 3
 
-Validate the range before slicing.
+Read with `fs::read`, guard `start <= end && end < bytes.len()`, and slice with the inclusive range `start..=end`.

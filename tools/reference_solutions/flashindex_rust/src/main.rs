@@ -178,8 +178,10 @@ fn tokens_in_source(source: &str) -> Vec<String> {
     for line in source.lines() {
         let mut token_start = None;
         for (byte_index, ch) in line.char_indices() {
-            if is_token_char(ch) {
-                token_start.get_or_insert(byte_index);
+            if token_start.is_some() && is_token_char(ch) {
+                continue;
+            } else if is_token_start(ch) {
+                token_start = Some(byte_index);
             } else if let Some(start) = token_start.take() {
                 tokens.push(line[start..byte_index].to_string());
             }
@@ -293,8 +295,10 @@ fn token_occurrences(root: &Path) -> Result<Vec<Occurrence>, String> {
         for (line_index, line) in source.lines().enumerate() {
             let mut token_start = None;
             for (byte_index, ch) in line.char_indices() {
-                if is_token_char(ch) {
-                    token_start.get_or_insert(byte_index);
+                if token_start.is_some() && is_token_char(ch) {
+                    continue;
+                } else if is_token_start(ch) {
+                    token_start = Some(byte_index);
                 } else if let Some(start) = token_start.take() {
                     occurrences.push(Occurrence {
                         path: relative_path.clone(),
@@ -381,6 +385,10 @@ fn is_source_like(path: &Path) -> bool {
 
 fn is_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+fn is_token_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
 }
 
 fn portable_path(path: &Path) -> String {

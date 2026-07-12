@@ -1,11 +1,11 @@
 # Hint 1
 
-A `BTreeMap<String, BTreeSet<String>>` is enough for deterministic output.
+The inversion changes the lookup direction: each occurrence contributes its file to the collection owned by its token.
 
 # Hint 2
 
-Index files, not individual positions, for this stage.
+Choose ordered collections for both levels so deduplication and canonical output do not require a separate cleanup pass.
 
 # Hint 3
 
-Keep the tokenizer as the single source of truth for token boundaries.
+A `BTreeMap<String, BTreeSet<PathBuf>>` naturally prints tokens and paths in order while collapsing repeated occurrences.

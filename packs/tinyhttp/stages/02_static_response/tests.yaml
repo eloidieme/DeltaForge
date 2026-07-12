@@ -6,6 +6,7 @@ tests:
       exit_code: 0
       stdout_contains:
         - "HTTP/1.1 200 OK"
+        - "Content-Length: 15"
         - "hello tinyhttp"
 
   - name: returns 404 for missing file

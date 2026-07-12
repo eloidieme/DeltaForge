@@ -1,11 +1,11 @@
 # Hint 1
 
-Reuse the same interpreter but enable a trace flag.
+Tracing should observe one interpreter, not create a second one whose semantics can drift from `run`.
 
 # Hint 2
 
-Print the trace before mutating the stack for the instruction.
+Add an execution-mode flag and emit the snapshot at the top of the dispatch cycle, before matching the opcode.
 
 # Hint 3
 
-Keep stack formatting simple and deterministic.
+Format stack values with `iter().map(i64::to_string).collect::<Vec<_>>().join(", ")`; keep errors on stderr through the existing `Result` path.

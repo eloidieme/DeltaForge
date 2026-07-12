@@ -43,3 +43,25 @@ tests:
     expect:
       exit_code: 1
       stdout_exact: ""
+      stderr_contains:
+        - "non-empty query"
+
+  - name: repeated query tokens count once
+    fixture: rank_project
+    command: ["rank", "{fixture_path}", "alpha alpha"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "matched 1/1 tokens"
+
+  - name: ranked output is limited to top ten
+    fixture: top_twelve
+    command: ["rank", "{fixture_path}", "token"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - "(?m)^10\\. src/file10\\.rs"
+      stdout_not_contains:
+        - "11."
+        - "file11.rs"
+        - "file12.rs"

@@ -1,11 +1,11 @@
 # Hint 1
 
-Keep the value stack and call stack separate.
+Calls create a second last-in, first-out discipline: program values and control return points have different meanings and should not collide.
 
 # Hint 2
 
-The return address is usually the instruction after `CALL`.
+On `CALL`, determine both destinations—the callee target and the caller's resume address—before mutating interpreter state.
 
 # Hint 3
 
-Validate call targets before jumping.
+Use a separate `Vec<usize>`; push `ip + 1` after validating the target, and make `RET` pop or return `call stack underflow`.

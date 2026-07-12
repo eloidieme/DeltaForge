@@ -20,3 +20,18 @@ tests:
       exit_code: 1
       stderr_contains:
         - "call stack underflow"
+
+  - name: invalid call target fails clearly
+    fixture: calls
+    command: ["run", "{fixture_path}/bad_call.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid jump"
+
+  - name: halt inside a call stops the program
+    fixture: calls
+    command: ["run", "{fixture_path}/halt_in_call.bvm"]
+    expect:
+      exit_code: 0
+      stdout_exact: "7\n"

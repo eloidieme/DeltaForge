@@ -25,3 +25,23 @@ tests:
       exit_code: 1
       stderr_contains:
         - "unknown opcode"
+
+  - name: traces halt and nothing after it
+    fixture: trace
+    command: ["trace", "{fixture_path}/halt.bvm"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "ip=1 op=HALT stack=[1]"
+      stdout_not_contains:
+        - "op=PRINT"
+
+  - name: traces calls at their executed targets
+    fixture: trace
+    command: ["trace", "{fixture_path}/call.bvm"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "ip=0 op=CALL stack=[]"
+        - "ip=3 op=PUSH stack=[]"
+        - "ip=4 op=RET stack=[5]"

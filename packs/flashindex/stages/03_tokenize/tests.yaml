@@ -32,3 +32,19 @@ tests:
       stdout_contains:
         - "src/lib.rs:1:5 alpha"
         - "src/nested/mod.rs:1:5 beta_token"
+
+  - name: skips leading digits and preserves actual columns
+    fixture: edge_tokens
+    command: ["tokenize", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/digits.rs:1:4 alpha
+        src/digits.rs:1:11 _beta2
+
+  - name: empty source file produces no occurrences
+    fixture: empty_source
+    command: ["tokenize", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""

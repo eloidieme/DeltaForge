@@ -26,3 +26,31 @@ tests:
       exit_code: 0
       stdout_contains:
         - "compacted"
+
+  - name: writes one latest record per key in sorted order
+    fixture: stale_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/compact.log"
+          contains: |
+            SET alpha three
+            SET beta two
+
+  - name: creates nested output parents
+    fixture: stale_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/nested/data/compact.log"]
+    expect:
+      exit_code: 0
+      file_exists:
+        - "{temp_dir}/nested/data/compact.log"
+
+  - name: replaces stale output contents
+    fixture: stale_output
+    command: ["compact", "{fixture_path}/store.log", "{fixture_path}/compact.log"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/fixture/compact.log"
+          contains: "SET alpha final"

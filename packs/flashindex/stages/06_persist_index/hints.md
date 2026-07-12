@@ -1,11 +1,11 @@
 # Hint 1
 
-A simple UTF-8 line format is enough: token followed by tab-separated paths.
+Design the file as a contract between two separate invocations: every distinction the reader needs must survive serialization.
 
 # Hint 2
 
-Write the file only after the index is fully built.
+Build the full deterministic index first, serialize it completely, and only then replace the destination; let `query` parse the same record boundaries.
 
 # Hint 3
 
-Make `query` tolerant of tokens that are absent from the index.
+A line per token with tab-separated paths is sufficient; `create_dir_all` and `fs::write` handle a new nested destination and truncate stale contents.

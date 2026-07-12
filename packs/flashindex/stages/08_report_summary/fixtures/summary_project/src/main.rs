@@ -1,3 +1,4 @@
 fn alpha() {
     alpha();
 }
+shared

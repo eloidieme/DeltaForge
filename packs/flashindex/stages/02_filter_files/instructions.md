@@ -1,49 +1,40 @@
-# Stage 02 - Filter Source Files
+# Stage 02 — Filter source files
 
 ## Goal
 
-Only include source-like files in scan output.
+Refine scanning so FlashIndex reports files that plausibly contain searchable source or project text while excluding unrelated assets and binary-looking artifacts.
+
+## Background
+
+Indexing everything is rarely useful. Information-retrieval systems define a corpus before they tokenize it, and developer tools often use a conservative allow-list because decoding an arbitrary binary file as text produces noise or errors. Filenames can carry meaning too: `CMakeLists.txt` is source-like despite not ending in a conventional language suffix.
 
 ## Requirements
 
-Your program should expose:
+Keep `flashindex scan <path>` and Stage 01's recursion, ignores, relative `/` paths, and sorted output. Include regular files ending in `.c`, `.cpp`, `.h`, `.hpp`, `.rs`, `.py`, `.glsl`, `.md`, `.txt`, or `.cmake`, plus files named exactly `CMakeLists.txt`. Exclude every other suffix, including `.bin`, `.dat`, images, and `.csv`.
 
-```bash
-flashindex scan <path>
+## Example
+
+```console
+$ flashindex scan mixed
+CMakeLists.txt
+README.md
+include/search.hpp
+src/main.rs
 ```
 
-Print relative paths for regular files with these extensions:
+## Edge cases
 
-```txt
-.c
-.cpp
-.h
-.hpp
-.rs
-.py
-.glsl
-.md
-.txt
-.cmake
-```
+- `CMakeLists.txt` is included by exact filename.
+- Text-bearing allowed extensions such as `.md` and `.txt` are included.
+- Binary-looking and unrelated asset extensions are excluded even when their contents are readable.
+- Ignored directories remain excluded regardless of a file's extension.
 
-Also include files named `CMakeLists.txt`.
+## Success criteria
 
-Continue skipping ignored directories from Stage 01:
-
-```txt
-.git
-target
-build
-node_modules
-```
-
-Ignore binary-looking files and unrelated assets.
-
-## Success Criteria
-
-`deltaforge test` should pass all Stage 02 tests.
+All `deltaforge test` cases pass and the scan output defines a deterministic corpus for every later stage.
 
 ## Non-goals
 
-Do not tokenize files yet. This stage is only about deciding which files are source-like.
+- Detecting file type from contents or supporting every programming language.
+- Tokenizing, parsing, or interpreting included text.
+- User-configurable include/exclude patterns.

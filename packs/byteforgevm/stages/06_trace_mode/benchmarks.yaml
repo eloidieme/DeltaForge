@@ -1,0 +1,7 @@
+benchmarks:
+  - name: trace_execution
+    fixture: trace_bench
+    command: ["trace", "{fixture_path}/program.bvm"]
+    iterations: 7
+    warmup: 2
+    timeout_ms: 5000

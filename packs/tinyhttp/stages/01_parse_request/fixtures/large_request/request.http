@@ -1,0 +1,10 @@
+POST /api/v1/index?mode=complete HTTP/1.1
+Host: benchmark.example.test
+User-Agent: DeltaForge-Benchmark/1.0
+Content-Type: application/json
+X-Trace-Context: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+X-Search-Terms: tokenizer inverted-index persistence compaction recovery protocol virtual-machine concurrency determinism
+X-Padding: abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+Content-Length: 256
+
+{"query":"alpha beta gamma","paths":["src/main.rs","src/lib.rs"],"options":{"case_sensitive":true,"include_positions":true},"padding":"abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"}

@@ -1,7 +1,11 @@
 # Hint 1
 
-Read the file as UTF-8 text first.
+An address identifies an instruction in the loaded program, so decide which source lines actually become instructions.
 
 # Hint 2
 
-Line numbers are instruction addresses.
+Parse the file into a sequence first, then render that sequence with its indices; do not mix execution state into the representation.
+
+# Hint 3
+
+`str::lines`, `filter`, and `enumerate` provide the sequence, while a format width such as `{ip:04}` produces the address.

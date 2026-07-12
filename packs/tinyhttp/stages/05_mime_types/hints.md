@@ -1,11 +1,11 @@
 # Hint 1
 
-Match on the path extension after the path is resolved safely.
+Media type selection is classification: every successful file must land in exactly one known case or the fallback.
 
 # Hint 2
 
-Keep a default for unknown extensions.
+Determine the type from the validated file path, then pass it into the same response formatter used by Stage 02.
 
 # Hint 3
 
-Header formatting matters: use `Content-Type: value`.
+`Path::extension().and_then(OsStr::to_str)` plus a small `match` gives a deterministic `&'static str` result.

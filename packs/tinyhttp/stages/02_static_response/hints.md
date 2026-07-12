@@ -1,7 +1,11 @@
 # Hint 1
 
-Strip the leading slash from the request path before joining it to the root.
+Treat the document root as a security boundary: decide whether a request path is safe before joining or opening anything.
 
 # Hint 2
 
-Return a 404 response when the file is missing.
+Separate path validation, file lookup, and response formatting so the 404 path cannot accidentally reuse body data.
+
+# Hint 3
+
+Inspect `std::path::Component` for parent/root/prefix components, then use the body byte slice's length when writing `Content-Length`.

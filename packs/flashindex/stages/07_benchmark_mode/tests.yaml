@@ -25,3 +25,19 @@ tests:
       exit_code: 0
       stdout_not_contains:
         - "\"files\":3"
+
+  - name: benchmark reports non negative integer runtime
+    fixture: bench_project
+    command: ["bench", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - '^\{"files":2,"runtime_ms":[0-9]+\}\n$'
+
+  - name: empty corpus reports zero files
+    fixture: empty_bench
+    command: ["bench", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - '^\{"files":0,"runtime_ms":[0-9]+\}\n$'

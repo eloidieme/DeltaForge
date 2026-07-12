@@ -22,3 +22,13 @@ tests:
     command: ["disasm", "{fixture_path}/missing.bvm"]
     expect:
       exit_code: 1
+
+  - name: blank lines do not consume addresses
+    fixture: programs
+    command: ["disasm", "{fixture_path}/blank_lines.bvm"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        0000 PUSH -2
+        0001 PRINT
+        0002 HALT

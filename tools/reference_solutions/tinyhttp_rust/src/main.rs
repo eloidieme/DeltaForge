@@ -17,7 +17,8 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
-        [command] if command == "parse" => parse_request(),
+        [command] if command == "parse" => parse_request(None),
+        [command, path] if command == "parse" => parse_request(Some(Path::new(path))),
         [command] if command == "headers" => print_headers(),
         [command] if command == "keep-alive" => keep_alive(),
         [command, root, request_path] if command == "serve-file" => {
@@ -36,8 +37,11 @@ fn run() -> Result<(), String> {
     }
 }
 
-fn parse_request() -> Result<(), String> {
-    let request = read_stdin()?;
+fn parse_request(path: Option<&Path>) -> Result<(), String> {
+    let request = match path {
+        Some(path) => fs::read_to_string(path).map_err(|error| error.to_string())?,
+        None => read_stdin()?,
+    };
     let (method, path, version) = request_line(&request)?;
     println!("method: {method}");
     println!("path: {path}");

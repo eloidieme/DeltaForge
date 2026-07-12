@@ -1,30 +1,49 @@
-# Range requests
+# Stage 06 — Byte-range responses
 
-Add:
+## Goal
+
+Return one inclusive slice of a file as a correctly framed `206 Partial Content` response, while preserving the document-root security boundary.
+
+## Background
+
+Range requests let a client resume downloads and seek through large media without transferring the whole representation. HTTP defines ranges in bytes, and the end offset is inclusive—an easy off-by-one trap. A response must identify both the selected interval and the complete representation length so a client can place the fragment correctly.
+
+## Requirements
+
+Expose:
 
 ```bash
-tinyhttp range <root> <path> <start> <end>
+tinyhttp range <root> <request-path> <start> <end>
 ```
 
-Return a partial HTTP response with status `206 Partial Content`, a `Content-Range` header, and the requested inclusive byte range as the body.
+`start` and `end` are decimal byte offsets. For `0 <= start <= end < file_length`, print status `HTTP/1.1 206 Partial Content`, `Content-Range: bytes <start>-<end>/<file_length>`, `Content-Length: <end-start+1>`, a blank line, and exactly those inclusive bytes. Invalid numbers, reversed or out-of-bounds ranges, missing files, and unsafe paths exit non-zero with an explanatory stderr message.
 
-Example for a 10 byte file and range `2 5`:
+## Example
 
-```txt
+For the 10-byte file `abcdefghij` and range `2 5`:
+
+```text
 HTTP/1.1 206 Partial Content
 Content-Range: bytes 2-5/10
+Content-Length: 4
 
 cdef
 ```
 
-Edge cases:
+## Edge cases
 
-- reject ranges where start is greater than end
-- reject end offsets beyond the file length
-- keep path traversal protection
+- A one-byte range where `start == end` succeeds with length 1.
+- A reversed range is rejected.
+- An end offset equal to or beyond the file length is rejected.
+- Non-numeric offsets are rejected.
+- A parent-directory traversal is rejected before outside bytes are read.
 
-Non-goals:
+## Success criteria
 
-- parsing real `Range` headers
-- multipart ranges
-- streaming responses
+All `deltaforge test` cases pass, byte counts remain correct with LF fixtures on every CI operating system, and range failures never emit a misleading partial response.
+
+## Non-goals
+
+- Parsing an HTTP `Range` header or returning `416 Range Not Satisfiable`.
+- Suffix, open-ended, conditional, or multipart ranges.
+- Streaming, sockets, caching, or content encoding.

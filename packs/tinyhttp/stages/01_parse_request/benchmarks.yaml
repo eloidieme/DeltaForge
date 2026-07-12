@@ -1,0 +1,7 @@
+benchmarks:
+  - name: parse_large_request
+    fixture: large_request
+    command: ["parse", "{fixture_path}/request.http"]
+    iterations: 10
+    warmup: 3
+    timeout_ms: 5000

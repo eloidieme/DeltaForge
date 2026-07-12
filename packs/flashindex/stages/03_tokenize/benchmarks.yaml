@@ -1,0 +1,7 @@
+benchmarks:
+  - name: tokenize_small_codebase
+    fixture: benchmark_code
+    command: ["tokenize", "{fixture_path}"]
+    iterations: 7
+    warmup: 2
+    timeout_ms: 5000

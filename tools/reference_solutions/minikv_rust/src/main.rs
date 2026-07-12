@@ -79,6 +79,9 @@ fn stats(path: &Path) -> Result<(), String> {
     let mut entries = 0;
     let mut tombstones = 0;
     for line in source.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
         entries += 1;
         if line.starts_with("DEL ") {
             tombstones += 1;

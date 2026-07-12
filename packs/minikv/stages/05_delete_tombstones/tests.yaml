@@ -26,3 +26,25 @@ tests:
           contains: "SET beta two"
       stdout_contains:
         - "compacted"
+
+  - name: deleting a missing key is a valid tombstone
+    command: ["delete-log", "{temp_dir}/store.log", "never-set"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/store.log"
+          contains: "DEL never-set"
+
+  - name: repeated deletes keep a key absent
+    fixture: repeated_delete
+    command: ["get", "{fixture_path}/store.log", "alpha"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""
+
+  - name: set after delete restores the key
+    fixture: restored_store
+    command: ["get", "{fixture_path}/store.log", "alpha"]
+    expect:
+      exit_code: 0
+      stdout_exact: "restored\n"

@@ -44,6 +44,8 @@ tests:
     expect:
       exit_code: 1
       stdout_exact: ""
+      stderr_contains:
+        - "positive integer"
 
   - name: non-numeric thread count is rejected
     fixture: parallel_project
@@ -51,3 +53,5 @@ tests:
     expect:
       exit_code: 1
       stdout_exact: ""
+      stderr_contains:
+        - "positive integer"
