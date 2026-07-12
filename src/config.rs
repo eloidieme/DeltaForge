@@ -230,5 +230,6 @@ timeout_ms = 250
         assert!(!config.runner.keep_temp);
         assert_eq!(config.bench.iterations, 7);
         assert!(config.git.auto_tag);
+        assert!(config.gates.enforce);
     }
 }

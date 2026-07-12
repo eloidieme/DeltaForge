@@ -213,11 +213,13 @@ impl ProjectContext {
         {
             return Ok(Some(GateStatus::NotMeasured));
         }
-        Ok(Some(if record.results.iter().all(|result| result.passed) {
-            GateStatus::Passed
-        } else {
-            GateStatus::NotYet
-        }))
+        Ok(Some(
+            if record.results.iter().all(recorded_gate_result_passes) {
+                GateStatus::Passed
+            } else {
+                GateStatus::NotYet
+            },
+        ))
     }
 
     pub fn verify_gate_record(&self, stage_id: &str) -> Result<()> {
@@ -235,25 +237,44 @@ impl ProjectContext {
 }
 
 fn gate_record_matches(record: &crate::state::GateRecord, gates: &[PerformanceGate]) -> bool {
-    record.results.len() == gates.len()
-        && gates.iter().all(|gate| {
-            let Some(bound) = gate.bound() else {
-                return false;
-            };
-            record
-                .results
-                .iter()
-                .filter(|result| {
-                    result.name == gate.name
-                        && result.benchmark == gate.benchmark
-                        && result.metric == gate.metric
-                        && result.params == gate.params
-                        && result.bound == bound
-                        && result.measured.is_finite()
-                })
-                .count()
-                == 1
-        })
+    if record.results.len() != gates.len() {
+        return false;
+    }
+
+    // Display names and advice are deliberately absent from the behavioral
+    // digest, so match the same progression-affecting identity here. Consume
+    // each result once so duplicate semantic gates remain deterministic.
+    let mut used = vec![false; record.results.len()];
+    for gate in gates {
+        let Some(bound) = gate.bound() else {
+            return false;
+        };
+        let Some(index) = record
+            .results
+            .iter()
+            .enumerate()
+            .position(|(index, result)| {
+                !used[index]
+                    && result.benchmark == gate.benchmark
+                    && result.metric == gate.metric
+                    && result.params == gate.params
+                    && result.bound == bound
+                    && result.measured.is_finite()
+            })
+        else {
+            return false;
+        };
+        used[index] = true;
+    }
+    true
+}
+
+fn recorded_gate_result_passes(result: &crate::state::RecordedGateResult) -> bool {
+    result.measured.is_finite()
+        && match result.bound {
+            crate::pack::GateBound::Min(min) => min.is_finite() && result.measured >= min,
+            crate::pack::GateBound::Max(max) => max.is_finite() && result.measured <= max,
+        }
 }
 
 fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {
@@ -340,5 +361,30 @@ fn find_project_root(start: &Path) -> Result<PathBuf> {
         if !current.pop() {
             bail!("could not find .deltaforge/state.json");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pack::{GateBound, PerformanceMetric};
+    use crate::state::RecordedGateResult;
+
+    #[test]
+    fn recorded_gate_truth_is_recomputed_from_measurement_and_bound() {
+        let mut result = RecordedGateResult {
+            name: "gate".to_string(),
+            benchmark: "bench".to_string(),
+            metric: PerformanceMetric::RuntimeMedianMs,
+            params: Default::default(),
+            bound: GateBound::Min(2.0),
+            measured: 1.0,
+            passed: true,
+        };
+        assert!(!recorded_gate_result_passes(&result));
+
+        result.measured = 3.0;
+        result.passed = false;
+        assert!(recorded_gate_result_passes(&result));
     }
 }

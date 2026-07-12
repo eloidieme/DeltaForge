@@ -976,6 +976,277 @@ performance_gates:
 }
 
 #[test]
+fn failing_performance_gate_blocks_with_advice_and_enforcement_can_be_skipped() {
+    let (root, packs, project) = init_project_from_pack_copy("performance-gate-failure");
+    append_scan_gate(&packs, "runtime limit", "0", "reduce avoidable work");
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    ));
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "test"],
+        &project,
+    ));
+
+    let bench = run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+        ],
+        &project,
+    );
+    assert_success(&bench);
+    assert_stdout_contains(&bench, "Correctness: passed");
+    assert_stdout_contains(&bench, "Performance: not yet");
+    assert_stdout_contains(&bench, "Gate: runtime limit");
+    assert_stdout_contains(&bench, "Likely areas to investigate:");
+    assert_stdout_contains(&bench, "reduce avoidable work");
+
+    let status = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "status", "--json"],
+        &project,
+    );
+    assert_success(&status);
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["stages"][0]["performance"], "not_yet");
+
+    let blocked = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
+    assert_failure(&blocked);
+    assert_stderr_contains(&blocked, "performance gates are not passing");
+    assert_stderr_contains(&blocked, "Run: deltaforge bench");
+
+    fs::write(
+        project.join(".deltaforge/config.toml"),
+        "[gates]\nenforce = false\n",
+    )
+    .unwrap();
+    let skipped = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
+    assert_success(&skipped);
+    assert_stdout_contains(&skipped, "performance gates skipped: gates.enforce = false");
+    assert_stdout_contains(&skipped, "Unlocked Stage 02_filter_files");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn tightening_a_gate_requires_correctness_and_performance_revalidation() {
+    let (root, packs, project) = init_project_from_pack_copy("performance-gate-tightening");
+    append_scan_gate(&packs, "runtime limit", "1000000000", "inspect runtime");
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    ));
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "test"],
+        &project,
+    ));
+    assert_success(&run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+        ],
+        &project,
+    ));
+
+    let path = packs.join("flashindex/stages/01_scan_files/benchmarks.yaml");
+    let source = fs::read_to_string(&path).unwrap();
+    fs::write(&path, source.replace("max: 1000000000", "max: 0")).unwrap();
+    let sync = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    );
+    assert_success(&sync);
+    assert_stdout_contains(&sync, "! 01_scan_files (needs revalidation)");
+
+    let next = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
+    assert_failure(&next);
+    assert_stderr_contains(&next, "must be revalidated");
+    assert_stderr_contains(&next, "deltaforge test");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn gate_advice_methodology_yaml_format_and_display_name_do_not_stale_proofs() {
+    let (root, packs, project) = init_project_from_pack_copy("performance-gate-canonical");
+    append_scan_gate(&packs, "quick scan", "1000000000", "first advice");
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    ));
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "test"],
+        &project,
+    ));
+    assert_success(&run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+        ],
+        &project,
+    ));
+
+    let path = packs.join("flashindex/stages/01_scan_files/benchmarks.yaml");
+    let source = fs::read_to_string(&path).unwrap();
+    fs::write(&path, source.replace("first advice", "updated advice")).unwrap();
+    let advice_sync = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    );
+    assert_success(&advice_sync);
+    assert_stdout_not_contains(&advice_sync, "needs revalidation");
+
+    fs::write(
+        &path,
+        r#"# formatting and mapping order are not semantics
+performance_gates:
+  - advice:
+      - updated advice
+    max: 1000000000
+    metric: runtime_median_ms
+    benchmark: scan_basic_project
+    name: quick scan
+benchmarks:
+  - timeout_ms: 2000
+    warmup: 0
+    iterations: 9
+    command:
+      - scan
+      - "{fixture_path}"
+    fixture: basic_project
+    name: scan_basic_project
+"#,
+    )
+    .unwrap();
+    let format_sync = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    );
+    assert_success(&format_sync);
+    assert_stdout_not_contains(&format_sync, "needs revalidation");
+
+    let source = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        source.replace("name: quick scan", "name: renamed scan"),
+    )
+    .unwrap();
+    let rename_sync = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    );
+    assert_success(&rename_sync);
+    assert_stdout_not_contains(&rename_sync, "needs revalidation");
+    let status = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "status", "--json"],
+        &project,
+    );
+    assert_success(&status);
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["stages"][0]["performance"], "passed");
+    let next = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
+    assert_success(&next);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn timed_out_benchmark_reports_no_pass_and_preserves_prior_complete_record() {
+    let (root, packs, project) = init_project_from_pack_copy("performance-gate-timeout");
+    append_scan_gate(&packs, "quick scan", "1000000000", "inspect runtime");
+    let source = fs::read_to_string(project.join("src/main.rs"))
+        .unwrap()
+        .replace(
+            "fn main() -> ExitCode {",
+            "fn main() -> ExitCode {\n    std::thread::sleep(std::time::Duration::from_millis(50));",
+        );
+    fs::write(project.join("src/main.rs"), source).unwrap();
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    ));
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "test"],
+        &project,
+    ));
+    assert_success(&run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+        ],
+        &project,
+    ));
+
+    let benchmarks = packs.join("flashindex/stages/01_scan_files/benchmarks.yaml");
+    let source = fs::read_to_string(&benchmarks).unwrap();
+    fs::write(
+        &benchmarks,
+        source.replace("timeout_ms: 5000", "timeout_ms: 1"),
+    )
+    .unwrap();
+    let sync = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    );
+    assert_success(&sync);
+    assert_stdout_not_contains(&sync, "needs revalidation");
+    let state_path = project.join(".deltaforge/state.json");
+    let before: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+
+    let failed = run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+            "--json",
+        ],
+        &project,
+    );
+    assert_failure(&failed);
+    let report: serde_json::Value = serde_json::from_slice(&failed.stdout).unwrap();
+    assert_eq!(report[0]["performance"], "not_measured");
+    assert_eq!(report[0]["gate_results"][0]["passed"], false);
+    let after: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(before["gate_results"], after["gate_results"]);
+
+    let status = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "status", "--json"],
+        &project,
+    );
+    assert_success(&status);
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["stages"][0]["performance"], "passed");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn validate_pack_rejects_missing_performance_gate_benchmark() {
     let root = temp_project_path("invalid-performance-gate");
     let packs = root.join("packs");
@@ -1770,6 +2041,7 @@ fn legacy_schema_v1_state_loads_but_requires_a_fresh_completion_proof() {
     state_object.remove("pack_source");
     state_object.remove("pack_digest");
     state_object.remove("completion_proofs");
+    state_object.remove("gate_results");
     state_object.insert(
         "completed_stages".to_string(),
         serde_json::json!(["01_scan_files"]),
@@ -1854,6 +2126,15 @@ fn init_project_from_pack_copy(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     ));
     fs::write(project.join("src/main.rs"), passing_flashindex_source()).unwrap();
     (root, packs, project)
+}
+
+fn append_scan_gate(packs: &Path, name: &str, max: &str, advice: &str) {
+    let path = packs.join("flashindex/stages/01_scan_files/benchmarks.yaml");
+    let mut source = fs::read_to_string(&path).unwrap();
+    source.push_str(&format!(
+        "\nperformance_gates:\n  - name: {name}\n    benchmark: scan_basic_project\n    metric: runtime_median_ms\n    max: {max}\n    advice: [\"{advice}\"]\n"
+    ));
+    fs::write(path, source).unwrap();
 }
 
 #[test]

@@ -408,17 +408,30 @@ fn evaluate_stage_gates(
         && stage_records
             .iter()
             .all(|record| record.points.iter().all(|point| point.success));
-    let gates: Vec<EvaluatedGate> = parsed
+    let mut gates: Vec<EvaluatedGate> = parsed
         .performance_gates
         .iter()
         .filter_map(|gate| evaluate_gate(stage, gate, &stage_records))
         .collect();
     let every_gate_evaluated = gates.len() == parsed.performance_gates.len();
+    let complete = complete && every_gate_evaluated;
+    suppress_incomplete_passes(&mut gates, complete);
     Ok(StageGateEvaluation {
         stage: stage.id.clone(),
         gates,
-        complete: complete && every_gate_evaluated,
+        complete,
     })
+}
+
+fn suppress_incomplete_passes(gates: &mut [EvaluatedGate], complete: bool) {
+    if !complete {
+        // A selected point can meet its bound while another point or benchmark
+        // fails. Preserve the measurement for diagnostics, but never report an
+        // individual pass from an incomplete stage run.
+        for gate in gates {
+            gate.passed = false;
+        }
+    }
 }
 
 fn evaluate_gate(
@@ -981,7 +994,6 @@ fn run_one_benchmark(
 
     let matrix = normalize_matrix(&benchmark)?;
 
-    let temp_dir = create_temp_dir(stage, &benchmark.name)?;
     if !crate::integrity::is_safe_relative_path(Path::new(&benchmark.fixture)) {
         bail!(
             "benchmark {} fixture path is unsafe: {}",
@@ -989,6 +1001,7 @@ fn run_one_benchmark(
             benchmark.fixture
         );
     }
+    let temp_dir = create_temp_dir(stage, &benchmark.name)?;
     let source_fixture = context.pack.fixture_path(stage, &benchmark.fixture);
     let fixture_path = temp_dir.join("fixture");
     copy_dir_recursive(&source_fixture, &fixture_path)?;
@@ -1656,6 +1669,111 @@ matrix:
             point(&[("threads", "8"), ("mode", "safe")], Some(120.0)),
         ];
         assert!(thread_speedup(&points).is_none());
+    }
+
+    fn test_gate(metric: PerformanceMetric, params: &[(&str, &str)]) -> PerformanceGate {
+        PerformanceGate {
+            name: "test gate".to_string(),
+            benchmark: "scan_basic_project".to_string(),
+            metric,
+            min: Some(2.0),
+            max: None,
+            params: params
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+            advice: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn gate_evaluation_matches_the_exact_matrix_point() {
+        let stage = StageSpec {
+            id: "01_scan_files".to_string(),
+            title: "Scan".to_string(),
+            path: PathBuf::from("stages/01_scan_files"),
+        };
+        let mut record = sample_record();
+        record.points = vec![
+            point(&[("mode", "fast"), ("threads", "1")], Some(10.0)),
+            point(&[("mode", "fast"), ("threads", "8")], Some(3.0)),
+        ];
+        let gate = test_gate(
+            PerformanceMetric::RuntimeMedianMs,
+            &[("mode", "fast"), ("threads", "8")],
+        );
+
+        let evaluated = evaluate_gate(&stage, &gate, &[&record]).unwrap();
+
+        assert_eq!(evaluated.measured, Some(3.0));
+        assert!(evaluated.passed);
+    }
+
+    #[test]
+    fn gate_evaluation_rejects_ambiguous_and_non_finite_points() {
+        let stage = StageSpec {
+            id: "01_scan_files".to_string(),
+            title: "Scan".to_string(),
+            path: PathBuf::from("stages/01_scan_files"),
+        };
+        let gate = test_gate(PerformanceMetric::RuntimeMedianMs, &[("threads", "8")]);
+        let mut ambiguous = sample_record();
+        ambiguous.points = vec![
+            point(&[("threads", "8")], Some(3.0)),
+            point(&[("threads", "8")], Some(4.0)),
+        ];
+        assert_eq!(
+            evaluate_gate(&stage, &gate, &[&ambiguous])
+                .unwrap()
+                .measured,
+            None
+        );
+
+        let mut non_finite = sample_record();
+        non_finite.points = vec![point(&[("threads", "8")], Some(f64::INFINITY))];
+        let evaluated = evaluate_gate(&stage, &gate, &[&non_finite]).unwrap();
+        assert_eq!(evaluated.measured, None);
+        assert!(!evaluated.passed);
+    }
+
+    #[test]
+    fn speedup_gate_uses_the_derived_extreme_thread_result() {
+        let stage = StageSpec {
+            id: "01_scan_files".to_string(),
+            title: "Scan".to_string(),
+            path: PathBuf::from("stages/01_scan_files"),
+        };
+        let mut record = sample_record();
+        record.points = vec![
+            point(&[("threads", "1")], Some(800.0)),
+            point(&[("threads", "2")], Some(500.0)),
+            point(&[("threads", "8")], Some(100.0)),
+        ];
+        let gate = test_gate(PerformanceMetric::Speedup, &[]);
+
+        let evaluated = evaluate_gate(&stage, &gate, &[&record]).unwrap();
+
+        assert_eq!(evaluated.measured, Some(8.0));
+        assert!(evaluated.passed);
+    }
+
+    #[test]
+    fn incomplete_stage_suppresses_selected_point_passes() {
+        let mut gates = vec![EvaluatedGate {
+            name: "selected point".to_string(),
+            benchmark: "scan_basic_project".to_string(),
+            metric: PerformanceMetric::RuntimeMedianMs,
+            params: BTreeMap::new(),
+            bound: GateBound::Max(100.0),
+            measured: Some(10.0),
+            passed: true,
+            advice: Vec::new(),
+        }];
+
+        suppress_incomplete_passes(&mut gates, false);
+
+        assert!(!gates[0].passed);
+        assert_eq!(gates[0].measured, Some(10.0));
     }
 
     #[test]

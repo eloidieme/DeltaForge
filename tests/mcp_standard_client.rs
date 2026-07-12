@@ -236,6 +236,37 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
         .await?;
     assert_eq!(tool_text_as_json(&benchmarks)?["status"], "ok");
 
+    let invalid_gate = client
+        .call_tool(tool_params(
+            "replace_stage_benchmarks",
+            serde_json::json!({
+                "project": "safeauthor",
+                "packs_dir": packs_dir,
+                "stage": "01_first_stage",
+                "benchmarks": [{
+                    "name": "echo_fixture",
+                    "fixture": "sample",
+                    "command": ["echo", "{fixture_path}"]
+                }],
+                "performance_gates": [{
+                    "name": "invalid bounds",
+                    "benchmark": "echo_fixture",
+                    "metric": "throughput_mb_s",
+                    "min": 0,
+                    "max": 1
+                }]
+            }),
+        ))
+        .await?;
+    assert_eq!(invalid_gate.is_error, Some(true));
+    let invalid_gate_report = tool_text_as_json(&invalid_gate)?;
+    assert_eq!(invalid_gate_report["status"], "blocked");
+    assert!(
+        invalid_gate_report["problems"][0]
+            .as_str()
+            .is_some_and(|problem| problem.contains("exactly one finite min or max"))
+    );
+
     let validate = client
         .call_tool(tool_params(
             "validate_pack",

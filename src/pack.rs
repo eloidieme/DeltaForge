@@ -1169,16 +1169,26 @@ pub fn validate_stage_benchmarks_source(
                     stage.id, gate.name
                 ));
             } else {
-                let numeric = values
+                let parsed_values = values
                     .iter()
-                    .filter_map(benchmark_scalar_to_string)
-                    .filter_map(|value| value.parse::<u64>().ok())
-                    .collect::<BTreeSet<_>>();
-                if numeric.len() < 2 {
+                    .map(|value| {
+                        benchmark_scalar_to_string(value)
+                            .and_then(|value| value.parse::<u64>().ok())
+                    })
+                    .collect::<Vec<_>>();
+                if parsed_values.iter().any(Option::is_none) {
                     problems.push(format!(
-                        "stage {} gate {} speedup threads must contain two distinct numeric values",
+                        "stage {} gate {} speedup threads must all be unsigned integers",
                         stage.id, gate.name
                     ));
+                } else {
+                    let numeric = parsed_values.into_iter().flatten().collect::<BTreeSet<_>>();
+                    if numeric.len() != values.len() {
+                        problems.push(format!(
+                            "stage {} gate {} speedup threads must not contain duplicate values",
+                            stage.id, gate.name
+                        ));
+                    }
                 }
             }
         } else if benchmark.matrix.is_empty() {
@@ -1331,6 +1341,57 @@ benchmarks:
         assert!(
             !all.contains("{fixture_path}"),
             "built-in placeholder flagged: {all}"
+        );
+    }
+
+    #[test]
+    fn speedup_validation_rejects_duplicate_and_non_numeric_threads() {
+        let pack = load_builtin_pack("flashindex").unwrap();
+        let stage = pack.manifest.first_stage().unwrap().clone();
+        for (matrix, expected) in [
+            ("[1, 1, 8]", "must not contain duplicate values"),
+            ("[1, 8, invalid]", "must all be unsigned integers"),
+        ] {
+            let source = format!(
+                r#"
+benchmarks:
+  - name: scan_threads
+    fixture: basic_project
+    command: ["scan", "{{fixture_path}}", "--threads", "{{threads}}"]
+    matrix:
+      threads: {matrix}
+performance_gates:
+  - name: scaling
+    benchmark: scan_threads
+    metric: speedup
+    min: 2
+"#
+            );
+            let problems = validate_stage_benchmarks_source(&pack, &stage, &source).join("\n");
+            assert!(problems.contains(expected), "{problems}");
+        }
+    }
+
+    #[test]
+    fn speedup_validation_accepts_distinct_numeric_threads() {
+        let pack = load_builtin_pack("flashindex").unwrap();
+        let stage = pack.manifest.first_stage().unwrap().clone();
+        let source = r#"
+benchmarks:
+  - name: scan_threads
+    fixture: basic_project
+    command: ["scan", "{fixture_path}", "--threads", "{threads}"]
+    matrix:
+      threads: [1, 2, 8]
+performance_gates:
+  - name: scaling
+    benchmark: scan_threads
+    metric: speedup
+    min: 2
+"#;
+        assert_eq!(
+            validate_stage_benchmarks_source(&pack, &stage, source),
+            Vec::<String>::new()
         );
     }
 }

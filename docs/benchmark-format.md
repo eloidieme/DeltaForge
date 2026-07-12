@@ -45,7 +45,7 @@ performance_gates:
     advice: ["excessive string allocation"]
 ```
 
-`runtime_median_ms`, `runtime_p95_ms`, `throughput_mb_s`, `peak_memory_mb`, and `speedup` are supported. Non-speedup matrix gates must select every matrix key exactly; non-matrix and speedup gates use empty `params`. A missing, failed, timed-out, ambiguous, or non-finite measurement is never a pass. `bench` evaluates new measurements only and records a complete stage result in state; `bench --save` also writes history. Saved history never satisfies a gate.
+`runtime_median_ms`, `runtime_p95_ms`, `throughput_mb_s`, `peak_memory_mb`, and `speedup` are supported. Non-speedup matrix gates must select every matrix key exactly; non-matrix and speedup gates use empty `params`. Speedup benchmarks use a `threads`-only matrix containing at least two distinct unsigned-integer values with no duplicates. A missing, failed, timed-out, ambiguous, or non-finite measurement is never a pass, and an incomplete stage run never reports an individual gate as passed. `bench` evaluates new measurements only and records a complete stage result in state; `bench --save` also writes history. Saved history never satisfies a gate.
 
 ## History file
 
