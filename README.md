@@ -30,6 +30,7 @@ deltaforge hint
 deltaforge status
 deltaforge next
 deltaforge bench --save
+deltaforge bench --compare
 deltaforge report --format markdown --output report.md
 deltaforge report --format json --output report.json
 deltaforge portfolio --output PORTFOLIO.md

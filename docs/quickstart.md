@@ -15,4 +15,4 @@ After a stage passes, run:
 deltaforge next
 ```
 
-Use `deltaforge hint` when stuck, `deltaforge bench --save` for local performance history, and `deltaforge report --format markdown --output report.md` for a progress report.
+Use `deltaforge hint` when stuck, `deltaforge bench --save` for local performance history, `deltaforge bench --compare` to compare a later run with that history, and `deltaforge report --format markdown --output report.md` for a progress report.

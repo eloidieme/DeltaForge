@@ -71,3 +71,11 @@ Each run carries one entry in `points` per measured configuration; benchmarks wi
 ## Peak memory
 
 `peak_memory_mb` is a best-effort, approximate peak resident set size of the benchmarked process, taken as the maximum across a point's measured iterations. It is sampled from the runner's 10 ms poll loop: Linux reads the kernel high-water mark (`VmHWM` in `/proc/<pid>/status`), macOS samples resident size via `proc_pid_rusage`, and Windows reads `PeakWorkingSetSize`. It is `null` on other platforms, when every sample fails, or when the process exits before the first sample lands — a failed sample never fails the benchmark. Treat it as indicative (sampling granularity, OS accounting differences), not as an exact measurement.
+
+## Comparing runs
+
+Run a benchmark once with `deltaforge bench --save`, then use `deltaforge bench --compare` on a later run. Each newly measured point is paired with the most recent prior saved point having the same project, language, stage, benchmark name, and exact `params` map. This point-level lookup remains truthful if a benchmark matrix gains or loses configurations between runs.
+
+The comparison reports changes in median runtime, throughput, and peak memory. Lower runtime and memory are improvements; higher throughput is an improvement. A missing measurement is reported as unavailable rather than inferred, and a point without a matching saved predecessor is reported explicitly. Differences in machine OS or architecture are called out because measurements from different machines may not be directly comparable.
+
+`--compare --save` is supported: comparison reads history before the new results are appended, so a run never compares against itself. In JSON mode, each record receives a `comparison` object on stdout. Comparison results and derived speedups are display-time data and are never written to the versioned history file.

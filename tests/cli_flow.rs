@@ -899,6 +899,17 @@ fn bench_matrix_prints_table_speedup_and_saves_per_point_history() {
     assert_eq!(points[1]["params"]["threads"], "2");
     assert!(history["runs"][0]["derived"].is_null());
 
+    let comparison = run_deltaforge_with_env(
+        ["bench", "--iterations", "1", "--warmup", "0", "--compare"],
+        &project,
+        &[("DELTAFORGE_PACKS_DIR", &packs)],
+    );
+    assert_success(&comparison);
+    assert_stdout_contains(&comparison, "Comparison with prior saved run:");
+    assert_stdout_contains(&comparison, "[threads=1] prior:");
+    assert_stdout_contains(&comparison, "[threads=2] prior:");
+    assert_stdout_contains(&comparison, "median:");
+
     let _ = fs::remove_dir_all(root);
 }
 
