@@ -1247,7 +1247,7 @@ fn timed_out_benchmark_reports_no_pass_and_preserves_prior_complete_record() {
         .unwrap()
         .replace(
             "fn main() -> ExitCode {",
-            "fn main() -> ExitCode {\n    std::thread::sleep(std::time::Duration::from_millis(50));",
+            "fn main() -> ExitCode {\n    std::thread::sleep(std::time::Duration::from_millis(500));",
         );
     fs::write(project.join("src/main.rs"), source).unwrap();
     assert_success(&run_deltaforge(
@@ -1275,7 +1275,7 @@ fn timed_out_benchmark_reports_no_pass_and_preserves_prior_complete_record() {
     let source = fs::read_to_string(&benchmarks).unwrap();
     fs::write(
         &benchmarks,
-        source.replace("timeout_ms: 5000", "timeout_ms: 1"),
+        source.replace("timeout_ms: 5000", "timeout_ms: 25"),
     )
     .unwrap();
     let sync = run_deltaforge(
