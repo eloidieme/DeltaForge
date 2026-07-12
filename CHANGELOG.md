@@ -8,6 +8,8 @@
 
 ## V2 working tree
 
+- Added fail-closed, digest-pinned performance gates for benchmarked stages, including authoring validation, MCP support, progression enforcement, status, JSON, and the `gates.enforce` escape hatch.
+
 - Hardened stage completion with full-run eligibility, pinned pack identity, and learner/pack integrity proofs.
 - Made pack scaffolding and installation transactional and tightened path/schema validation.
 - Added bounded concurrent process capture, process-tree timeouts, isolated benchmark fixtures, and truthful benchmark exit statuses.

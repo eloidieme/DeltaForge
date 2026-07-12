@@ -20,6 +20,8 @@ pub struct ProjectConfig {
     pub git: GitConfig,
     #[serde(default)]
     pub integrity: IntegrityConfig,
+    #[serde(default)]
+    pub gates: GatesConfig,
 }
 
 /// Learner-controlled additions to the integrity digest exclusion list.
@@ -62,6 +64,13 @@ pub struct GitConfig {
     pub auto_tag: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GatesConfig {
+    #[serde(default = "default_gates_enforce")]
+    pub enforce: bool,
+}
+
 impl Default for ProjectConfig {
     fn default() -> Self {
         Self {
@@ -70,6 +79,7 @@ impl Default for ProjectConfig {
             bench: BenchConfig::default(),
             git: GitConfig::default(),
             integrity: IntegrityConfig::default(),
+            gates: GatesConfig::default(),
         }
     }
 }
@@ -99,6 +109,12 @@ impl Default for GitConfig {
             auto_commit: false,
             auto_tag: default_auto_tag(),
         }
+    }
+}
+
+impl Default for GatesConfig {
+    fn default() -> Self {
+        Self { enforce: true }
     }
 }
 
@@ -188,6 +204,10 @@ fn default_bench_warmup() -> u64 {
 }
 
 fn default_auto_tag() -> bool {
+    true
+}
+
+fn default_gates_enforce() -> bool {
     true
 }
 

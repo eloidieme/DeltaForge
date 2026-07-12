@@ -76,25 +76,68 @@ pub struct PackSearchOptions {
     pub packs_dir: Option<PathBuf>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ValidationBenchmarks {
+pub struct StageBenchmarks {
     #[serde(default)]
-    benchmarks: Vec<ValidationBenchmark>,
+    pub benchmarks: Vec<BenchmarkSpec>,
+    #[serde(default)]
+    pub performance_gates: Vec<PerformanceGate>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ValidationBenchmark {
-    name: Option<String>,
-    fixture: Option<String>,
+pub struct BenchmarkSpec {
+    pub name: String,
+    pub fixture: String,
     #[serde(default)]
-    command: Vec<String>,
+    pub command: Vec<String>,
     #[serde(default)]
-    matrix: BTreeMap<String, Vec<serde_yaml::Value>>,
-    iterations: Option<u64>,
-    warmup: Option<u64>,
-    timeout_ms: Option<u64>,
+    pub matrix: BTreeMap<String, Vec<serde_yaml::Value>>,
+    pub iterations: Option<u64>,
+    pub warmup: Option<u64>,
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum PerformanceMetric {
+    RuntimeMedianMs,
+    RuntimeP95Ms,
+    ThroughputMbS,
+    PeakMemoryMb,
+    Speedup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerformanceGate {
+    pub name: String,
+    pub benchmark: String,
+    pub metric: PerformanceMetric,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    #[serde(default)]
+    pub params: BTreeMap<String, String>,
+    #[serde(default)]
+    pub advice: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "comparison", content = "value", rename_all = "snake_case")]
+pub enum GateBound {
+    Min(f64),
+    Max(f64),
+}
+
+impl PerformanceGate {
+    pub fn bound(&self) -> Option<GateBound> {
+        match (self.min, self.max) {
+            (Some(value), None) if value.is_finite() => Some(GateBound::Min(value)),
+            (None, Some(value)) if value.is_finite() => Some(GateBound::Max(value)),
+            _ => None,
+        }
+    }
 }
 
 /// Placeholders always available in benchmark command args, independent of the
@@ -226,16 +269,10 @@ impl LoadedPack {
     /// README) is deliberately excluded so doc-only pack updates do not
     /// invalidate completion proofs.
     ///
-    /// NOTE for performance gates: once gate definitions can block
-    /// progression, they become behaviorally relevant and must join this
-    /// digest — but hash a canonical serialization of the parsed,
-    /// progression-affecting semantics only (gate metric/bound/params, the
-    /// referenced benchmark's command/fixture/matrix, and `bench_run` for
-    /// gate-bearing stages), not the raw benchmarks.yaml bytes. Educational
-    /// `advice` text and measurement methodology (iterations, warmup,
-    /// timeout) must stay excluded so editing them behaves like a
-    /// documentation-only update. `bench_run` stays excluded until then
-    /// because benchmarks do not affect whether a stage passes today.
+    /// Tests and fixtures are hashed as raw bytes because those bytes are the
+    /// runner's semantics. Performance gates have an interpretation layer, so
+    /// their progression-affecting meaning is hashed as parsed canonical data;
+    /// display advice and measurement methodology intentionally stay outside.
     pub fn stage_behavioral_digest(
         &self,
         stage: &StageSpec,
@@ -270,8 +307,106 @@ impl LoadedPack {
             serde_json::to_vec(&language.run).context("failed to serialize run command")?,
         ));
 
+        let benchmarks_path = self.benchmarks_path(stage);
+        if benchmarks_path.is_file() {
+            let source = fs::read_to_string(&benchmarks_path).with_context(|| {
+                format!(
+                    "failed to read benchmarks file {}",
+                    benchmarks_path.display()
+                )
+            })?;
+            let parsed: StageBenchmarks = serde_yaml::from_str(&source).with_context(|| {
+                format!(
+                    "failed to parse benchmarks file {}",
+                    benchmarks_path.display()
+                )
+            })?;
+            if !parsed.performance_gates.is_empty() {
+                let canonical = canonical_stage_gates(&parsed, language)?;
+                entries.push((
+                    "performance:gates:v1".to_string(),
+                    serde_json::to_vec(&canonical)
+                        .context("failed to serialize performance gates")?,
+                ));
+            }
+        }
+
         Ok(digest_named_contents(entries))
     }
+}
+
+#[derive(Serialize)]
+struct CanonicalStageGates {
+    gates: Vec<CanonicalGate>,
+    bench_run: Option<CommandSpec>,
+}
+
+#[derive(Serialize)]
+struct CanonicalGate {
+    benchmark: String,
+    metric: PerformanceMetric,
+    bound: GateBound,
+    params: BTreeMap<String, String>,
+    execution: CanonicalBenchmarkExecution,
+}
+
+#[derive(Serialize)]
+struct CanonicalBenchmarkExecution {
+    command: Vec<String>,
+    fixture: String,
+    matrix: BTreeMap<String, Vec<String>>,
+}
+
+fn canonical_stage_gates(
+    parsed: &StageBenchmarks,
+    language: &LanguageSpec,
+) -> Result<CanonicalStageGates> {
+    let mut gates = Vec::new();
+    for gate in &parsed.performance_gates {
+        let benchmark = parsed
+            .benchmarks
+            .iter()
+            .find(|item| item.name == gate.benchmark)
+            .with_context(|| {
+                format!(
+                    "gate {} references missing benchmark {}",
+                    gate.name, gate.benchmark
+                )
+            })?;
+        let matrix = benchmark
+            .matrix
+            .iter()
+            .map(|(key, values)| {
+                let values = values
+                    .iter()
+                    .map(|value| {
+                        benchmark_scalar_to_string(value).with_context(|| {
+                            format!("benchmark {} has non-scalar matrix value", benchmark.name)
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok((key.clone(), values))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        gates.push(CanonicalGate {
+            benchmark: gate.benchmark.clone(),
+            metric: gate.metric,
+            bound: gate
+                .bound()
+                .with_context(|| format!("gate {} has invalid bound", gate.name))?,
+            params: gate.params.clone(),
+            execution: CanonicalBenchmarkExecution {
+                command: benchmark.command.clone(),
+                fixture: benchmark.fixture.clone(),
+                matrix,
+            },
+        });
+    }
+    gates.sort_by_key(|gate| serde_json::to_vec(gate).unwrap_or_default());
+    Ok(CanonicalStageGates {
+        gates,
+        bench_run: language.bench_run.clone(),
+    })
 }
 
 pub fn builtin_packs_dir() -> PathBuf {
@@ -906,7 +1041,7 @@ pub fn validate_stage_benchmarks_source(
     source: &str,
 ) -> Vec<String> {
     let mut problems = Vec::new();
-    let benchmarks: ValidationBenchmarks = match serde_yaml::from_str(source) {
+    let benchmarks: StageBenchmarks = match serde_yaml::from_str(source) {
         Ok(benchmarks) => benchmarks,
         Err(error) => {
             problems.push(format!(
@@ -921,10 +1056,17 @@ pub fn validate_stage_benchmarks_source(
         problems.push(format!("stage {} defines no benchmarks", stage.id));
     }
 
-    for benchmark in benchmarks.benchmarks {
-        let name = benchmark.name.unwrap_or_else(|| "<unnamed>".to_string());
+    let mut names = BTreeSet::new();
+    for benchmark in &benchmarks.benchmarks {
+        let name = benchmark.name.clone();
         if name.trim().is_empty() {
             problems.push(format!("stage {} benchmark name is empty", stage.id));
+        }
+        if !names.insert(name.clone()) {
+            problems.push(format!(
+                "stage {} benchmark name is duplicated: {name}",
+                stage.id
+            ));
         }
         if benchmark.command.is_empty() {
             problems.push(format!(
@@ -961,30 +1103,121 @@ pub fn validate_stage_benchmarks_source(
                 }
             }
         }
-        if let Some(fixture) = benchmark.fixture {
-            if !is_safe_relative_path(Path::new(&fixture)) {
+        if !is_safe_relative_path(Path::new(&benchmark.fixture)) {
+            problems.push(format!(
+                "stage {} benchmark {} fixture path is unsafe: {}",
+                stage.id, name, benchmark.fixture
+            ));
+            continue;
+        }
+        let fixture_path = pack.fixture_path(stage, &benchmark.fixture);
+        if !fixture_path.is_dir() {
+            problems.push(format!(
+                "stage {} benchmark {} references missing fixture {}",
+                stage.id,
+                name,
+                fixture_path.display()
+            ));
+        }
+    }
+    let mut gate_names = BTreeSet::new();
+    for gate in &benchmarks.performance_gates {
+        if gate.name.trim().is_empty() {
+            problems.push(format!("stage {} performance gate name is empty", stage.id));
+        }
+        if !gate_names.insert(gate.name.clone()) {
+            problems.push(format!(
+                "stage {} performance gate name is duplicated: {}",
+                stage.id, gate.name
+            ));
+        }
+        let matching = benchmarks
+            .benchmarks
+            .iter()
+            .filter(|benchmark| benchmark.name == gate.benchmark)
+            .collect::<Vec<_>>();
+        let [benchmark] = matching.as_slice() else {
+            problems.push(format!(
+                "stage {} gate {} references missing or ambiguous benchmark {}",
+                stage.id, gate.name, gate.benchmark
+            ));
+            continue;
+        };
+        if gate.bound().is_none() {
+            problems.push(format!(
+                "stage {} gate {} must define exactly one finite min or max bound",
+                stage.id, gate.name
+            ));
+        }
+        if gate.metric == PerformanceMetric::Speedup {
+            if !gate.params.is_empty() {
                 problems.push(format!(
-                    "stage {} benchmark {} fixture path is unsafe: {}",
-                    stage.id, name, fixture
+                    "stage {} gate {} speedup gates require empty params",
+                    stage.id, gate.name
+                ));
+            }
+            let Some(values) = benchmark.matrix.get("threads") else {
+                problems.push(format!(
+                    "stage {} gate {} speedup benchmark requires a threads matrix",
+                    stage.id, gate.name
                 ));
                 continue;
-            }
-            let fixture_path = pack.fixture_path(stage, &fixture);
-            if !fixture_path.is_dir() {
+            };
+            if benchmark.matrix.len() != 1 || values.len() < 2 {
                 problems.push(format!(
-                    "stage {} benchmark {} references missing fixture {}",
-                    stage.id,
-                    name,
-                    fixture_path.display()
+                    "stage {} gate {} speedup benchmark requires at least two threads-only values",
+                    stage.id, gate.name
+                ));
+            } else {
+                let numeric = values
+                    .iter()
+                    .filter_map(benchmark_scalar_to_string)
+                    .filter_map(|value| value.parse::<u64>().ok())
+                    .collect::<BTreeSet<_>>();
+                if numeric.len() < 2 {
+                    problems.push(format!(
+                        "stage {} gate {} speedup threads must contain two distinct numeric values",
+                        stage.id, gate.name
+                    ));
+                }
+            }
+        } else if benchmark.matrix.is_empty() {
+            if !gate.params.is_empty() {
+                problems.push(format!(
+                    "stage {} gate {} params are only allowed for matrix benchmarks",
+                    stage.id, gate.name
                 ));
             }
         } else {
-            problems.push(format!(
-                "stage {} benchmark {} fixture is missing",
-                stage.id, name
-            ));
+            if gate.params.len() != benchmark.matrix.len()
+                || !benchmark
+                    .matrix
+                    .keys()
+                    .all(|key| gate.params.contains_key(key))
+            {
+                problems.push(format!(
+                    "stage {} gate {} params must select every matrix key exactly once",
+                    stage.id, gate.name
+                ));
+            }
+            for (key, value) in &gate.params {
+                match benchmark.matrix.get(key) {
+                    Some(values)
+                        if values
+                            .iter()
+                            .filter_map(benchmark_scalar_to_string)
+                            .any(|candidate| candidate == *value) => {}
+                    Some(_) => problems.push(format!(
+                        "stage {} gate {} params.{key} is not a matrix value",
+                        stage.id, gate.name
+                    )),
+                    None => problems.push(format!(
+                        "stage {} gate {} params contains unknown matrix key {key}",
+                        stage.id, gate.name
+                    )),
+                }
+            }
         }
-        let _ = benchmark.warmup;
     }
     problems
 }

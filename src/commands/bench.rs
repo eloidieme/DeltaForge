@@ -12,29 +12,12 @@ use time::format_description::well_known::Rfc3339;
 use crate::cli::BenchArgs;
 use crate::context::{GlobalOptions, ProjectContext};
 use crate::fs_util::atomic_write;
-use crate::pack::{CommandSpec, StageSpec, benchmark_matrix_problems, benchmark_scalar_to_string};
+use crate::pack::{
+    BenchmarkSpec, CommandSpec, GateBound, PerformanceGate, PerformanceMetric, StageBenchmarks,
+    StageSpec, benchmark_matrix_problems, benchmark_scalar_to_string,
+};
 use crate::process;
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BenchmarksFile {
-    #[serde(default)]
-    benchmarks: Vec<BenchmarkSpec>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BenchmarkSpec {
-    name: String,
-    fixture: String,
-    #[serde(default)]
-    command: Vec<String>,
-    #[serde(default)]
-    matrix: BTreeMap<String, Vec<serde_yaml::Value>>,
-    iterations: Option<u64>,
-    warmup: Option<u64>,
-    timeout_ms: Option<u64>,
-}
+use crate::state::{GateRecord, RecordedGateResult};
 
 pub const HISTORY_SCHEMA_VERSION: u64 = 2;
 
@@ -156,7 +139,12 @@ pub fn thread_speedup(points: &[BenchmarkPoint]) -> Option<ThreadSpeedup> {
     };
     let min_median = min_point.runtime_median_ms?;
     let max_median = max_point.runtime_median_ms?;
-    if max_median <= 0.0 {
+    if !min_point.success
+        || !max_point.success
+        || !min_median.is_finite()
+        || !max_median.is_finite()
+        || max_median <= 0.0
+    {
         return None;
     }
     Some(ThreadSpeedup {
@@ -230,7 +218,7 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
     if args.iterations == Some(0) {
         bail!("benchmark iterations must be greater than 0");
     }
-    let context = ProjectContext::load(options)?;
+    let mut context = ProjectContext::load(options)?;
     let stages = if args.all {
         context.pack.manifest.stages.clone()
     } else {
@@ -253,6 +241,11 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
         records.extend(run_stage_benchmarks(&context, stage, &args)?);
     }
 
+    let evaluations = stages
+        .iter()
+        .map(|stage| evaluate_stage_gates(&context, stage, &records))
+        .collect::<Result<Vec<_>>>()?;
+
     // Read before appending so a saved run is always compared with a genuinely
     // prior result, never with itself.
     let comparisons = if args.compare {
@@ -266,10 +259,33 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
         append_history(&context, &records)?;
     }
 
+    // A complete measurement is useful whether or not history is requested.
+    // State is updated once, after history, so a write failure can never forge
+    // a progression proof without the optional history entry.
+    let mut changed_gate_state = false;
+    for evaluation in &evaluations {
+        if let Some(record) = evaluation.record(&context)? {
+            context
+                .state
+                .gate_results
+                .insert(evaluation.stage.clone(), record);
+            changed_gate_state = true;
+        }
+    }
+    if changed_gate_state {
+        context.state.touch()?;
+        context.save_state()?;
+    }
+
     if args.json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&records_json(&records, comparisons.as_deref())?)?
+            serde_json::to_string_pretty(&records_json_with_gates(
+                &context,
+                &records,
+                comparisons.as_deref(),
+                &evaluations
+            )?)?
         );
     } else if records.is_empty() {
         println!("No benchmarks defined for selected stage(s).");
@@ -279,6 +295,11 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
             print!("{}", render_benchmark_human(record));
             if let Some(comparisons) = &comparisons {
                 print!("{}", render_comparison_human(&comparisons[index]));
+            }
+        }
+        for evaluation in &evaluations {
+            if !evaluation.gates.is_empty() {
+                print!("{}", render_gate_human(&context, evaluation));
             }
         }
         if args.save {
@@ -298,6 +319,218 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct EvaluatedGate {
+    name: String,
+    benchmark: String,
+    metric: PerformanceMetric,
+    params: BTreeMap<String, String>,
+    bound: GateBound,
+    measured: Option<f64>,
+    passed: bool,
+    #[serde(skip_serializing)]
+    advice: Vec<String>,
+}
+
+struct StageGateEvaluation {
+    stage: String,
+    gates: Vec<EvaluatedGate>,
+    complete: bool,
+}
+
+impl StageGateEvaluation {
+    fn performance_label(&self) -> &'static str {
+        if !self.complete || self.gates.iter().any(|gate| gate.measured.is_none()) {
+            "not_measured"
+        } else if self.gates.iter().all(|gate| gate.passed) {
+            "passed"
+        } else {
+            "not_yet"
+        }
+    }
+
+    fn gates_for_benchmark(&self, benchmark: &str) -> Vec<&EvaluatedGate> {
+        self.gates
+            .iter()
+            .filter(|gate| gate.benchmark == benchmark)
+            .collect()
+    }
+
+    fn record(&self, context: &ProjectContext) -> Result<Option<GateRecord>> {
+        if self.gates.is_empty()
+            || !self.complete
+            || self.gates.iter().any(|gate| gate.measured.is_none())
+        {
+            return Ok(None);
+        }
+        let results = self
+            .gates
+            .iter()
+            .map(|gate| RecordedGateResult {
+                name: gate.name.clone(),
+                benchmark: gate.benchmark.clone(),
+                metric: gate.metric,
+                params: gate.params.clone(),
+                bound: gate.bound.clone(),
+                measured: gate.measured.expect("checked"),
+                passed: gate.passed,
+            })
+            .collect();
+        Ok(Some(GateRecord {
+            timestamp: current_timestamp()?,
+            project_digest: context.project_digest()?,
+            behavioral_digest: context.stage_behavioral_digest(&self.stage)?,
+            results,
+        }))
+    }
+}
+
+fn evaluate_stage_gates(
+    context: &ProjectContext,
+    stage: &StageSpec,
+    records: &[BenchmarkRecord],
+) -> Result<StageGateEvaluation> {
+    let source = context.pack.benchmarks_path(stage);
+    if !source.is_file() {
+        return Ok(StageGateEvaluation {
+            stage: stage.id.clone(),
+            gates: Vec::new(),
+            complete: false,
+        });
+    }
+    let parsed: StageBenchmarks = serde_yaml::from_str(&fs::read_to_string(&source)?)
+        .with_context(|| format!("failed to parse benchmarks file {}", source.display()))?;
+    let stage_records: Vec<&BenchmarkRecord> = records
+        .iter()
+        .filter(|record| record.stage == stage.id)
+        .collect();
+    let complete = stage_records.len() == parsed.benchmarks.len()
+        && stage_records
+            .iter()
+            .all(|record| record.points.iter().all(|point| point.success));
+    let gates: Vec<EvaluatedGate> = parsed
+        .performance_gates
+        .iter()
+        .filter_map(|gate| evaluate_gate(stage, gate, &stage_records))
+        .collect();
+    let every_gate_evaluated = gates.len() == parsed.performance_gates.len();
+    Ok(StageGateEvaluation {
+        stage: stage.id.clone(),
+        gates,
+        complete: complete && every_gate_evaluated,
+    })
+}
+
+fn evaluate_gate(
+    stage: &StageSpec,
+    gate: &PerformanceGate,
+    records: &[&BenchmarkRecord],
+) -> Option<EvaluatedGate> {
+    let bound = gate.bound()?;
+    let matching: Vec<_> = records
+        .iter()
+        .copied()
+        .filter(|record| record.stage == stage.id && record.benchmark == gate.benchmark)
+        .collect();
+    let measured = if matching.len() == 1 {
+        let record = matching[0];
+        if gate.metric == PerformanceMetric::Speedup {
+            if gate.params.is_empty() {
+                thread_speedup(&record.points)
+                    .map(|speedup| speedup.value)
+                    .filter(|value| value.is_finite())
+            } else {
+                None
+            }
+        } else {
+            let points: Vec<_> = record
+                .points
+                .iter()
+                .filter(|point| point.params == gate.params)
+                .collect();
+            if let [point] = points.as_slice() {
+                if point.success {
+                    let value = match gate.metric {
+                        PerformanceMetric::RuntimeMedianMs => point.runtime_median_ms,
+                        PerformanceMetric::RuntimeP95Ms => point.runtime_p95_ms,
+                        PerformanceMetric::ThroughputMbS => point.throughput_mb_s,
+                        PerformanceMetric::PeakMemoryMb => point.peak_memory_mb,
+                        PerformanceMetric::Speedup => None,
+                    };
+                    value.filter(|value| value.is_finite())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let passed = measured.is_some_and(|value| match bound {
+        GateBound::Min(min) => value >= min,
+        GateBound::Max(max) => value <= max,
+    });
+    Some(EvaluatedGate {
+        name: gate.name.clone(),
+        benchmark: gate.benchmark.clone(),
+        metric: gate.metric,
+        params: gate.params.clone(),
+        bound,
+        measured,
+        passed,
+        advice: gate.advice.clone(),
+    })
+}
+
+fn render_gate_human(context: &ProjectContext, evaluation: &StageGateEvaluation) -> String {
+    let correctness = if context.verify_completion_proof(&evaluation.stage).is_ok() {
+        "passed"
+    } else {
+        "not yet"
+    };
+    let mut out = format!(
+        "Correctness: {correctness}\nPerformance: {}\n",
+        evaluation.performance_label().replace('_', " ")
+    );
+    for gate in &evaluation.gates {
+        out.push_str(&format!(
+            "\nGate: {}\n  required: {} {} {}\n",
+            gate.name,
+            metric_name(gate.metric),
+            match gate.bound {
+                GateBound::Min(_) => ">=",
+                GateBound::Max(_) => "<=",
+            },
+            match gate.bound {
+                GateBound::Min(value) | GateBound::Max(value) => value,
+            }
+        ));
+        match gate.measured {
+            Some(value) => out.push_str(&format!("  measured: {value}\n")),
+            None => out.push_str("  measured: not available\n"),
+        }
+        if !gate.passed && !gate.advice.is_empty() {
+            out.push_str("\nLikely areas to investigate:\n");
+            for advice in &gate.advice {
+                out.push_str(&format!("- {advice}\n"));
+            }
+        }
+    }
+    out
+}
+
+fn metric_name(metric: PerformanceMetric) -> &'static str {
+    match metric {
+        PerformanceMetric::RuntimeMedianMs => "runtime_median_ms",
+        PerformanceMetric::RuntimeP95Ms => "runtime_p95_ms",
+        PerformanceMetric::ThroughputMbS => "throughput_mb_s",
+        PerformanceMetric::PeakMemoryMb => "peak_memory_mb",
+        PerformanceMetric::Speedup => "speedup",
+    }
+}
+
 /// JSON output for `bench --json`: the records, each augmented with a
 /// `derived` object (e.g. `{"speedup_1_to_8": 3.4}`) when a speedup applies.
 /// Derived metrics are attached only here, never written to history.
@@ -313,6 +546,37 @@ fn records_json(
             }
             if let Some(comparisons) = comparisons {
                 item["comparison"] = serde_json::to_value(&comparisons[index])?;
+            }
+        }
+    }
+    Ok(value)
+}
+
+fn records_json_with_gates(
+    context: &ProjectContext,
+    records: &[BenchmarkRecord],
+    comparisons: Option<&[BenchmarkComparison]>,
+    evaluations: &[StageGateEvaluation],
+) -> Result<serde_json::Value> {
+    let mut value = records_json(records, comparisons)?;
+    if let serde_json::Value::Array(items) = &mut value {
+        for (item, record) in items.iter_mut().zip(records) {
+            if let Some(evaluation) = evaluations
+                .iter()
+                .find(|evaluation| evaluation.stage == record.stage && !evaluation.gates.is_empty())
+            {
+                item["gate_results"] =
+                    serde_json::to_value(evaluation.gates_for_benchmark(&record.benchmark))?;
+                item["correctness"] = serde_json::Value::String(
+                    if context.verify_completion_proof(&record.stage).is_ok() {
+                        "passed"
+                    } else {
+                        "not_yet"
+                    }
+                    .to_string(),
+                );
+                item["performance"] =
+                    serde_json::Value::String(evaluation.performance_label().to_string());
             }
         }
     }
@@ -621,7 +885,7 @@ fn run_stage_benchmarks(
 
     let source = fs::read_to_string(&path)
         .with_context(|| format!("failed to read benchmarks file {}", path.display()))?;
-    let parsed: BenchmarksFile = serde_yaml::from_str(&source)
+    let parsed: StageBenchmarks = serde_yaml::from_str(&source)
         .with_context(|| format!("failed to parse benchmarks file {}", path.display()))?;
 
     let language = context
@@ -718,6 +982,13 @@ fn run_one_benchmark(
     let matrix = normalize_matrix(&benchmark)?;
 
     let temp_dir = create_temp_dir(stage, &benchmark.name)?;
+    if !crate::integrity::is_safe_relative_path(Path::new(&benchmark.fixture)) {
+        bail!(
+            "benchmark {} fixture path is unsafe: {}",
+            benchmark.name,
+            benchmark.fixture
+        );
+    }
     let source_fixture = context.pack.fixture_path(stage, &benchmark.fixture);
     let fixture_path = temp_dir.join("fixture");
     copy_dir_recursive(&source_fixture, &fixture_path)?;

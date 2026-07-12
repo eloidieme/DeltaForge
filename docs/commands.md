@@ -11,10 +11,10 @@
 - `instructions`: show current stage instructions.
 - `test`: run black-box stage tests.
 - `explain-failure`: summarize the last failed test run and suggest next steps.
-- `next`: unlock the next stage after tests pass.
+- `next`: unlock the next stage after tests pass. Gate-bearing stages also require a current passing performance record from `deltaforge bench`, unless `[gates] enforce = false`; the latter prints `performance gates skipped: gates.enforce = false` without claiming a pass.
 - `sync-pack`: adopt the currently discovered pack after a pack upgrade. Updates only the project-level pin (version, source, digest); completion proofs keep the digests of what actually passed. Reports each completed stage as valid or needing revalidation. Supports `--json`.
 - `hint`: reveal progressive hints. `--level N` never lowers previously recorded progress.
-- `status`: show stage progress. Completed stages whose tests, fixtures, or commands changed since they passed are marked `!` (needs revalidation). Supports `--json` (project, language, current stage, and per-stage status on stdout only).
+- `status`: show stage progress. Completed stages whose tests, fixtures, or commands changed since they passed are marked `!` (needs revalidation). Gate-bearing stages include performance `passed`, `not yet`, or `not measured`. Supports `--json` (project, language, current stage, and per-stage status on stdout only).
 - `config show|validate`: inspect project config.
 - `bench`: run pack benchmarks. Timing uses the pack's `bench_run` command (falling back to `run`). Human output is an aligned table per benchmark, one row per matrix point, e.g.:
 

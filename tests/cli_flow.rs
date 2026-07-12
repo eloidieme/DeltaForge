@@ -914,6 +914,94 @@ fn bench_matrix_prints_table_speedup_and_saves_per_point_history() {
 }
 
 #[test]
+fn performance_gate_requires_current_complete_benchmark_and_stales_with_code() {
+    let (root, packs, project) = init_project_from_pack_copy("performance-gate");
+    let benchmarks = packs.join("flashindex/stages/01_scan_files/benchmarks.yaml");
+    let mut source = fs::read_to_string(&benchmarks).unwrap();
+    source.push_str(
+        r#"
+performance_gates:
+  - name: quick scan
+    benchmark: scan_basic_project
+    metric: runtime_median_ms
+    max: 1000000000
+    advice: ["avoid needless work"]
+"#,
+    );
+    fs::write(&benchmarks, source).unwrap();
+
+    // Re-pin the changed external pack, then prove correctness under its new
+    // behavioral digest. The gate has no historical fallback.
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    ));
+    assert_success(&run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "test"],
+        &project,
+    ));
+    let blocked = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
+    assert_failure(&blocked);
+    assert_stderr_contains(&blocked, "Run: deltaforge bench");
+
+    let bench = run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "bench",
+            "--iterations",
+            "1",
+            "--warmup",
+            "0",
+            "--json",
+        ],
+        &project,
+    );
+    assert_success(&bench);
+    let json: serde_json::Value = serde_json::from_slice(&bench.stdout).unwrap();
+    assert_eq!(json[0]["performance"], "passed");
+    assert!(json[0]["gate_results"][0]["passed"].as_bool().unwrap());
+
+    let next = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
+    assert_success(&next);
+    fs::write(project.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let status = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "status", "--json"],
+        &project,
+    );
+    assert_success(&status);
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["stages"][0]["performance"], "not_measured");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn validate_pack_rejects_missing_performance_gate_benchmark() {
+    let root = temp_project_path("invalid-performance-gate");
+    let packs = root.join("packs");
+    let pack = packs.join("flashindex");
+    copy_dir_recursive(&repo_root().join("packs/flashindex"), &pack);
+    let path = pack.join("stages/01_scan_files/benchmarks.yaml");
+    let mut source = fs::read_to_string(&path).unwrap();
+    source.push_str(
+        "\nperformance_gates:\n  - name: missing\n    benchmark: absent\n    metric: throughput_mb_s\n    min: 1\n",
+    );
+    fs::write(path, source).unwrap();
+    let result = run_deltaforge(
+        [
+            "--packs-dir",
+            packs.to_str().unwrap(),
+            "validate-pack",
+            "--strict",
+        ],
+        &repo_root(),
+    );
+    assert_failure(&result);
+    assert_stdout_contains(&result, "references missing or ambiguous benchmark absent");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn legacy_benchmark_history_is_converted_on_save() {
     let project_dir = temp_project_path("bench-legacy-history");
     let init = run_deltaforge(

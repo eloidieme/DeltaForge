@@ -31,6 +31,22 @@ benchmarks:
 
 The cartesian product of all parameters is measured — each point independently, with its own warmup, iterations, and fixture reset. `{name}` placeholders in command args are expanded per point, alongside the built-in `{fixture_path}` and `{temp_dir}`. Parameter names must be identifiers (`[A-Za-z_][A-Za-z0-9_]*`) and must not shadow the built-ins; `validate-pack` also rejects command placeholders that reference undeclared parameters. Benchmarks without a `matrix` behave exactly as before and produce a single point.
 
+## Performance gates
+
+Stages may declare progression requirements. A gate selects one exact current matrix point (or the derived `speedup` for a threads-only matrix) and has exactly one finite bound.
+
+```yaml
+performance_gates:
+  - name: tokenizer throughput
+    benchmark: scan_parallel
+    metric: throughput_mb_s
+    min: 150
+    params: { threads: "8" }
+    advice: ["excessive string allocation"]
+```
+
+`runtime_median_ms`, `runtime_p95_ms`, `throughput_mb_s`, `peak_memory_mb`, and `speedup` are supported. Non-speedup matrix gates must select every matrix key exactly; non-matrix and speedup gates use empty `params`. A missing, failed, timed-out, ambiguous, or non-finite measurement is never a pass. `bench` evaluates new measurements only and records a complete stage result in state; `bench --save` also writes history. Saved history never satisfies a gate.
+
 ## History file
 
 `.deltaforge/benchmark_history.json` is versioned:

@@ -17,6 +17,7 @@ pub fn run(args: StatusArgs, options: &GlobalOptions) -> Result<()> {
                 id: stage.id.clone(),
                 title: stage.title.clone(),
                 status: stage_status(&context, &stage.id)?,
+                performance: context.gate_status(&stage.id)?.map(|status| status.label()),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -49,7 +50,11 @@ pub fn run(args: StatusArgs, options: &GlobalOptions) -> Result<()> {
             "current" => "→",
             _ => "○",
         };
-        println!("  {marker} {} - {}", stage.id, stage.title);
+        let performance = stage
+            .performance
+            .map(|value| format!(" - performance: {}", value.replace('_', " ")))
+            .unwrap_or_default();
+        println!("  {marker} {} - {}{performance}", stage.id, stage.title);
     }
     if any_stale {
         println!();
@@ -87,4 +92,5 @@ struct StatusStage {
     id: String,
     title: String,
     status: &'static str,
+    performance: Option<&'static str>,
 }

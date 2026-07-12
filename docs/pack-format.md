@@ -36,7 +36,7 @@ A pack's `ignored_paths` are excluded (in addition to a built-in list: `.git`, `
 
 Pack content must be self-contained: `validate-pack` reports every symbolic link or special file in a pack (base validation, not just `--strict`), and pack digesting rejects them at init/sync time. A symlinked `tests.yaml` or fixture would let pack behavior change while the recorded digest stayed the same, defeating pinning.
 
-Stage completion proofs pin a per-stage behavioral digest covering the stage's `tests.yaml`, its `fixtures/` tree, and the language `build`/`run` commands. Editing documentation (instructions, hints, README, design prompts) never invalidates completed stages; editing tests, fixtures, or commands invalidates only the stages it affects.
+Stage completion proofs pin a per-stage behavioral digest covering the stage's `tests.yaml`, its `fixtures/` tree, and the language `build`/`run` commands. Gate-bearing stages additionally hash canonical parsed gate semantics: the referenced benchmark execution definition, metric/bound/selector, and `bench_run`. Tests and fixture contents are hashed as raw bytes because they are runner semantics; gates are parsed and canonicalized because YAML formatting, comments, mapping order, advice, and measurement methodology do not change progression semantics. Editing documentation (instructions, hints, README, design prompts) never invalidates completed stages; editing tests, fixtures, commands, or a gate requirement invalidates only the stages it affects.
 
 Bundled packs currently include:
 

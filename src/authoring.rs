@@ -95,6 +95,7 @@ pub struct ReplaceStageBenchmarksRequest {
     pub packs_dir: PathBuf,
     pub stage: String,
     pub benchmarks: Value,
+    pub performance_gates: Option<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -452,7 +453,8 @@ pub fn replace_stage_benchmarks(
 ) -> Result<AuthoringReport> {
     let pack = load_explicit_authoring_pack(&request.project, &request.packs_dir)?;
     let stage = require_stage(&pack, &request.stage)?;
-    let source = structured_yaml("benchmarks", &request.benchmarks)?;
+    let source =
+        structured_benchmarks_yaml(&request.benchmarks, request.performance_gates.as_ref())?;
     validate_authored_content("benchmarks YAML", &source, false)?;
     let problems = validate_stage_benchmarks_source(&pack, stage, &source);
     if !problems.is_empty() {
@@ -468,6 +470,19 @@ pub fn replace_stage_benchmarks(
         path,
         vec!["Run the benchmark in a copied learner project before publishing.".to_string()],
     ))
+}
+
+fn structured_benchmarks_yaml(
+    benchmarks: &Value,
+    performance_gates: Option<&Value>,
+) -> Result<String> {
+    let mut object = serde_json::Map::new();
+    object.insert("benchmarks".to_string(), benchmarks.clone());
+    if let Some(gates) = performance_gates {
+        object.insert("performance_gates".to_string(), gates.clone());
+    }
+    serde_yaml::to_string(&Value::Object(object))
+        .context("failed to serialize structured benchmarks YAML")
 }
 
 pub fn diagnose_pack(pack: &LoadedPack) -> AuthoringReport {

@@ -5,7 +5,9 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::ProjectConfig;
 use crate::integrity::{digest_pack_tree, digest_project_tree};
-use crate::pack::{LoadedPack, PackSearchOptions, is_bundled_source, load_pack, pack_source_label};
+use crate::pack::{
+    LoadedPack, PackSearchOptions, PerformanceGate, is_bundled_source, load_pack, pack_source_label,
+};
 use crate::state::ProjectState;
 
 #[derive(Debug, Clone, Default)]
@@ -22,6 +24,23 @@ pub struct ProjectContext {
     pub state: ProjectState,
     pub config: ProjectConfig,
     pub pack: LoadedPack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateStatus {
+    Passed,
+    NotYet,
+    NotMeasured,
+}
+
+impl GateStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::NotYet => "not_yet",
+            Self::NotMeasured => "not_measured",
+        }
+    }
 }
 
 impl ProjectContext {
@@ -161,6 +180,80 @@ impl ProjectContext {
         }
         Ok(())
     }
+
+    pub fn stage_gates(&self, stage_id: &str) -> Result<Vec<PerformanceGate>> {
+        let stage = self
+            .pack
+            .manifest
+            .stage(stage_id)
+            .with_context(|| format!("pack does not contain stage {stage_id}"))?;
+        let path = self.pack.benchmarks_path(stage);
+        if !path.is_file() {
+            return Ok(Vec::new());
+        }
+        let source = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read benchmarks file {}", path.display()))?;
+        let parsed: crate::pack::StageBenchmarks = serde_yaml::from_str(&source)
+            .with_context(|| format!("failed to parse benchmarks file {}", path.display()))?;
+        Ok(parsed.performance_gates)
+    }
+
+    pub fn gate_status(&self, stage_id: &str) -> Result<Option<GateStatus>> {
+        let gates = self.stage_gates(stage_id)?;
+        if gates.is_empty() {
+            return Ok(None);
+        }
+        let Some(record) = self.state.gate_results.get(stage_id) else {
+            return Ok(Some(GateStatus::NotMeasured));
+        };
+        if record.behavioral_digest.is_empty()
+            || record.project_digest != self.project_digest()?
+            || record.behavioral_digest != self.stage_behavioral_digest(stage_id)?
+            || !gate_record_matches(record, &gates)
+        {
+            return Ok(Some(GateStatus::NotMeasured));
+        }
+        Ok(Some(if record.results.iter().all(|result| result.passed) {
+            GateStatus::Passed
+        } else {
+            GateStatus::NotYet
+        }))
+    }
+
+    pub fn verify_gate_record(&self, stage_id: &str) -> Result<()> {
+        match self.gate_status(stage_id)? {
+            Some(GateStatus::Passed) => Ok(()),
+            Some(GateStatus::NotYet) => bail!(
+                "performance gates are not passing for stage {stage_id}\nRun: deltaforge bench"
+            ),
+            Some(GateStatus::NotMeasured) => bail!(
+                "performance gates have not been measured for stage {stage_id}\nRun: deltaforge bench"
+            ),
+            None => Ok(()),
+        }
+    }
+}
+
+fn gate_record_matches(record: &crate::state::GateRecord, gates: &[PerformanceGate]) -> bool {
+    record.results.len() == gates.len()
+        && gates.iter().all(|gate| {
+            let Some(bound) = gate.bound() else {
+                return false;
+            };
+            record
+                .results
+                .iter()
+                .filter(|result| {
+                    result.name == gate.name
+                        && result.benchmark == gate.benchmark
+                        && result.metric == gate.metric
+                        && result.params == gate.params
+                        && result.bound == bound
+                        && result.measured.is_finite()
+                })
+                .count()
+                == 1
+        })
 }
 
 fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {

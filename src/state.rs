@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::fs_util::atomic_write;
+use crate::pack::{GateBound, PerformanceMetric};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,9 +33,34 @@ pub struct ProjectState {
     pub last_test_runs: BTreeMap<String, LastTestRunSummary>,
     #[serde(default)]
     pub hint_state: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub gate_results: BTreeMap<String, GateRecord>,
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GateRecord {
+    pub timestamp: String,
+    pub project_digest: String,
+    #[serde(default)]
+    pub behavioral_digest: String,
+    pub results: Vec<RecordedGateResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordedGateResult {
+    pub name: String,
+    pub benchmark: String,
+    pub metric: PerformanceMetric,
+    #[serde(default)]
+    pub params: BTreeMap<String, String>,
+    pub bound: GateBound,
+    pub measured: f64,
+    pub passed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +111,7 @@ impl ProjectState {
             completion_proofs: BTreeMap::new(),
             last_test_runs: BTreeMap::new(),
             hint_state: BTreeMap::new(),
+            gate_results: BTreeMap::new(),
             created_at: now.clone(),
             updated_at: now,
         })

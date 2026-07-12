@@ -249,12 +249,22 @@ fn call_tool(request: &Value) -> Result<Value> {
             Ok(serde_json::to_value(report)?)
         }
         "replace_stage_benchmarks" => {
-            ensure_only_arguments(&arguments, &["project", "packs_dir", "stage", "benchmarks"])?;
+            ensure_only_arguments(
+                &arguments,
+                &[
+                    "project",
+                    "packs_dir",
+                    "stage",
+                    "benchmarks",
+                    "performance_gates",
+                ],
+            )?;
             let report = replace_stage_benchmarks(&ReplaceStageBenchmarksRequest {
                 project: required_string(&arguments, "project")?,
                 packs_dir: required_path(&arguments, "packs_dir")?,
                 stage: required_string(&arguments, "stage")?,
                 benchmarks: required_array_value(&arguments, "benchmarks")?,
+                performance_gates: optional_array_value(&arguments, "performance_gates")?,
             })?;
             Ok(serde_json::to_value(report)?)
         }
@@ -454,6 +464,10 @@ fn tools() -> Value {
                         "type": "array",
                         "minItems": 1,
                         "items": benchmark_definition_schema()
+                    },
+                    "performance_gates": {
+                        "type": "array",
+                        "items": performance_gate_schema()
                     }
                 }),
                 &["stage", "benchmarks"]
@@ -632,6 +646,27 @@ fn benchmark_definition_schema() -> Value {
     })
 }
 
+fn performance_gate_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "benchmark", "metric"],
+        "oneOf": [
+            {"required": ["min"], "not": {"required": ["max"]}},
+            {"required": ["max"], "not": {"required": ["min"]}}
+        ],
+        "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "benchmark": {"type": "string", "minLength": 1},
+            "metric": {"enum": ["runtime_median_ms", "runtime_p95_ms", "throughput_mb_s", "peak_memory_mb", "speedup"]},
+            "min": {"type": "number"},
+            "max": {"type": "number"},
+            "params": {"type": "object", "additionalProperties": {"type": "string"}},
+            "advice": {"type": "array", "items": {"type": "string"}}
+        }
+    })
+}
+
 fn string_array_schema() -> Value {
     json!({"type": "array", "items": {"type": "string"}})
 }
@@ -706,6 +741,14 @@ fn optional_string_array(arguments: &Value, key: &str) -> Result<Option<Vec<Stri
         })
         .collect::<Result<Vec<_>>>()
         .map(Some)
+}
+
+fn optional_array_value(arguments: &Value, key: &str) -> Result<Option<Value>> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) if value.is_array() => Ok(Some(value.clone())),
+        Some(_) => bail!("optional argument {key} must be an array"),
+    }
 }
 
 fn required_array_value(arguments: &Value, key: &str) -> Result<Value> {

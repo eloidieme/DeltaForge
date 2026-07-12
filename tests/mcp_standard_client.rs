@@ -224,6 +224,12 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
                     "iterations": 2,
                     "warmup": 1,
                     "timeout_ms": 1000
+                }],
+                "performance_gates": [{
+                    "name": "echo throughput",
+                    "benchmark": "echo_fixture",
+                    "metric": "throughput_mb_s",
+                    "min": 0
                 }]
             }),
         ))
