@@ -1134,10 +1134,15 @@ fn open_pack_root_capability(root: &Path) -> Result<Dir> {
     let opened = parent
         .open_dir_nofollow(name)
         .with_context(|| format!("pack root must be a real directory: {}", root.display()))?;
-    let actual = opened.dir_metadata()?;
-    if expected.dev() != actual.dev() || expected.ino() != actual.ino() {
-        bail!("pack root changed while opening: {}", root.display());
+
+    #[cfg(unix)]
+    {
+        let actual = opened.dir_metadata()?;
+        if expected.dev() != actual.dev() || expected.ino() != actual.ino() {
+            bail!("pack root changed while opening: {}", root.display());
+        }
     }
+
     Ok(opened)
 }
 
