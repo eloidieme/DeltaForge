@@ -480,12 +480,18 @@ fn run_iterations(
     }
 
     let mut durations = Vec::new();
+    let mut peak_rss_bytes: Option<u64> = None;
     for _ in 0..iterations {
         if let Err(error) = reset_fixture(fixture.source, fixture.path) {
             return failed_point(iterations, warmup, &params, error);
         }
         match run_timed_command(command, cwd, timeout_ms) {
-            Ok(duration) => durations.push(duration.as_secs_f64() * 1000.0),
+            Ok((duration, sample)) => {
+                durations.push(duration.as_secs_f64() * 1000.0);
+                if let Some(sample) = sample {
+                    peak_rss_bytes = Some(peak_rss_bytes.map_or(sample, |peak| peak.max(sample)));
+                }
+            }
             Err(error) => return failed_point(iterations, warmup, &params, error),
         }
     }
@@ -509,7 +515,7 @@ fn run_iterations(
         runtime_median_ms: median,
         runtime_p95_ms: p95,
         throughput_mb_s: throughput,
-        peak_memory_mb: None,
+        peak_memory_mb: peak_rss_bytes.map(|bytes| bytes as f64 / 1_048_576.0),
         error: None,
     }
 }
@@ -606,18 +612,23 @@ pub fn history_path(context: &ProjectContext) -> PathBuf {
         .join("benchmark_history.json")
 }
 
-fn run_timed_command(command: &[String], cwd: &Path, timeout_ms: u64) -> Result<Duration> {
+fn run_timed_command(
+    command: &[String],
+    cwd: &Path,
+    timeout_ms: u64,
+) -> Result<(Duration, Option<u64>)> {
     let start = Instant::now();
-    let output = run_command(command, cwd, timeout_ms)?;
-    if !output.status.success() {
+    let measured = process::run_command_measured(command, cwd, timeout_ms, None, &BTreeMap::new())?;
+    let elapsed = start.elapsed();
+    if !measured.output.status.success() {
         bail!(
             "benchmark command failed: {}\nstdout:\n{}\nstderr:\n{}",
             command.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            String::from_utf8_lossy(&measured.output.stdout),
+            String::from_utf8_lossy(&measured.output.stderr)
         );
     }
-    Ok(start.elapsed())
+    Ok((elapsed, measured.peak_rss_bytes))
 }
 
 fn run_command(command: &[String], cwd: &Path, timeout_ms: u64) -> Result<Output> {
