@@ -816,6 +816,16 @@ fn bench_report_and_portfolio_generate_project_artifacts() {
             .is_empty()
     );
 
+    let comparison = run_deltaforge(
+        ["bench", "--iterations", "1", "--warmup", "0", "--compare"],
+        &project_dir,
+    );
+    assert_success(&comparison);
+    assert_stdout_contains(&comparison, "Comparison with prior saved run:");
+    assert_stdout_contains(&comparison, "median:");
+    assert_stdout_contains(&comparison, "throughput:");
+    assert_stdout_contains(&comparison, "peak memory:");
+
     let markdown_report = run_deltaforge(
         ["report", "--format", "markdown", "--output", "report.md"],
         &project_dir,

@@ -226,6 +226,10 @@ pub struct BenchArgs {
     /// Save results to .deltaforge/benchmark_history.json.
     #[arg(long)]
     pub save: bool,
+
+    /// Compare this run with the most recent prior saved results.
+    #[arg(long)]
+    pub compare: bool,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]

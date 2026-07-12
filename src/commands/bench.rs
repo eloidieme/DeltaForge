@@ -90,6 +90,44 @@ pub struct ThreadSpeedup {
     pub value: f64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ComparisonOutcome {
+    Improved,
+    Regressed,
+    Unchanged,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MetricComparison {
+    previous: f64,
+    current: f64,
+    delta: f64,
+    percent_delta: Option<f64>,
+    outcome: ComparisonOutcome,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MachineDifference {
+    previous: String,
+    current: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PointComparison {
+    params: BTreeMap<String, String>,
+    prior_timestamp: Option<String>,
+    runtime_median_ms: Option<MetricComparison>,
+    throughput_mb_s: Option<MetricComparison>,
+    peak_memory_mb: Option<MetricComparison>,
+    machine_differences: BTreeMap<String, MachineDifference>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BenchmarkComparison {
+    points: Vec<PointComparison>,
+}
+
 /// Speedup = median(min threads) / median(max threads), for benchmarks whose
 /// points vary over a numeric `threads` parameter. `None` when there are
 /// fewer than two distinct thread counts, when `threads` is not the only
@@ -215,6 +253,15 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
         records.extend(run_stage_benchmarks(&context, stage, &args)?);
     }
 
+    // Read before appending so a saved run is always compared with a genuinely
+    // prior result, never with itself.
+    let comparisons = if args.compare {
+        let history = read_history(&history_path(&context))?;
+        Some(compare_records(&records, &history))
+    } else {
+        None
+    };
+
     if args.save && !records.is_empty() {
         append_history(&context, &records)?;
     }
@@ -222,14 +269,17 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
     if args.json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&records_json(&records)?)?
+            serde_json::to_string_pretty(&records_json(&records, comparisons.as_deref())?)?
         );
     } else if records.is_empty() {
         println!("No benchmarks defined for selected stage(s).");
     } else {
-        for record in &records {
+        for (index, record) in records.iter().enumerate() {
             println!("{} / {}", record.stage, record.benchmark);
             print!("{}", render_benchmark_human(record));
+            if let Some(comparisons) = &comparisons {
+                print!("{}", render_comparison_human(&comparisons[index]));
+            }
         }
         if args.save {
             println!(
@@ -251,16 +301,230 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
 /// JSON output for `bench --json`: the records, each augmented with a
 /// `derived` object (e.g. `{"speedup_1_to_8": 3.4}`) when a speedup applies.
 /// Derived metrics are attached only here, never written to history.
-fn records_json(records: &[BenchmarkRecord]) -> Result<serde_json::Value> {
+fn records_json(
+    records: &[BenchmarkRecord],
+    comparisons: Option<&[BenchmarkComparison]>,
+) -> Result<serde_json::Value> {
     let mut value = serde_json::to_value(records)?;
     if let serde_json::Value::Array(items) = &mut value {
-        for (item, record) in items.iter_mut().zip(records) {
+        for (index, (item, record)) in items.iter_mut().zip(records).enumerate() {
             if let Some(speedup) = thread_speedup(&record.points) {
                 item["derived"] = serde_json::json!({ speedup.key: speedup.value });
+            }
+            if let Some(comparisons) = comparisons {
+                item["comparison"] = serde_json::to_value(&comparisons[index])?;
             }
         }
     }
     Ok(value)
+}
+
+/// Compare each current point with the latest prior saved point carrying the
+/// same project/language/stage/benchmark identity and exact parameter map.
+fn compare_records(
+    current: &[BenchmarkRecord],
+    history: &[BenchmarkRecord],
+) -> Vec<BenchmarkComparison> {
+    current
+        .iter()
+        .map(|record| BenchmarkComparison {
+            points: record
+                .points
+                .iter()
+                .map(|point| compare_point(record, point, history))
+                .collect(),
+        })
+        .collect()
+}
+
+fn compare_point(
+    current_record: &BenchmarkRecord,
+    current_point: &BenchmarkPoint,
+    history: &[BenchmarkRecord],
+) -> PointComparison {
+    let prior = history.iter().rev().find_map(|record| {
+        same_benchmark(current_record, record)
+            .then(|| {
+                record
+                    .points
+                    .iter()
+                    .find(|point| point.params == current_point.params)
+                    .map(|point| (record, point))
+            })
+            .flatten()
+    });
+
+    let Some((prior_record, prior_point)) = prior else {
+        return PointComparison {
+            params: current_point.params.clone(),
+            prior_timestamp: None,
+            runtime_median_ms: None,
+            throughput_mb_s: None,
+            peak_memory_mb: None,
+            machine_differences: BTreeMap::new(),
+        };
+    };
+
+    PointComparison {
+        params: current_point.params.clone(),
+        prior_timestamp: Some(prior_record.timestamp.clone()),
+        runtime_median_ms: metric_comparison(
+            prior_point.runtime_median_ms,
+            current_point.runtime_median_ms,
+            false,
+        ),
+        throughput_mb_s: metric_comparison(
+            prior_point.throughput_mb_s,
+            current_point.throughput_mb_s,
+            true,
+        ),
+        peak_memory_mb: metric_comparison(
+            prior_point.peak_memory_mb,
+            current_point.peak_memory_mb,
+            false,
+        ),
+        machine_differences: machine_differences(&prior_record.machine, &current_record.machine),
+    }
+}
+
+fn same_benchmark(current: &BenchmarkRecord, prior: &BenchmarkRecord) -> bool {
+    current.project == prior.project
+        && current.language == prior.language
+        && current.stage == prior.stage
+        && current.benchmark == prior.benchmark
+}
+
+fn metric_comparison(
+    previous: Option<f64>,
+    current: Option<f64>,
+    higher_is_better: bool,
+) -> Option<MetricComparison> {
+    let (previous, current) = (previous?, current?);
+    if !previous.is_finite() || !current.is_finite() {
+        return None;
+    }
+    let delta = current - previous;
+    let outcome = if delta == 0.0 {
+        ComparisonOutcome::Unchanged
+    } else if (delta > 0.0) == higher_is_better {
+        ComparisonOutcome::Improved
+    } else {
+        ComparisonOutcome::Regressed
+    };
+    Some(MetricComparison {
+        previous,
+        current,
+        delta,
+        percent_delta: (previous != 0.0).then(|| delta / previous * 100.0),
+        outcome,
+    })
+}
+
+fn machine_differences(
+    previous: &BTreeMap<String, String>,
+    current: &BTreeMap<String, String>,
+) -> BTreeMap<String, MachineDifference> {
+    ["os", "arch"]
+        .into_iter()
+        .filter_map(|key| {
+            let previous = previous.get(key)?;
+            let current = current.get(key)?;
+            (previous != current).then(|| {
+                (
+                    key.to_string(),
+                    MachineDifference {
+                        previous: previous.clone(),
+                        current: current.clone(),
+                    },
+                )
+            })
+        })
+        .collect()
+}
+
+fn render_comparison_human(comparison: &BenchmarkComparison) -> String {
+    let mut out = String::from("  Comparison with prior saved run:\n");
+    for point in &comparison.points {
+        let label = if point.params.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " [{}]",
+                point
+                    .params
+                    .iter()
+                    .map(|(name, value)| format!("{name}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let Some(timestamp) = &point.prior_timestamp else {
+            out.push_str(&format!("    {label} no prior saved result\n"));
+            continue;
+        };
+        out.push_str(&format!("    {label} prior: {timestamp}\n"));
+        render_metric_comparison(
+            &mut out,
+            "median",
+            point.runtime_median_ms.as_ref(),
+            "ms",
+            2,
+        );
+        render_metric_comparison(
+            &mut out,
+            "throughput",
+            point.throughput_mb_s.as_ref(),
+            "MB/s",
+            2,
+        );
+        render_metric_comparison(
+            &mut out,
+            "peak memory",
+            point.peak_memory_mb.as_ref(),
+            "MB",
+            1,
+        );
+        if !point.machine_differences.is_empty() {
+            let differences = point
+                .machine_differences
+                .iter()
+                .map(|(name, values)| format!("{name}: {} -> {}", values.previous, values.current))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!(
+                "      note: machine differs ({differences}); results may not be directly comparable\n"
+            ));
+        }
+    }
+    out
+}
+
+fn render_metric_comparison(
+    out: &mut String,
+    name: &str,
+    comparison: Option<&MetricComparison>,
+    unit: &str,
+    decimals: usize,
+) {
+    let Some(comparison) = comparison else {
+        out.push_str(&format!("      {name}: not available\n"));
+        return;
+    };
+    let percent = comparison.percent_delta.map_or_else(
+        || "percentage unavailable".to_string(),
+        |value| format!("{value:+.2}%"),
+    );
+    let outcome = match comparison.outcome {
+        ComparisonOutcome::Improved => "improved",
+        ComparisonOutcome::Regressed => "regressed",
+        ComparisonOutcome::Unchanged => "unchanged",
+    };
+    out.push_str(&format!(
+        "      {name}: {previous:.decimals$} {unit} -> {current:.decimals$} {unit} ({delta:+.decimals$} {unit}, {percent}) — {outcome}\n",
+        previous = comparison.previous,
+        current = comparison.current,
+        delta = comparison.delta,
+    ));
 }
 
 /// Aligned per-point table (params, median, p95, throughput, peak memory),
@@ -1174,11 +1438,95 @@ matrix:
             point(&[("threads", "1")], Some(800.0)),
             point(&[("threads", "8")], Some(100.0)),
         ];
-        let json = records_json(std::slice::from_ref(&record)).unwrap();
+        let json = records_json(std::slice::from_ref(&record), None).unwrap();
         assert_eq!(json[0]["derived"]["speedup_1_to_8"], 8.0);
         // The persisted form stays free of derived metrics.
         let persisted = serde_json::to_value(&record).unwrap();
         assert!(persisted.get("derived").is_none());
+    }
+
+    #[test]
+    fn comparison_uses_latest_exact_point_and_formats_metric_directions() {
+        let mut older = sample_record();
+        older.timestamp = "2026-01-01T00:00:00Z".to_string();
+        older.points[0].runtime_median_ms = Some(20.0);
+
+        let mut latest = sample_record();
+        latest.timestamp = "2026-01-02T00:00:00Z".to_string();
+        latest.points[0].runtime_median_ms = Some(10.0);
+        latest.points[0].throughput_mb_s = Some(200.0);
+        latest.points[0].peak_memory_mb = Some(64.0);
+        latest.machine = BTreeMap::from([
+            ("os".to_string(), "macos".to_string()),
+            ("arch".to_string(), "aarch64".to_string()),
+        ]);
+
+        let mut current = sample_record();
+        current.timestamp = "2026-01-03T00:00:00Z".to_string();
+        current.points[0].runtime_median_ms = Some(8.0);
+        current.points[0].throughput_mb_s = Some(250.0);
+        current.points[0].peak_memory_mb = Some(70.0);
+        current.machine = BTreeMap::from([
+            ("os".to_string(), "linux".to_string()),
+            ("arch".to_string(), "x86_64".to_string()),
+        ]);
+
+        let comparisons = compare_records(std::slice::from_ref(&current), &[older, latest.clone()]);
+        let point = &comparisons[0].points[0];
+        assert_eq!(
+            point.prior_timestamp.as_deref(),
+            Some("2026-01-02T00:00:00Z")
+        );
+        assert_eq!(
+            point.runtime_median_ms.as_ref().unwrap().outcome,
+            ComparisonOutcome::Improved
+        );
+        assert_eq!(
+            point.throughput_mb_s.as_ref().unwrap().outcome,
+            ComparisonOutcome::Improved
+        );
+        assert_eq!(
+            point.peak_memory_mb.as_ref().unwrap().outcome,
+            ComparisonOutcome::Regressed
+        );
+        assert_eq!(point.machine_differences.len(), 2);
+
+        let rendered = render_comparison_human(&comparisons[0]);
+        assert!(
+            rendered.contains("median: 10.00 ms -> 8.00 ms (-2.00 ms, -20.00%) — improved"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "throughput: 200.00 MB/s -> 250.00 MB/s (+50.00 MB/s, +25.00%) — improved"
+            ),
+            "{rendered}"
+        );
+        assert!(rendered.contains("peak memory"), "{rendered}");
+        assert!(rendered.contains("— regressed"), "{rendered}");
+        assert!(rendered.contains("machine differs"), "{rendered}");
+
+        let json = records_json(&[current], Some(&comparisons)).unwrap();
+        assert_eq!(
+            json[0]["comparison"]["points"][0]["runtime_median_ms"]["outcome"],
+            "improved"
+        );
+        let persisted = serde_json::to_value(&latest).unwrap();
+        assert!(persisted.get("comparison").is_none());
+    }
+
+    #[test]
+    fn comparison_requires_an_exact_parameter_match() {
+        let prior = sample_record();
+        let mut current = sample_record();
+        current.points[0]
+            .params
+            .insert("threads".into(), "8".into());
+        let comparisons = compare_records(&[current], &[prior]);
+        let point = &comparisons[0].points[0];
+        assert!(point.prior_timestamp.is_none());
+        let rendered = render_comparison_human(&comparisons[0]);
+        assert!(rendered.contains("[threads=8] no prior saved result"));
     }
 
     #[test]

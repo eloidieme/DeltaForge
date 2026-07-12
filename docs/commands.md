@@ -27,6 +27,8 @@
   ```
 
   The `speedup_<min>_to_<max>` line is derived at display time when a numeric `threads` matrix parameter is the only varying parameter (median at min threads / median at max threads); `--json` attaches it per record as a `derived` object and emits JSON only. `--save` appends to `.deltaforge/benchmark_history.json`; derived metrics are never persisted.
+
+  `--compare` compares each point from the new run with the most recent prior saved point having the same project, language, stage, benchmark, and exact parameters. It reports median, throughput, and peak-memory deltas with improved/regressed wording. Run once with `--save`, then run again with `--compare` (optionally also `--save`). The comparison uses the history as it existed before the new run is appended, and warns when no matching prior point exists. If the saved and current OS or architecture differ, the output notes that the measurements may not be directly comparable. With `--json`, comparison details are attached to each output record under `comparison` and no human text is written to stdout; comparisons are never persisted.
 - `report`: generate Markdown or HTML reports. `--output` defaults to `report.md`.
 - `portfolio`: generate a portfolio summary. `--output` defaults to `PORTFOLIO.md`.
 - `design`: show prompts or edit design notes.
