@@ -17,7 +17,12 @@ warmup = 2
 [git]
 auto_commit = false
 auto_tag = true
+
+[integrity]
+exclude = []
 ```
+
+`integrity.exclude` adds names to the built-in integrity-digest exclusion list (`target`, `node_modules`, ...). Entries are plain file or directory names matched at any depth — no paths. Use it when a tool creates a generated directory or a directory symlink that DeltaForge does not already know about.
 
 Run `deltaforge config validate` after manual edits.
 

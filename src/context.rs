@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::config::ProjectConfig;
-use crate::integrity::digest_tree;
+use crate::integrity::{digest_pack_tree, digest_project_tree};
 use crate::pack::{LoadedPack, PackSearchOptions, is_bundled_source, load_pack, pack_source_label};
 use crate::state::ProjectState;
 
@@ -74,7 +74,7 @@ impl ProjectContext {
     }
 
     pub fn pack_digest(&self) -> Result<String> {
-        digest_tree(&self.pack.root, &[])
+        digest_pack_tree(&self.pack.root)
     }
 
     pub fn project_digest(&self) -> Result<String> {
@@ -93,7 +93,51 @@ impl ProjectContext {
                 excluded.push(ignored.as_str());
             }
         }
-        digest_tree(&self.root, &excluded)
+        for ignored in &self.config.integrity.exclude {
+            if !excluded.contains(&ignored.as_str()) {
+                excluded.push(ignored.as_str());
+            }
+        }
+        digest_project_tree(&self.root, &excluded)
+    }
+
+    /// Behavioral digest of one stage for this project's language: the inputs
+    /// that determine whether the stage passes (tests, fixtures, build/run
+    /// commands).
+    pub fn stage_behavioral_digest(&self, stage_id: &str) -> Result<String> {
+        let stage = self
+            .pack
+            .manifest
+            .stage(stage_id)
+            .with_context(|| format!("pack does not contain stage {stage_id}"))?;
+        let language = self
+            .pack
+            .manifest
+            .language(&self.state.language)
+            .with_context(|| {
+                format!(
+                    "pack {} does not support language {}",
+                    self.state.project, self.state.language
+                )
+            })?;
+        self.pack.stage_behavioral_digest(stage, language)
+    }
+
+    /// Whether a stage's completion proof is stale relative to the current
+    /// pack: its tests, fixtures, or commands changed since the stage passed.
+    /// Learner-side edits are not considered here; they are checked separately
+    /// at `next`/`commit` time.
+    pub fn stage_needs_revalidation(&self, stage_id: &str) -> Result<bool> {
+        let Some(proof) = self.state.completion_proofs.get(stage_id) else {
+            return Ok(true);
+        };
+        if proof.behavioral_digest.is_empty() {
+            // Legacy proof recorded before behavioral digests existed. It is
+            // only trustworthy if the pack is bit-identical to the one that
+            // passed.
+            return Ok(proof.pack_digest != self.pack_digest()?);
+        }
+        Ok(proof.behavioral_digest != self.stage_behavioral_digest(stage_id)?)
     }
 
     pub fn verify_completion_proof(&self, stage_id: &str) -> Result<()> {
@@ -104,10 +148,9 @@ impl ProjectContext {
             .with_context(|| {
                 format!("stage {stage_id} has no integrity proof; run `deltaforge test` again")
             })?;
-        let pack_digest = self.pack_digest()?;
-        if proof.pack_digest != pack_digest {
+        if self.stage_needs_revalidation(stage_id)? {
             bail!(
-                "pack contents changed since stage {stage_id} passed; run `deltaforge test` again"
+                "stage {stage_id} passed against an older version of this pack and must be revalidated; run `deltaforge test`"
             );
         }
         let project_digest = self.project_digest()?;
@@ -150,7 +193,7 @@ fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {
         }
     }
     if !state.pack_digest.is_empty() {
-        let actual = digest_tree(&pack.root, &[])?;
+        let actual = digest_pack_tree(&pack.root)?;
         if state.pack_digest != actual {
             bail!(
                 "pack contents changed since project initialization. Run `deltaforge sync-pack` to re-pin to the current pack."

@@ -7,22 +7,26 @@ use crate::context::{GlobalOptions, ProjectContext};
 pub fn run(args: StatusArgs, options: &GlobalOptions) -> Result<()> {
     let context = ProjectContext::load(options)?;
 
+    let stages = context
+        .pack
+        .manifest
+        .stages
+        .iter()
+        .map(|stage| {
+            Ok(StatusStage {
+                id: stage.id.clone(),
+                title: stage.title.clone(),
+                status: stage_status(&context, &stage.id)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     if args.json {
         let report = StatusReport {
             project: context.state.project.clone(),
             language: context.state.language.clone(),
             current_stage: context.state.current_stage.clone(),
-            stages: context
-                .pack
-                .manifest
-                .stages
-                .iter()
-                .map(|stage| StatusStage {
-                    id: stage.id.clone(),
-                    title: stage.title.clone(),
-                    status: stage_status(&context, &stage.id),
-                })
-                .collect(),
+            stages,
         };
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
@@ -34,27 +38,39 @@ pub fn run(args: StatusArgs, options: &GlobalOptions) -> Result<()> {
     println!();
 
     println!("Stages:");
-    for stage in &context.pack.manifest.stages {
-        let marker = if context.state.is_completed(&stage.id) {
-            "✓"
-        } else if stage.id == context.state.current_stage {
-            "→"
-        } else {
-            "○"
+    let mut any_stale = false;
+    for stage in &stages {
+        let marker = match stage.status {
+            "complete" => "✓",
+            "needs_revalidation" => {
+                any_stale = true;
+                "!"
+            }
+            "current" => "→",
+            _ => "○",
         };
         println!("  {marker} {} - {}", stage.id, stage.title);
+    }
+    if any_stale {
+        println!();
+        println!("Stages marked ! passed against an older version of this pack.");
+        println!("Run `deltaforge test --stage <id>` to revalidate them.");
     }
 
     Ok(())
 }
 
-fn stage_status(context: &ProjectContext, stage_id: &str) -> &'static str {
+fn stage_status(context: &ProjectContext, stage_id: &str) -> Result<&'static str> {
     if context.state.is_completed(stage_id) {
-        "complete"
+        if context.stage_needs_revalidation(stage_id)? {
+            Ok("needs_revalidation")
+        } else {
+            Ok("complete")
+        }
     } else if stage_id == context.state.current_stage {
-        "current"
+        Ok("current")
     } else {
-        "locked"
+        Ok("locked")
     }
 }
 

@@ -12,9 +12,9 @@
 - `test`: run black-box stage tests.
 - `explain-failure`: summarize the last failed test run and suggest next steps.
 - `next`: unlock the next stage after tests pass.
-- `sync-pack`: re-pin the project to the currently discovered pack after a pack upgrade (updates the pinned version, source, and digest, and migrates the pack digest inside existing completion proofs). Supports `--json`.
+- `sync-pack`: adopt the currently discovered pack after a pack upgrade. Updates only the project-level pin (version, source, digest); completion proofs keep the digests of what actually passed. Reports each completed stage as valid or needing revalidation. Supports `--json`.
 - `hint`: reveal progressive hints. `--level N` never lowers previously recorded progress.
-- `status`: show stage progress. Supports `--json` (project, language, current stage, and per-stage status on stdout only).
+- `status`: show stage progress. Completed stages whose tests, fixtures, or commands changed since they passed are marked `!` (needs revalidation). Supports `--json` (project, language, current stage, and per-stage status on stdout only).
 - `config show|validate`: inspect project config.
 - `bench`: run pack benchmarks. Timing uses the pack's `bench_run` command (falling back to `run`).
 - `report`: generate Markdown or HTML reports. `--output` defaults to `report.md`.
@@ -41,3 +41,5 @@ Pack pinning and upgrades:
 
 - A learner project pins the pack it was created from. Bundled/embedded packs are pinned logically as `"bundled"`, while external `--packs-dir` packs are pinned by absolute path.
 - After upgrading DeltaForge or editing a pinned pack, a pin mismatch is reported with `deltaforge sync-pack` as the remedy; running it re-pins the project without discarding progress.
+- Each completion proof records a per-stage behavioral digest: the stage's `tests.yaml`, its fixtures, and the language build/run commands. Documentation-only pack updates (instructions, hints, README, design prompts) therefore never invalidate completed stages; changes to tests, fixtures, or commands invalidate only the affected stages, and `next`/`commit` require re-running `deltaforge test` for them.
+- Proofs recorded by older DeltaForge versions carry no behavioral digest. `sync-pack` upgrades them automatically when the pack is bit-identical to the one that passed; otherwise the stage must be revalidated.

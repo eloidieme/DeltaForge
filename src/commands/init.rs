@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use crate::cli::InitArgs;
 use crate::config::ProjectConfig;
 use crate::context::GlobalOptions;
-use crate::integrity::digest_tree;
+use crate::integrity::digest_pack_tree;
 use crate::pack::{LoadedPack, PackSearchOptions, StageSpec, load_pack, pack_source_label};
 use crate::state::ProjectState;
 
@@ -107,7 +107,7 @@ fn write_deltaforge_metadata(
     )?;
     state.pack_version = loaded_pack.manifest.version.clone();
     state.pack_source = pack_source_label(&loaded_pack.root);
-    state.pack_digest = digest_tree(&loaded_pack.root, &[])?;
+    state.pack_digest = digest_pack_tree(&loaded_pack.root)?;
     state.write_to(&deltaforge_dir.join("state.json"))?;
 
     ProjectConfig::default().write_to(&deltaforge_dir.join("config.toml"))?;

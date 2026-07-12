@@ -32,7 +32,11 @@ Language spec fields:
 - `run` (required): command used by `deltaforge test` to invoke the learner's program.
 - `bench_run` (optional): command used by `deltaforge bench` to time the learner's program after the build step. It falls back to `run` when absent, so it is optional at `schema_version: 1`. Prefer pointing it directly at the built binary (for example `./target/release/<binary>`) so benchmarks measure the program rather than build-tool startup overhead. A relative first element is resolved against the project root and receives the platform executable suffix on Windows.
 
-A pack's `ignored_paths` are excluded (in addition to a built-in list: `.git`, `.deltaforge`, `target`, `build`, `node_modules`, `__pycache__`, `.venv`, `.DS_Store`) when computing the learner project digest that guards stage completion.
+A pack's `ignored_paths` are excluded (in addition to a built-in list: `.git`, `.deltaforge`, `target`, `build`, `node_modules`, `__pycache__`, `.venv`, `.DS_Store`, plus the learner's `integrity.exclude` config) when computing the learner project digest that guards stage completion.
+
+Pack content must be self-contained: symbolic links anywhere in a pack are rejected when the pack is digested. A symlinked `tests.yaml` or fixture would let pack behavior change while the recorded digest stayed the same, defeating pinning.
+
+Stage completion proofs pin a per-stage behavioral digest covering the stage's `tests.yaml`, its `fixtures/` tree, and the language `build`/`run` commands. Editing documentation (instructions, hints, README, design prompts) never invalidates completed stages; editing tests, fixtures, or commands invalidates only the stages it affects.
 
 Bundled packs currently include:
 

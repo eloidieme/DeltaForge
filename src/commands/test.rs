@@ -33,6 +33,7 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
             context.state.record_completion_proof(
                 &stage.id,
                 context.pack_digest()?,
+                context.stage_behavioral_digest(&stage.id)?,
                 context.project_digest()?,
                 summary.total_defined,
             )?;

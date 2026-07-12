@@ -1628,9 +1628,8 @@ fn assert_reference_solution_passes(pack: &str, source_path: &str, final_stage: 
     assert_stdout_contains(&all, "3 passed, 0 failed");
 }
 
-#[test]
-fn sync_pack_re_pins_project_after_pack_digest_changes() {
-    let root = temp_project_path("sync-pack");
+fn init_project_from_pack_copy(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let root = temp_project_path(name);
     let packs = root.join("packs");
     copy_dir_recursive(
         &repo_root().join("packs/flashindex"),
@@ -1653,11 +1652,17 @@ fn sync_pack_re_pins_project_after_pack_digest_changes() {
         &repo_root(),
     ));
     fs::write(project.join("src/main.rs"), passing_flashindex_source()).unwrap();
+    (root, packs, project)
+}
+
+#[test]
+fn sync_pack_doc_only_update_keeps_proofs_valid() {
+    let (root, packs, project) = init_project_from_pack_copy("sync-pack-docs");
 
     let test = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "test"], &project);
     assert_success(&test);
 
-    // Simulate a pack upgrade: the pinned digest no longer matches.
+    // A documentation-only pack update: instructions change, behavior does not.
     let instructions = packs.join("flashindex/stages/01_scan_files/instructions.md");
     let mut updated = fs::read_to_string(&instructions).unwrap();
     updated.push_str("\n<!-- upgraded pack content -->\n");
@@ -1676,19 +1681,119 @@ fn sync_pack_re_pins_project_after_pack_digest_changes() {
     );
     assert_success(&sync);
     assert_stdout_contains(&sync, "Re-pinned project flashindex");
+    assert_stdout_contains(&sync, "✓ 01_scan_files");
+    assert_stdout_not_contains(&sync, "needs revalidation");
 
-    // The project loads again and progression still works because the proof's
-    // pack digest was migrated while the learner's project digest was not.
-    let overview = run_deltaforge(
-        ["--packs-dir", packs.to_str().unwrap(), "overview"],
-        &project,
-    );
-    assert_success(&overview);
+    // The stage's behavioral digest is unchanged, so the proof stays valid and
+    // progression works without re-running tests.
     let next = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
     assert_success(&next);
     assert_stdout_contains(&next, "Unlocked Stage 02_filter_files");
 
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn sync_pack_behavioral_update_requires_revalidation() {
+    let (root, packs, project) = init_project_from_pack_copy("sync-pack-behavior");
+
+    let test = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "test"], &project);
+    assert_success(&test);
+
+    // A behavioral pack update: stage 01 gains a test the learner never ran.
+    let tests_path = packs.join("flashindex/stages/01_scan_files/tests.yaml");
+    let mut tests = fs::read_to_string(&tests_path).unwrap();
+    tests.push_str(
+        r#"
+  - name: revalidation smoke test
+    fixture: basic_project
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "README.md"
+"#,
+    );
+    fs::write(&tests_path, tests).unwrap();
+
+    let sync = run_deltaforge(
+        ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
+        &project,
+    );
+    assert_success(&sync);
+    assert_stdout_contains(&sync, "! 01_scan_files (needs revalidation)");
+
+    // Progression is blocked until the stage is revalidated against the new
+    // tests; the proof must not pretend hash-B was proven by a hash-A run.
+    let next = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
+    assert_failure(&next);
+    assert_stderr_contains(&next, "must be revalidated");
+    assert_stderr_contains(&next, "deltaforge test");
+
+    let status = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "status"], &project);
+    assert_success(&status);
+    assert_stdout_contains(&status, "! 01_scan_files");
+    assert_stdout_contains(&status, "older version of this pack");
+
+    let retest = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "test"], &project);
+    assert_success(&retest);
+    assert_stdout_contains(&retest, "revalidation smoke test");
+    let next = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
+    assert_success(&next);
+    assert_stdout_contains(&next, "Unlocked Stage 02_filter_files");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn sync_pack_migrates_legacy_proofs_when_pack_is_unchanged() {
+    let project = temp_project_path("sync-pack-legacy");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    fs::write(project.join("src/main.rs"), passing_flashindex_source()).unwrap();
+    assert_success(&run_deltaforge(["test"], &project));
+
+    // Simulate a proof recorded before behavioral digests existed.
+    let state_path = project.join(".deltaforge/state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    let proof = state["completion_proofs"]["01_scan_files"]
+        .as_object_mut()
+        .unwrap();
+    proof.remove("behavioral_digest");
+    fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+    // The pack is bit-identical to the one that passed, so sync-pack can
+    // safely upgrade the legacy proof to a behavioral digest.
+    let sync = run_deltaforge(["sync-pack"], &project);
+    assert_success(&sync);
+    assert_stdout_contains(&sync, "migrated legacy completion proofs: 1");
+    assert_stdout_contains(&sync, "✓ 01_scan_files");
+
+    let migrated: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert!(
+        migrated["completion_proofs"]["01_scan_files"]["behavioral_digest"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:")
+    );
+
+    let next = run_deltaforge(["next"], &project);
+    assert_success(&next);
+    assert_stdout_contains(&next, "Unlocked Stage 02_filter_files");
+
+    let _ = fs::remove_dir_all(project);
 }
 
 #[test]
@@ -1734,6 +1839,8 @@ fn sync_pack_reports_changes_as_json() {
             .unwrap()
             .starts_with("fnv1a64:")
     );
+    assert_eq!(report["migrated_proofs"], 0);
+    assert!(report["stages"].as_array().unwrap().is_empty());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1762,6 +1869,87 @@ fn symlink_in_learner_project_does_not_block_completion() {
     assert_success(&next);
     assert_stdout_contains(&next, "Unlocked Stage 02_filter_files");
     let _ = fs::remove_dir_all(project);
+}
+
+#[cfg(unix)]
+#[test]
+fn changing_a_symlink_target_invalidates_the_completion_proof() {
+    let root = temp_project_path("symlink-target");
+    let project = root.join("project");
+    let external = root.join("external");
+    fs::create_dir_all(&external).unwrap();
+    fs::write(external.join("shared.md"), "notes v1").unwrap();
+
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    fs::write(project.join("src/main.rs"), passing_flashindex_source()).unwrap();
+    std::os::unix::fs::symlink(external.join("shared.md"), project.join("NOTES.md")).unwrap();
+
+    assert_success(&run_deltaforge(["test"], &project));
+
+    // The digest hashes the symlink target's contents, so editing the target
+    // is detected exactly like editing a regular project file.
+    fs::write(external.join("shared.md"), "notes v2").unwrap();
+    let next = run_deltaforge(["next"], &project);
+    assert_failure(&next);
+    assert_stderr_contains(&next, "learner project changed");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn directory_symlink_blocks_proof_until_excluded_in_config() {
+    let root = temp_project_path("symlink-dir");
+    let project = root.join("project");
+    let external = root.join("external");
+    fs::create_dir_all(&external).unwrap();
+    fs::write(external.join("data.txt"), "x").unwrap();
+
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    fs::write(project.join("src/main.rs"), passing_flashindex_source()).unwrap();
+    std::os::unix::fs::symlink(&external, project.join("extdata")).unwrap();
+
+    // Tests pass, but the completion proof cannot be recorded because the
+    // digest would not cover what the directory symlink points at.
+    let test = run_deltaforge(["test"], &project);
+    assert_failure(&test);
+    assert_stderr_contains(&test, "symbolic link to a directory");
+    assert_stderr_contains(&test, "integrity.exclude");
+
+    // The learner-config escape hatch unblocks the digest.
+    fs::write(
+        project.join(".deltaforge/config.toml"),
+        "[integrity]\nexclude = [\"extdata\"]\n",
+    )
+    .unwrap();
+    assert_success(&run_deltaforge(["test"], &project));
+    let next = run_deltaforge(["next"], &project);
+    assert_success(&next);
+    assert_stdout_contains(&next, "Unlocked Stage 02_filter_files");
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]

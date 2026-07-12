@@ -18,6 +18,19 @@ pub struct ProjectConfig {
     pub bench: BenchConfig,
     #[serde(default)]
     pub git: GitConfig,
+    #[serde(default)]
+    pub integrity: IntegrityConfig,
+}
+
+/// Learner-controlled additions to the integrity digest exclusion list.
+/// Entries are directory or file names matched at any depth, like the built-in
+/// exclusions (`target`, `node_modules`, ...). Useful when a tool creates a
+/// generated directory or directory symlink DeltaForge does not know about.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IntegrityConfig {
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +69,7 @@ impl Default for ProjectConfig {
             runner: RunnerConfig::default(),
             bench: BenchConfig::default(),
             git: GitConfig::default(),
+            integrity: IntegrityConfig::default(),
         }
     }
 }
@@ -140,6 +154,14 @@ impl ProjectConfig {
                 "invalid config {}: bench.iterations must be greater than 0",
                 path.display()
             );
+        }
+        for name in &self.integrity.exclude {
+            if name.trim().is_empty() || name.contains(['/', '\\']) {
+                bail!(
+                    "invalid config {}: integrity.exclude entries must be plain file or directory names, got {name:?}",
+                    path.display()
+                );
+            }
         }
         Ok(())
     }

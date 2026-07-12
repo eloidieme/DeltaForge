@@ -16,20 +16,47 @@ pub fn run(args: SyncPackArgs, options: &GlobalOptions) -> Result<()> {
     let new_source = pack_source_label(&context.pack.root);
     let new_digest = context.pack_digest()?;
 
+    // Migrate legacy proofs (recorded before behavioral digests existed) only
+    // when the pack is bit-identical to the one they passed against — the one
+    // case where upgrading them is provably safe.
+    let legacy_stages: Vec<String> = context
+        .state
+        .completion_proofs
+        .iter()
+        .filter(|(_, proof)| proof.behavioral_digest.is_empty() && proof.pack_digest == new_digest)
+        .map(|(stage_id, _)| stage_id.clone())
+        .collect();
+    let mut migrated_proofs = 0;
+    for stage_id in legacy_stages {
+        let Ok(behavioral) = context.stage_behavioral_digest(&stage_id) else {
+            continue;
+        };
+        if let Some(proof) = context.state.completion_proofs.get_mut(&stage_id) {
+            proof.behavioral_digest = behavioral;
+            migrated_proofs += 1;
+        }
+    }
+
+    // Update only the project-level pin. Completion proofs keep the digests of
+    // what actually passed; `next`/`commit` compare them against the adopted
+    // pack per stage and require revalidation where behavior changed.
     context.state.pack_version = new_version.clone();
     context.state.pack_source = new_source.clone();
     context.state.pack_digest = new_digest.clone();
 
-    // Re-pin the pack digest recorded in each existing completion proof. The
-    // learner's own project_digest stays untouched so completion evidence for
-    // the learner's work is preserved.
-    let mut updated_proofs = 0;
-    for proof in context.state.completion_proofs.values_mut() {
-        if proof.pack_digest != new_digest {
-            proof.pack_digest = new_digest.clone();
-            updated_proofs += 1;
-        }
-    }
+    let stages: Vec<StageSync> = context
+        .state
+        .completed_stages
+        .iter()
+        .map(|stage_id| StageSync {
+            id: stage_id.clone(),
+            status: if context.stage_needs_revalidation(stage_id).unwrap_or(true) {
+                "needs_revalidation"
+            } else {
+                "valid"
+            },
+        })
+        .collect();
 
     context.state.touch()?;
     context.save_state()?;
@@ -39,7 +66,8 @@ pub fn run(args: SyncPackArgs, options: &GlobalOptions) -> Result<()> {
         version: Change::new(old_version, new_version),
         source: Change::new(old_source, new_source),
         digest: Change::new(old_digest, new_digest),
-        updated_proofs,
+        migrated_proofs,
+        stages,
     };
 
     if args.json {
@@ -51,7 +79,28 @@ pub fn run(args: SyncPackArgs, options: &GlobalOptions) -> Result<()> {
     print_change("version", &report.version);
     print_change("source", &report.source);
     print_change("digest", &report.digest);
-    println!("  completion proofs updated: {}", report.updated_proofs);
+    if report.migrated_proofs > 0 {
+        println!(
+            "  migrated legacy completion proofs: {}",
+            report.migrated_proofs
+        );
+    }
+    if !report.stages.is_empty() {
+        println!();
+        println!("Completed stages:");
+        for stage in &report.stages {
+            if stage.status == "valid" {
+                println!("  ✓ {}", stage.id);
+            } else {
+                println!("  ! {} (needs revalidation)", stage.id);
+            }
+        }
+        if report.stages.iter().any(|s| s.status != "valid") {
+            println!();
+            println!("Stages marked ! passed against an older version of this pack.");
+            println!("Run `deltaforge test --stage <id>` to revalidate them.");
+        }
+    }
     Ok(())
 }
 
@@ -77,7 +126,14 @@ struct SyncReport {
     version: Change,
     source: Change,
     digest: Change,
-    updated_proofs: usize,
+    migrated_proofs: usize,
+    stages: Vec<StageSync>,
+}
+
+#[derive(Debug, Serialize)]
+struct StageSync {
+    id: String,
+    status: &'static str,
 }
 
 #[derive(Debug, Serialize)]

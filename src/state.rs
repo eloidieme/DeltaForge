@@ -40,7 +40,13 @@ pub struct ProjectState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompletionProof {
+    /// Whole-pack digest at pass time. Retained for context and for migrating
+    /// proofs recorded before behavioral digests existed.
     pub pack_digest: String,
+    /// Digest of the stage inputs that determine passing: tests, fixtures, and
+    /// the language build/run commands. Empty on legacy proofs.
+    #[serde(default)]
+    pub behavioral_digest: String,
     pub project_digest: String,
     pub test_count: usize,
 }
@@ -148,6 +154,7 @@ impl ProjectState {
         &mut self,
         stage_id: &str,
         pack_digest: String,
+        behavioral_digest: String,
         project_digest: String,
         test_count: usize,
     ) -> Result<()> {
@@ -156,6 +163,7 @@ impl ProjectState {
             stage_id.to_string(),
             CompletionProof {
                 pack_digest,
+                behavioral_digest,
                 project_digest,
                 test_count,
             },

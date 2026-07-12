@@ -31,13 +31,21 @@
 ### Foundation repair
 
 - Pinned bundled/embedded packs logically as `"bundled"` instead of by absolute temp path, so version bumps no longer brick existing learner projects; old pins under any embedded-cache location are treated as bundled.
-- Added `deltaforge sync-pack` to re-pin a project's pack version, source, and digest after an upgrade, migrating the pack digest in existing completion proofs (learner project digests untouched). Supports `--json`. All pin-mismatch errors now point at it.
+- Added `deltaforge sync-pack` to adopt an updated pack by re-pinning the project's pack version, source, and digest. Supports `--json`. All pin-mismatch errors now point at it.
 - Moved the embedded-pack cache to a per-user directory (`$XDG_CACHE_HOME`/`~/.cache/deltaforge` on Unix, `%LOCALAPPDATA%\deltaforge` on Windows), keyed by a content digest of the embedded tree, and made extraction atomic via extract-to-sibling-then-rename.
-- Made integrity digests skip symlinks/special files instead of failing, applied digest exclusions at every directory depth, and expanded default project-digest exclusions (plus each pack's `ignored_paths`).
+- Applied digest exclusions at every directory depth and expanded default project-digest exclusions (plus each pack's `ignored_paths`), so generated directories no longer invalidate completion proofs. (Symlink handling is described under "Integrity truthfulness".)
 - Added an optional `bench_run` command to language specs and set it for all bundled packs so benchmarks time the built binary rather than `cargo run` startup overhead.
 - Made pack discovery resilient to a single malformed pack: `list` warns, `doctor` reports it, and `validate-pack` reports and fails.
 - Showed actual program stdout/stderr beneath test failures (truncated; full output with `--verbose`).
 - Prevented `hint --level N` from lowering recorded progress, expanded `{fixture_path}`/`{temp_dir}` in test `stdin` and `env` values, defaulted `report`/`portfolio` `--output`, and added `--json` to `status`.
+
+### Integrity truthfulness
+
+- Completion proofs now pin a per-stage behavioral digest — the stage's `tests.yaml`, its fixtures, and the language `build`/`run` commands — instead of the whole-pack digest. Documentation-only pack updates no longer invalidate completed stages; changes to tests, fixtures, or commands invalidate exactly the stages they affect.
+- `sync-pack` updates only the project-level pin and never rewrites what a proof claims was proven. It reports each completed stage as valid or needing revalidation, and `next`/`commit` block stale stages with a message pointing at `deltaforge test`. Legacy proofs (no behavioral digest) are upgraded automatically only when the pack is bit-identical to the one that passed.
+- `status` marks completed-but-stale stages with `!` (JSON: `needs_revalidation`).
+- Split integrity digests into two modes. Pack digests reject symlinks and special files outright (pack behavior must be self-contained). Learner project digests hash file symlinks as link path + target path + target contents — so editing or relinking a symlinked source file is detected — and reject directory symlinks with an actionable error.
+- Added `[integrity] exclude = [...]` to `.deltaforge/config.toml`: learner-controlled names appended to the digest exclusion list (matched at any depth, like the built-ins).
 
 ### Benchmark engine v2
 

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use include_dir::{Dir, DirEntry, include_dir};
 use serde::{Deserialize, Serialize};
 
-use crate::integrity::{digest_named_contents, is_safe_relative_path};
+use crate::integrity::{digest_named_contents, is_safe_relative_path, strict_tree_contents};
 use crate::runner::{Expectations, StageTests};
 
 static EMBEDDED_PACKS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/packs");
@@ -218,6 +218,53 @@ impl LoadedPack {
     pub fn read_stage_file(&self, path: &Path) -> Result<String> {
         fs::read_to_string(path)
             .with_context(|| format!("failed to read stage file {}", path.display()))
+    }
+
+    /// Digest of everything that determines whether `stage` passes for the
+    /// given language: the stage's tests, its fixtures, and the language's
+    /// build/run commands. Documentation (instructions, hints, design prompts,
+    /// README) is deliberately excluded so doc-only pack updates do not
+    /// invalidate completion proofs.
+    ///
+    /// NOTE for performance gates: once gate definitions can block
+    /// progression, they become behaviorally relevant and must join this
+    /// digest. `bench_run` stays excluded until then because benchmarks do not
+    /// affect whether a stage passes.
+    pub fn stage_behavioral_digest(
+        &self,
+        stage: &StageSpec,
+        language: &LanguageSpec,
+    ) -> Result<String> {
+        let mut entries = Vec::new();
+
+        let tests_path = self.tests_path(stage);
+        let tests = fs::read(&tests_path).with_context(|| {
+            format!(
+                "failed to read stage tests {} while computing behavioral digest",
+                tests_path.display()
+            )
+        })?;
+        entries.push(("tests.yaml".to_string(), tests));
+
+        let fixtures_dir = self.stage_dir(stage).join("fixtures");
+        if fixtures_dir.is_dir() {
+            for (name, contents) in strict_tree_contents(&fixtures_dir).with_context(|| {
+                format!("failed to digest stage fixtures {}", fixtures_dir.display())
+            })? {
+                entries.push((format!("fixtures/{name}"), contents));
+            }
+        }
+
+        entries.push((
+            "command:build".to_string(),
+            serde_json::to_vec(&language.build).context("failed to serialize build command")?,
+        ));
+        entries.push((
+            "command:run".to_string(),
+            serde_json::to_vec(&language.run).context("failed to serialize run command")?,
+        ));
+
+        Ok(digest_named_contents(entries))
     }
 }
 
