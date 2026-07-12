@@ -3,11 +3,15 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use deltaforge::authoring::{
-    AddStageRequest, CheckReferenceRequest, NewPackRequest, ReplaceStageBenchmarksRequest,
-    ReplaceStageTestsRequest, UpdatePackMetadataRequest, UpdateStageMetadataRequest,
-    WriteFixtureFileRequest, WriteStageDocumentRequest, add_stage, check_reference, create_pack,
-    diagnose_pack, replace_stage_benchmarks, replace_stage_tests, update_pack_metadata,
-    update_stage_metadata, write_fixture_file, write_stage_document,
+    AddStageRequest, CheckReferenceRequest, DeleteFixtureFileRequest, ListFixtureFilesRequest,
+    NewPackRequest, ReadFixtureFileRequest, ReadPackRequest, ReadStageDataRequest,
+    ReadStageDocumentRequest, ReplaceStageBenchmarksRequest, ReplaceStageTestsRequest,
+    UpdatePackMetadataRequest, UpdateStageMetadataRequest, WriteFixtureFileRequest,
+    WriteStageDocumentRequest, add_stage, check_reference, create_pack, delete_fixture_file,
+    diagnose_pack, list_fixture_files, read_fixture_file, read_pack_manifest,
+    read_stage_benchmarks, read_stage_document, read_stage_tests, replace_stage_benchmarks,
+    replace_stage_tests, update_pack_metadata, update_stage_metadata, write_fixture_file,
+    write_stage_document,
 };
 use deltaforge::pack::{PackSearchOptions, discover_packs_with_options, load_pack, validate_pack};
 use serde_json::{Value, json};
@@ -66,7 +70,7 @@ fn handle_request(request: Value) -> Option<Value> {
                     "capabilities": {
                         "tools": {}
                     },
-                    "instructions": "Ground pack work with inspect_packs first. Use the constrained metadata, document, test, fixture, and benchmark tools instead of unconstrained filesystem editing. Mutations require an explicit packs_dir. Treat status=blocked as a hard stop. A pack is not ready until validate_pack and check_reference both return status=ok. Never copy internal reference solutions into learner templates.",
+                    "instructions": "Follow inspect_packs -> read/ground -> mutate -> read/validate. Read the manifest, relevant stage documents, structured tests and benchmarks, and fixture listings/content before changing them. Use only the constrained pack tools instead of unconstrained filesystem editing. Mutations require an explicit packs_dir. Treat status=blocked as a hard stop. Preserve every returned structured field during read-modify-replace workflows, including performance_gates. A pack is not ready until validate_pack and check_reference both return status=ok. Never copy internal reference solutions into learner templates.",
                     "serverInfo": {
                         "name": "deltaforge-pack-mcp",
                         "version": env!("CARGO_PKG_VERSION")
@@ -113,6 +117,8 @@ fn handle_request(request: Value) -> Option<Value> {
                             "type": "text",
                             "text": serde_json::to_string_pretty(&json!({
                                 "status": "blocked",
+                                "pack": null,
+                                "path": null,
                                 "problems": [format!("{error:#}")],
                                 "next_actions": ["Fix the tool arguments or inspect the pack with diagnose_pack."]
                             })).unwrap()
@@ -265,6 +271,88 @@ fn call_tool(request: &Value) -> Result<Value> {
                 stage: required_string(&arguments, "stage")?,
                 benchmarks: required_array_value(&arguments, "benchmarks")?,
                 performance_gates: optional_array_value(&arguments, "performance_gates")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "read_pack_manifest" => {
+            ensure_only_arguments(&arguments, &["project", "packs_dir"])?;
+            let report = read_pack_manifest(&ReadPackRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: optional_path_strict(&arguments, "packs_dir")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "read_stage_document" => {
+            ensure_only_arguments(&arguments, &["project", "packs_dir", "stage", "document"])?;
+            let report = read_stage_document(&ReadStageDocumentRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: optional_path_strict(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+                document: required_string(&arguments, "document")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "read_stage_tests" => {
+            ensure_only_arguments(&arguments, &["project", "packs_dir", "stage"])?;
+            let report = read_stage_tests(&ReadStageDataRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: optional_path_strict(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "read_stage_benchmarks" => {
+            ensure_only_arguments(&arguments, &["project", "packs_dir", "stage"])?;
+            let report = read_stage_benchmarks(&ReadStageDataRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: optional_path_strict(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "list_fixture_files" => {
+            ensure_only_arguments(&arguments, &["project", "packs_dir", "stage", "fixture"])?;
+            let report = list_fixture_files(&ListFixtureFilesRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: optional_path_strict(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+                fixture: optional_string_strict(&arguments, "fixture")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "read_fixture_file" => {
+            ensure_only_arguments(
+                &arguments,
+                &["project", "packs_dir", "stage", "fixture", "path"],
+            )?;
+            let report = read_fixture_file(&ReadFixtureFileRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: optional_path_strict(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+                fixture: required_string(&arguments, "fixture")?,
+                path: required_path(&arguments, "path")?,
+            })?;
+            Ok(serde_json::to_value(report)?)
+        }
+        "delete_fixture_file" => {
+            ensure_only_arguments(
+                &arguments,
+                &[
+                    "project",
+                    "packs_dir",
+                    "stage",
+                    "fixture",
+                    "path",
+                    "confirm",
+                ],
+            )?;
+            let report = delete_fixture_file(&DeleteFixtureFileRequest {
+                project: required_string(&arguments, "project")?,
+                packs_dir: required_path(&arguments, "packs_dir")?,
+                stage: required_string(&arguments, "stage")?,
+                fixture: required_string(&arguments, "fixture")?,
+                path: required_path(&arguments, "path")?,
+                confirm: optional_bool_strict(&arguments, "confirm")?,
             })?;
             Ok(serde_json::to_value(report)?)
         }
@@ -477,6 +565,95 @@ fn tools() -> Value {
             true
         ),
         tool(
+            "read_pack_manifest",
+            "Read the complete parsed manifest for one discovered pack.",
+            read_target_schema(json!({}), &[]),
+            true,
+            false,
+            true
+        ),
+        tool(
+            "read_stage_document",
+            "Read one constrained stage document; an absent optional design prompt returns null content.",
+            read_target_schema(
+                json!({
+                    "stage": {"type": "string", "minLength": 1},
+                    "document": {"type": "string", "enum": ["instructions", "hints", "design_prompt"]}
+                }),
+                &["stage", "document"]
+            ),
+            true,
+            false,
+            true
+        ),
+        tool(
+            "read_stage_tests",
+            "Read tests.yaml as the structured tests array accepted by replace_stage_tests.",
+            read_target_schema(
+                json!({"stage": {"type": "string", "minLength": 1}}),
+                &["stage"]
+            ),
+            true,
+            false,
+            true
+        ),
+        tool(
+            "read_stage_benchmarks",
+            "Read the complete structured benchmarks and performance_gates accepted by replace_stage_benchmarks; an absent optional file returns null.",
+            read_target_schema(
+                json!({"stage": {"type": "string", "minLength": 1}}),
+                &["stage"]
+            ),
+            true,
+            false,
+            true
+        ),
+        tool(
+            "list_fixture_files",
+            "List sorted fixture names or recursively list sorted regular files and byte sizes in one fixture.",
+            read_target_schema(
+                json!({
+                    "stage": {"type": "string", "minLength": 1},
+                    "fixture": {"type": "string", "minLength": 1}
+                }),
+                &["stage"]
+            ),
+            true,
+            false,
+            true
+        ),
+        tool(
+            "read_fixture_file",
+            "Read one UTF-8 regular fixture file up to 1 MiB without following symlinks.",
+            read_target_schema(
+                json!({
+                    "stage": {"type": "string", "minLength": 1},
+                    "fixture": {"type": "string", "minLength": 1},
+                    "path": {"type": "string", "minLength": 1}
+                }),
+                &["stage", "fixture", "path"]
+            ),
+            true,
+            false,
+            true
+        ),
+        tool(
+            "delete_fixture_file",
+            "Permanently delete one confirmed regular file beneath an explicitly selected authored fixture.",
+            authoring_target_schema(
+                json!({
+                    "stage": {"type": "string", "minLength": 1},
+                    "fixture": {"type": "string", "minLength": 1},
+                    "path": {"type": "string", "minLength": 1},
+                    "confirm": {"type": "boolean"}
+                }),
+                &["stage", "fixture", "path", "confirm"]
+            ),
+            false,
+            true,
+            false
+        ),
+        tool(
             "diagnose_pack",
             "Return pack authoring gaps and next actions.",
             json!({
@@ -557,6 +734,33 @@ fn authoring_target_schema(extra_properties: Value, required: &[&str]) -> Value 
             .clone(),
     );
     let mut required_fields = vec![json!("project"), json!("packs_dir")];
+    required_fields.extend(required.iter().map(|field| json!(field)));
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required_fields,
+        "properties": properties
+    })
+}
+
+fn read_target_schema(extra_properties: Value, required: &[&str]) -> Value {
+    let mut properties = serde_json::Map::from_iter([
+        (
+            "project".to_string(),
+            json!({"type": "string", "minLength": 1}),
+        ),
+        (
+            "packs_dir".to_string(),
+            json!({"type": "string", "minLength": 1}),
+        ),
+    ]);
+    properties.extend(
+        extra_properties
+            .as_object()
+            .expect("read schema properties are an object")
+            .clone(),
+    );
+    let mut required_fields = vec![json!("project")];
     required_fields.extend(required.iter().map(|field| json!(field)));
     json!({
         "type": "object",
@@ -767,6 +971,10 @@ fn required_path(arguments: &Value, key: &str) -> Result<PathBuf> {
 
 fn optional_path(arguments: &Value, key: &str) -> Option<PathBuf> {
     optional_string(arguments, key).map(PathBuf::from)
+}
+
+fn optional_path_strict(arguments: &Value, key: &str) -> Result<Option<PathBuf>> {
+    optional_string_strict(arguments, key).map(|value| value.map(PathBuf::from))
 }
 
 fn optional_bool(arguments: &Value, key: &str) -> bool {

@@ -1251,10 +1251,11 @@ fn load_pack_from_manifest(
     }
 
     let pack = LoadedPack { root, manifest };
-    let unsafe_problems = validate_pack(&pack)
-        .into_iter()
-        .filter(|problem| problem.contains("unsafe"))
-        .collect::<Vec<_>>();
+    // Loading must not inspect stage content: read-only authoring callers need
+    // to reject symlinks before any stage file is opened. Validate only the
+    // manifest-declared paths here; full filesystem validation remains in
+    // validate_pack.
+    let unsafe_problems = unsafe_manifest_path_problems(&pack.manifest);
     if !unsafe_problems.is_empty() {
         bail!(
             "pack contains unsafe paths:\n{}",
@@ -1262,6 +1263,28 @@ fn load_pack_from_manifest(
         );
     }
     Ok(pack)
+}
+
+fn unsafe_manifest_path_problems(manifest: &ProjectPack) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (language, spec) in &manifest.languages {
+        if !is_safe_relative_path(&spec.template) {
+            problems.push(format!(
+                "language {language} template path is unsafe: {}",
+                spec.template.display()
+            ));
+        }
+    }
+    for stage in &manifest.stages {
+        if !is_safe_relative_path(&stage.path) {
+            problems.push(format!(
+                "stage {} path is unsafe: {}",
+                stage.id,
+                stage.path.display()
+            ));
+        }
+    }
+    problems
 }
 
 #[cfg(test)]

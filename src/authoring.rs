@@ -9,9 +9,10 @@ use serde_json::Value;
 use crate::fs_util::atomic_write;
 use crate::integrity::is_safe_relative_path;
 use crate::pack::{
-    LoadedPack, PackSearchOptions, load_pack, validate_pack, validate_stage_benchmarks_source,
-    validate_stage_tests_source,
+    LoadedPack, PackSearchOptions, ProjectPack, StageBenchmarks, load_pack, pack_search_dirs,
+    validate_pack, validate_stage_benchmarks_source, validate_stage_tests_source,
 };
+use crate::runner::StageTests;
 
 const MAX_AUTHORED_TEXT_BYTES: usize = 1024 * 1024;
 const MAX_METADATA_BYTES: usize = 4096;
@@ -98,6 +99,54 @@ pub struct ReplaceStageBenchmarksRequest {
     pub performance_gates: Option<Value>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ReadPackRequest {
+    pub project: String,
+    pub packs_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadStageDocumentRequest {
+    pub project: String,
+    pub packs_dir: Option<PathBuf>,
+    pub stage: String,
+    pub document: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadStageDataRequest {
+    pub project: String,
+    pub packs_dir: Option<PathBuf>,
+    pub stage: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ListFixtureFilesRequest {
+    pub project: String,
+    pub packs_dir: Option<PathBuf>,
+    pub stage: String,
+    pub fixture: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadFixtureFileRequest {
+    pub project: String,
+    pub packs_dir: Option<PathBuf>,
+    pub stage: String,
+    pub fixture: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeleteFixtureFileRequest {
+    pub project: String,
+    pub packs_dir: PathBuf,
+    pub stage: String,
+    pub fixture: String,
+    pub path: PathBuf,
+    pub confirm: bool,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AuthoringReport {
     pub status: String,
@@ -105,6 +154,56 @@ pub struct AuthoringReport {
     pub path: Option<String>,
     pub problems: Vec<String>,
     pub next_actions: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadPackManifestReport {
+    #[serde(flatten)]
+    pub report: AuthoringReport,
+    pub manifest: Option<ProjectPack>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadStageDocumentReport {
+    #[serde(flatten)]
+    pub report: AuthoringReport,
+    pub content: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadStageTestsReport {
+    #[serde(flatten)]
+    pub report: AuthoringReport,
+    pub tests: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadStageBenchmarksReport {
+    #[serde(flatten)]
+    pub report: AuthoringReport,
+    pub benchmarks: Option<Value>,
+    pub performance_gates: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FixtureFileEntry {
+    pub path: String,
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListFixtureFilesReport {
+    #[serde(flatten)]
+    pub report: AuthoringReport,
+    pub fixtures: Option<Vec<String>>,
+    pub files: Option<Vec<FixtureFileEntry>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadFixtureFileReport {
+    #[serde(flatten)]
+    pub report: AuthoringReport,
+    pub content: Option<String>,
 }
 
 impl AuthoringReport {
@@ -472,6 +571,440 @@ pub fn replace_stage_benchmarks(
     ))
 }
 
+pub fn read_pack_manifest(request: &ReadPackRequest) -> Result<ReadPackManifestReport> {
+    let pack = load_read_authoring_pack(&request.project, request.packs_dir.as_deref())?;
+    let relative = Path::new("project.yaml");
+    reject_symlink_components(&pack.root, relative)?;
+    let path = pack.root.join(relative);
+    require_regular_file(&path)?;
+    Ok(ReadPackManifestReport {
+        report: AuthoringReport::ok(
+            pack.manifest.id.clone(),
+            path,
+            vec![
+                "Read stage documents, tests, benchmarks, and fixtures before mutating the pack."
+                    .to_string(),
+            ],
+        ),
+        manifest: Some(pack.manifest),
+    })
+}
+
+pub fn read_stage_document(request: &ReadStageDocumentRequest) -> Result<ReadStageDocumentReport> {
+    let pack = load_read_authoring_pack(&request.project, request.packs_dir.as_deref())?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let (file_name, optional) = match request.document.as_str() {
+        "instructions" => ("instructions.md", false),
+        "hints" => ("hints.md", false),
+        "design_prompt" => ("design_prompt.md", true),
+        other => bail!(
+            "unsupported stage document {other}; expected instructions, hints, or design_prompt"
+        ),
+    };
+    let relative = stage.path.join(file_name);
+    reject_symlink_components(&pack.root, &relative)?;
+    let path = pack.root.join(&relative);
+    if !path.exists() && optional {
+        return Ok(ReadStageDocumentReport {
+            report: AuthoringReport::ok(
+                pack.manifest.id,
+                path,
+                vec![format!(
+                    "The optional {} document is not present; write it only if the stage needs it.",
+                    request.document
+                )],
+            ),
+            content: None,
+        });
+    }
+    let bytes = match read_authored_regular_file(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Ok(ReadStageDocumentReport {
+                report: read_blocked(&pack, &path, format!("{error:#}")),
+                content: None,
+            });
+        }
+    };
+    let content = match String::from_utf8(bytes) {
+        Ok(content) => content,
+        Err(error) => {
+            return Ok(ReadStageDocumentReport {
+                report: read_blocked(
+                    &pack,
+                    &path,
+                    format!("stage document is not valid UTF-8: {error}"),
+                ),
+                content: None,
+            });
+        }
+    };
+    Ok(ReadStageDocumentReport {
+        report: AuthoringReport::ok(
+            pack.manifest.id,
+            path,
+            vec!["Use write_stage_document to replace this exact document if needed.".to_string()],
+        ),
+        content: Some(content),
+    })
+}
+
+pub fn read_stage_tests(request: &ReadStageDataRequest) -> Result<ReadStageTestsReport> {
+    let pack = load_read_authoring_pack(&request.project, request.packs_dir.as_deref())?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let relative = stage.path.join("tests.yaml");
+    reject_symlink_components(&pack.root, &relative)?;
+    let path = pack.root.join(relative);
+    let source = match read_authored_yaml(&path, "stage tests") {
+        Ok(source) => source,
+        Err(error) => {
+            return Ok(ReadStageTestsReport {
+                report: read_blocked(&pack, &path, format!("{error:#}")),
+                tests: None,
+            });
+        }
+    };
+    match serde_yaml::from_str::<StageTests>(&source) {
+        Ok(parsed) if parsed.tests.is_empty() => {
+            return Ok(ReadStageTestsReport {
+                report: read_blocked(&pack, &path, "tests.yaml must contain at least one test"),
+                tests: None,
+            });
+        }
+        Ok(_) => {}
+        Err(error) => {
+            return Ok(ReadStageTestsReport {
+                report: read_blocked(&pack, &path, format!("tests.yaml is malformed: {error}")),
+                tests: None,
+            });
+        }
+    }
+    let document: Value = match serde_yaml::from_str(&source) {
+        Ok(document) => document,
+        Err(error) => {
+            return Ok(ReadStageTestsReport {
+                report: read_blocked(&pack, &path, format!("tests.yaml is malformed: {error}")),
+                tests: None,
+            });
+        }
+    };
+    let tests = document.get("tests").cloned().unwrap_or_else(json_array);
+    Ok(ReadStageTestsReport {
+        report: AuthoringReport::ok(
+            pack.manifest.id,
+            path,
+            vec![
+                "Modify this tests array and pass it unchanged otherwise to replace_stage_tests."
+                    .to_string(),
+            ],
+        ),
+        tests: Some(tests),
+    })
+}
+
+pub fn read_stage_benchmarks(request: &ReadStageDataRequest) -> Result<ReadStageBenchmarksReport> {
+    let pack = load_read_authoring_pack(&request.project, request.packs_dir.as_deref())?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let relative = stage.path.join("benchmarks.yaml");
+    reject_symlink_components(&pack.root, &relative)?;
+    let path = pack.root.join(relative);
+    if !path.exists() {
+        return Ok(ReadStageBenchmarksReport {
+            report: AuthoringReport::ok(
+                pack.manifest.id,
+                path,
+                vec!["This optional stage has no benchmarks.yaml file.".to_string()],
+            ),
+            benchmarks: None,
+            performance_gates: None,
+        });
+    }
+    let source = match read_authored_yaml(&path, "stage benchmarks") {
+        Ok(source) => source,
+        Err(error) => {
+            return Ok(ReadStageBenchmarksReport {
+                report: read_blocked(&pack, &path, format!("{error:#}")),
+                benchmarks: None,
+                performance_gates: None,
+            });
+        }
+    };
+    match serde_yaml::from_str::<StageBenchmarks>(&source) {
+        Ok(parsed) if parsed.benchmarks.is_empty() => {
+            return Ok(ReadStageBenchmarksReport {
+                report: read_blocked(
+                    &pack,
+                    &path,
+                    "benchmarks.yaml must contain at least one benchmark",
+                ),
+                benchmarks: None,
+                performance_gates: None,
+            });
+        }
+        Ok(_) => {}
+        Err(error) => {
+            return Ok(ReadStageBenchmarksReport {
+                report: read_blocked(
+                    &pack,
+                    &path,
+                    format!("benchmarks.yaml is malformed: {error}"),
+                ),
+                benchmarks: None,
+                performance_gates: None,
+            });
+        }
+    }
+    let document: Value = match serde_yaml::from_str(&source) {
+        Ok(document) => document,
+        Err(error) => {
+            return Ok(ReadStageBenchmarksReport {
+                report: read_blocked(
+                    &pack,
+                    &path,
+                    format!("benchmarks.yaml is malformed: {error}"),
+                ),
+                benchmarks: None,
+                performance_gates: None,
+            });
+        }
+    };
+    let benchmarks = document
+        .get("benchmarks")
+        .cloned()
+        .unwrap_or_else(json_array);
+    let performance_gates = document
+        .get("performance_gates")
+        .cloned()
+        .unwrap_or_else(json_array);
+    Ok(ReadStageBenchmarksReport {
+        report: AuthoringReport::ok(
+            pack.manifest.id,
+            path,
+            vec![
+                "Pass both arrays to replace_stage_benchmarks so performance gates are preserved."
+                    .to_string(),
+            ],
+        ),
+        benchmarks: Some(benchmarks),
+        performance_gates: Some(performance_gates),
+    })
+}
+
+pub fn list_fixture_files(request: &ListFixtureFilesRequest) -> Result<ListFixtureFilesReport> {
+    let pack = load_read_authoring_pack(&request.project, request.packs_dir.as_deref())?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let fixtures_relative = stage.path.join("fixtures");
+    reject_symlink_components(&pack.root, &fixtures_relative)?;
+    let fixtures_root = pack.root.join(&fixtures_relative);
+    let metadata = match fs::symlink_metadata(&fixtures_root) {
+        Ok(metadata) if metadata.is_dir() => metadata,
+        Ok(_) => {
+            return Ok(ListFixtureFilesReport {
+                report: read_blocked(&pack, &fixtures_root, "fixtures path is not a directory"),
+                fixtures: None,
+                files: None,
+            });
+        }
+        Err(error) => {
+            return Ok(ListFixtureFilesReport {
+                report: read_blocked(
+                    &pack,
+                    &fixtures_root,
+                    format!("failed to inspect fixtures directory: {error}"),
+                ),
+                fixtures: None,
+                files: None,
+            });
+        }
+    };
+    debug_assert!(metadata.is_dir());
+
+    if let Some(fixture) = &request.fixture {
+        validate_fixture_name(fixture)?;
+        let relative = fixtures_relative.join(fixture);
+        reject_symlink_components(&pack.root, &relative)?;
+        let fixture_root = pack.root.join(relative);
+        let mut files = Vec::new();
+        if let Err(error) = collect_fixture_files(&fixture_root, &fixture_root, &mut files) {
+            return Ok(ListFixtureFilesReport {
+                report: read_blocked(&pack, &fixture_root, format!("{error:#}")),
+                fixtures: None,
+                files: None,
+            });
+        }
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        return Ok(ListFixtureFilesReport {
+            report: AuthoringReport::ok(
+                pack.manifest.id,
+                fixture_root,
+                vec!["Use read_fixture_file with one listed relative path.".to_string()],
+            ),
+            fixtures: None,
+            files: Some(files),
+        });
+    }
+
+    let mut fixtures = Vec::new();
+    let entries = fs::read_dir(&fixtures_root).with_context(|| {
+        format!(
+            "failed to read fixtures directory {}",
+            fixtures_root.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() || !file_type.is_dir() {
+            return Ok(ListFixtureFilesReport {
+                report: read_blocked(
+                    &pack,
+                    &entry.path(),
+                    "fixture entries must be real directories; symlinks and special files are forbidden",
+                ),
+                fixtures: None,
+                files: None,
+            });
+        }
+        let name = match entry.file_name().into_string() {
+            Ok(name) => name,
+            Err(_) => {
+                return Ok(ListFixtureFilesReport {
+                    report: read_blocked(&pack, &entry.path(), "fixture name is not valid UTF-8"),
+                    fixtures: None,
+                    files: None,
+                });
+            }
+        };
+        fixtures.push(name);
+    }
+    fixtures.sort();
+    Ok(ListFixtureFilesReport {
+        report: AuthoringReport::ok(
+            pack.manifest.id,
+            fixtures_root,
+            vec!["Choose a fixture and list its files before reading content.".to_string()],
+        ),
+        fixtures: Some(fixtures),
+        files: None,
+    })
+}
+
+pub fn read_fixture_file(request: &ReadFixtureFileRequest) -> Result<ReadFixtureFileReport> {
+    validate_fixture_name(&request.fixture)?;
+    if !is_safe_relative_path(&request.path) {
+        bail!("unsafe fixture file path: {}", request.path.display());
+    }
+    let pack = load_read_authoring_pack(&request.project, request.packs_dir.as_deref())?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let relative = stage
+        .path
+        .join("fixtures")
+        .join(&request.fixture)
+        .join(&request.path);
+    reject_symlink_components(&pack.root, &relative)?;
+    let path = pack.root.join(relative);
+    let bytes = match read_authored_regular_file(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Ok(ReadFixtureFileReport {
+                report: read_blocked(&pack, &path, format!("{error:#}")),
+                content: None,
+            });
+        }
+    };
+    let content = match String::from_utf8(bytes) {
+        Ok(content) => content,
+        Err(_) => {
+            return Ok(ReadFixtureFileReport {
+                report: read_blocked(
+                    &pack,
+                    &path,
+                    "fixture file is not valid UTF-8; binary fixtures are not supported by this tool",
+                ),
+                content: None,
+            });
+        }
+    };
+    Ok(ReadFixtureFileReport {
+        report: AuthoringReport::ok(
+            pack.manifest.id,
+            path,
+            vec![
+                "Use write_fixture_file with overwrite=true only after grounding on this content."
+                    .to_string(),
+            ],
+        ),
+        content: Some(content),
+    })
+}
+
+pub fn delete_fixture_file(request: &DeleteFixtureFileRequest) -> Result<AuthoringReport> {
+    validate_fixture_name(&request.fixture)?;
+    if !is_safe_relative_path(&request.path) {
+        bail!("unsafe fixture file path: {}", request.path.display());
+    }
+    let expected_path = request
+        .packs_dir
+        .join(&request.project)
+        .join("stages")
+        .join(&request.stage)
+        .join("fixtures")
+        .join(&request.fixture)
+        .join(&request.path);
+    if !request.confirm {
+        return Ok(AuthoringReport::blocked(
+            Some(request.project.clone()),
+            Some(&expected_path),
+            vec!["delete_fixture_file requires confirm=true".to_string()],
+            vec![
+                "Re-read the fixture file, then retry with confirm=true if deletion is intended."
+                    .to_string(),
+            ],
+        ));
+    }
+    let pack = load_explicit_authoring_pack(&request.project, &request.packs_dir)?;
+    let stage = require_stage(&pack, &request.stage)?;
+    let fixture_relative = stage.path.join("fixtures").join(&request.fixture);
+    reject_symlink_components(&pack.root, &fixture_relative)?;
+    let fixture_root = pack.root.join(&fixture_relative);
+    let relative = fixture_relative.join(&request.path);
+    reject_symlink_components(&pack.root, &relative)?;
+    let path = pack.root.join(relative);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
+        Ok(_) => {
+            return Ok(AuthoringReport::blocked(
+                Some(pack.manifest.id),
+                Some(&path),
+                vec!["delete target is not a regular file".to_string()],
+                vec!["Choose one regular file beneath the named fixture.".to_string()],
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(AuthoringReport::blocked(
+                Some(pack.manifest.id),
+                Some(&path),
+                vec!["fixture file does not exist".to_string()],
+                vec!["List the fixture again and choose an existing regular file.".to_string()],
+            ));
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+        }
+    };
+    debug_assert!(metadata.is_file());
+    fs::remove_file(&path).with_context(|| format!("failed to delete {}", path.display()))?;
+    remove_empty_fixture_parents(path.parent(), &fixture_root);
+    Ok(AuthoringReport::ok(
+        pack.manifest.id,
+        path,
+        vec![
+            "Re-list the fixture and update tests or benchmarks that referenced this file."
+                .to_string(),
+        ],
+    ))
+}
+
 fn structured_benchmarks_yaml(
     benchmarks: &Value,
     performance_gates: Option<&Value>,
@@ -483,6 +1016,129 @@ fn structured_benchmarks_yaml(
     }
     serde_yaml::to_string(&Value::Object(object))
         .context("failed to serialize structured benchmarks YAML")
+}
+
+fn json_array() -> Value {
+    Value::Array(Vec::new())
+}
+
+fn read_blocked(pack: &LoadedPack, path: &Path, problem: impl Into<String>) -> AuthoringReport {
+    AuthoringReport::blocked(
+        Some(pack.manifest.id.clone()),
+        Some(path),
+        vec![problem.into()],
+        vec!["Inspect the reported path and fix the pack before retrying.".to_string()],
+    )
+}
+
+fn read_authored_yaml(path: &Path, label: &str) -> Result<String> {
+    let bytes = read_authored_regular_file(path)?;
+    String::from_utf8(bytes).with_context(|| format!("{label} is not valid UTF-8"))
+}
+
+fn read_authored_regular_file(path: &Path) -> Result<Vec<u8>> {
+    let metadata = require_regular_file(path)?;
+    if metadata.len() > MAX_AUTHORED_TEXT_BYTES as u64 {
+        bail!(
+            "file exceeds the {} byte authored-text limit",
+            MAX_AUTHORED_TEXT_BYTES
+        );
+    }
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    if bytes.len() > MAX_AUTHORED_TEXT_BYTES {
+        bail!(
+            "file exceeds the {} byte authored-text limit",
+            MAX_AUTHORED_TEXT_BYTES
+        );
+    }
+    Ok(bytes)
+}
+
+fn require_regular_file(path: &Path) -> Result<fs::Metadata> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!("refusing to follow symbolic link: {}", path.display())
+        }
+        Ok(metadata) if metadata.is_file() => Ok(metadata),
+        Ok(_) => bail!("path is not a regular file: {}", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            bail!("required file is missing: {}", path.display())
+        }
+        Err(error) => Err(error).with_context(|| format!("failed to inspect {}", path.display())),
+    }
+}
+
+fn validate_fixture_name(fixture: &str) -> Result<()> {
+    let path = Path::new(fixture);
+    if !is_safe_relative_path(path) || path.components().count() != 1 {
+        bail!("unsafe fixture name: {fixture}");
+    }
+    Ok(())
+}
+
+fn collect_fixture_files(
+    fixture_root: &Path,
+    current: &Path,
+    files: &mut Vec<FixtureFileEntry>,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(current)
+        .with_context(|| format!("failed to inspect fixture path {}", current.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "fixture root must be a real directory: {}",
+            fixture_root.display()
+        );
+    }
+    for entry in fs::read_dir(current)
+        .with_context(|| format!("failed to read fixture directory {}", current.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            bail!("fixture tree contains a symbolic link: {}", path.display());
+        }
+        if file_type.is_dir() {
+            collect_fixture_files(fixture_root, &path, files)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            bail!("fixture tree contains a special file: {}", path.display());
+        }
+        let relative = path.strip_prefix(fixture_root)?;
+        if !is_safe_relative_path(relative) {
+            bail!("fixture tree contains an unsafe path: {}", path.display());
+        }
+        let relative = relative
+            .to_str()
+            .with_context(|| format!("fixture path is not valid UTF-8: {}", path.display()))?
+            .replace('\\', "/");
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("failed to inspect fixture file {}", path.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            bail!("fixture entry changed while listing: {}", path.display());
+        }
+        files.push(FixtureFileEntry {
+            path: relative,
+            size: metadata.len(),
+        });
+    }
+    Ok(())
+}
+
+fn remove_empty_fixture_parents(mut current: Option<&Path>, fixture_root: &Path) {
+    while let Some(directory) = current {
+        if directory == fixture_root || !directory.starts_with(fixture_root) {
+            break;
+        }
+        let empty = fs::read_dir(directory)
+            .map(|mut entries| entries.next().is_none())
+            .unwrap_or(false);
+        if !empty || fs::remove_dir(directory).is_err() {
+            break;
+        }
+        current = directory.parent();
+    }
 }
 
 pub fn diagnose_pack(pack: &LoadedPack) -> AuthoringReport {
@@ -638,15 +1294,89 @@ fn validate_identifier(value: &str) -> Result<()> {
     Ok(())
 }
 
+fn load_read_authoring_pack(project: &str, packs_dir: Option<&Path>) -> Result<LoadedPack> {
+    let options = PackSearchOptions {
+        packs_dir: packs_dir.map(Path::to_path_buf),
+    };
+    if !is_safe_relative_path(Path::new(project)) || Path::new(project).components().count() != 1 {
+        bail!("unsafe project pack id: {project}");
+    }
+    for search_dir in pack_search_dirs(&options) {
+        let root = search_dir.join(project);
+        let manifest = root.join("project.yaml");
+        match fs::symlink_metadata(&root) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!("pack root must not be a symbolic link: {}", root.display());
+            }
+            Ok(metadata) if !metadata.is_dir() => continue,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect pack root {}", root.display()));
+            }
+        }
+        match fs::symlink_metadata(&manifest) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "refusing to read symlinked pack manifest: {}",
+                    manifest.display()
+                );
+            }
+            Ok(metadata) if !metadata.is_file() => {
+                bail!(
+                    "pack manifest is not a regular file: {}",
+                    manifest.display()
+                );
+            }
+            Ok(_) => {
+                return load_pack(project, &options);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect {}", manifest.display()));
+            }
+        }
+    }
+    load_pack(project, &options)
+}
+
 fn load_explicit_authoring_pack(project: &str, packs_dir: &Path) -> Result<LoadedPack> {
     validate_identifier(project)?;
     let expected_root = packs_dir.join(project);
     let manifest = expected_root.join("project.yaml");
-    if !manifest.is_file() {
-        bail!(
-            "authoring pack manifest is missing: {}; mutations require an explicit packs_dir",
-            manifest.display()
-        );
+    match fs::symlink_metadata(&expected_root) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            bail!(
+                "explicit authoring pack root must be a real directory: {}",
+                expected_root.display()
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            bail!(
+                "authoring pack manifest is missing: {}; mutations require an explicit packs_dir",
+                manifest.display()
+            );
+        }
+        Err(error) => return Err(error.into()),
+    }
+    match fs::symlink_metadata(&manifest) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            bail!(
+                "explicit authoring pack manifest must be a regular file: {}",
+                manifest.display()
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            bail!(
+                "authoring pack manifest is missing: {}; mutations require an explicit packs_dir",
+                manifest.display()
+            );
+        }
+        Err(error) => return Err(error.into()),
     }
     let pack = load_pack(
         project,
