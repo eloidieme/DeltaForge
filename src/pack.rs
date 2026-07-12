@@ -228,8 +228,14 @@ impl LoadedPack {
     ///
     /// NOTE for performance gates: once gate definitions can block
     /// progression, they become behaviorally relevant and must join this
-    /// digest. `bench_run` stays excluded until then because benchmarks do not
-    /// affect whether a stage passes.
+    /// digest — but hash a canonical serialization of the parsed,
+    /// progression-affecting semantics only (gate metric/bound/params, the
+    /// referenced benchmark's command/fixture/matrix, and `bench_run` for
+    /// gate-bearing stages), not the raw benchmarks.yaml bytes. Educational
+    /// `advice` text and measurement methodology (iterations, warmup,
+    /// timeout) must stay excluded so editing them behaves like a
+    /// documentation-only update. `bench_run` stays excluded until then
+    /// because benchmarks do not affect whether a stage passes today.
     pub fn stage_behavioral_digest(
         &self,
         stage: &StageSpec,
@@ -581,8 +587,61 @@ pub fn validate_pack(pack: &LoadedPack) -> Vec<String> {
 
     validate_languages(pack, &mut problems);
     validate_stages(pack, &mut problems);
+    validate_pack_tree_is_self_contained(pack, &mut problems);
 
     problems
+}
+
+/// Walk the whole pack tree and report every symlink or special file. This is
+/// base (not `--strict`) validation because such a pack is guaranteed to fail
+/// later: `digest_pack_tree` rejects non-regular entries during init,
+/// sync-pack, and behavioral proof computation. Authors should learn that at
+/// validation time, with every offender listed in one pass. Metadata-only —
+/// no file contents are read.
+fn validate_pack_tree_is_self_contained(pack: &LoadedPack, problems: &mut Vec<String>) {
+    collect_non_regular_entries(&pack.root, problems);
+}
+
+fn collect_non_regular_entries(dir: &Path, problems: &mut Vec<String>) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            problems.push(format!(
+                "pack directory is unreadable: {}: {error}",
+                dir.display()
+            ));
+            return;
+        }
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            problems.push(format!(
+                "pack directory entry is unreadable in {}",
+                dir.display()
+            ));
+            continue;
+        };
+        let path = entry.path();
+        // Does not follow symlinks, so a symlinked directory is reported
+        // rather than traversed.
+        let Ok(file_type) = entry.file_type() else {
+            problems.push(format!("pack entry is uninspectable: {}", path.display()));
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_non_regular_entries(&path, problems);
+        } else if file_type.is_symlink() {
+            problems.push(format!(
+                "pack content must be self-contained: {} is a symbolic link; replace it with a regular copy of its target",
+                path.display()
+            ));
+        } else if !file_type.is_file() {
+            problems.push(format!(
+                "pack content must be self-contained: {} is a special file",
+                path.display()
+            ));
+        }
+    }
 }
 
 fn current_pack_schema_version() -> u32 {

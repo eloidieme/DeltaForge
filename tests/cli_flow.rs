@@ -568,6 +568,40 @@ fn validate_pack_reports_invalid_external_pack() {
     assert_stderr_contains(&validate, "error: pack validation failed");
 }
 
+#[cfg(unix)]
+#[test]
+fn validate_pack_reports_symlinks_in_pack_content() {
+    let packs_root = temp_project_path("symlink-pack-root");
+    let external_pack = packs_root.join("flashindex");
+    copy_dir_recursive(&repo_root().join("packs/flashindex"), &external_pack);
+
+    // Two offenders in one pack: validation must list them both in one pass,
+    // not stop at the first like the digest does.
+    std::os::unix::fs::symlink(
+        external_pack.join("README.md"),
+        external_pack.join("stages/01_scan_files/notes-link.md"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        external_pack.join("stages/01_scan_files/fixtures/basic_project"),
+        external_pack.join("stages/02_filter_files/fixtures/linked_project"),
+    )
+    .unwrap();
+
+    let validate = run_deltaforge_with_env(
+        ["validate-pack", "flashindex"],
+        &repo_root(),
+        &[("DELTAFORGE_PACKS_DIR", &packs_root)],
+    );
+
+    assert_failure(&validate);
+    assert_stdout_contains(&validate, "✗ flashindex is invalid");
+    assert_stdout_contains(&validate, "notes-link.md is a symbolic link");
+    assert_stdout_contains(&validate, "linked_project is a symbolic link");
+
+    let _ = fs::remove_dir_all(packs_root);
+}
+
 #[test]
 fn validate_pack_reports_invalid_benchmark_fixture() {
     let packs_root = temp_project_path("invalid-benchmark-pack-root");
