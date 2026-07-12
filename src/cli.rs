@@ -106,13 +106,29 @@ pub struct InstructionsArgs {
     /// Show instructions for all stages.
     #[arg(long)]
     pub all: bool,
+
+    /// Render in the terminal instead of opening the learning page.
+    #[arg(long, conflicts_with = "no_open")]
+    pub terminal: bool,
+
+    /// Generate the learning page and print its path without opening a browser.
+    #[arg(long)]
+    pub no_open: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct OverviewArgs {
     /// Print machine-readable JSON only.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["terminal", "no_open"])]
     pub json: bool,
+
+    /// Render in the terminal instead of opening the learning page.
+    #[arg(long, conflicts_with = "no_open")]
+    pub terminal: bool,
+
+    /// Generate the learning page and print its path without opening a browser.
+    #[arg(long)]
+    pub no_open: bool,
 }
 
 #[derive(Debug, Args)]

@@ -7,8 +7,8 @@
 - `pack doctor`: report authoring quality gaps, including missing edge-case/non-goal sections, fewer than three hints, and fewer than two tests.
 - `pack check-reference`: prove a pack with a reference solution.
 - `init <pack> --lang <language>`: create a learner repo.
-- `overview`: show what the project is, why it matters, and the full stage roadmap.
-- `instructions`: show current stage instructions.
+- `overview`: open the local learning page at the project overview, including the big picture, progress, and full stage roadmap.
+- `instructions`: open the local learning page at the current stage (or a stage selected with `--stage`).
 - `test`: run black-box stage tests.
 - `explain-failure`: summarize the last failed test run and suggest next steps.
 - `next`: unlock the next stage after tests pass. Gate-bearing stages also require a current passing performance record from `deltaforge bench`, unless `[gates] enforce = false`; the latter prints `performance gates skipped: gates.enforce = false` without claiming a pass.
@@ -43,9 +43,11 @@ Global flags:
 
 Display behavior:
 
-- `overview` and `instructions` open in `$PAGER` when run in an interactive terminal, defaulting to `less -R`.
-- Set `DELTAFORGE_NO_PAGER=1` to print directly.
-- Piped or redirected output never uses a pager.
+- In an interactive terminal, `overview` and `instructions` generate `.deltaforge/ui/learning.html` and open it in the system browser. The page is self-contained: it loads no scripts, fonts, styles, or learner content from the network.
+- The learning page keeps the complete pack available in a stage sidebar, but presents the current task in smaller tabs: task, example, rationale, and reference. It also shows completed/current/upcoming status and previews the neighboring stages.
+- Pass `--terminal` to use the original terminal renderer. Pass `--no-open` to generate the page and print its path without launching a browser; this is useful in remote environments and automated tests.
+- Set `DELTAFORGE_NO_BROWSER=1` to make browser-capable commands use their terminal view by default. Piped or redirected commands also stay in the terminal so scripts do not launch a GUI. `overview --json` remains JSON-only.
+- The terminal renderer may open `$PAGER`, defaulting to `less -R`. Set `DELTAFORGE_NO_PAGER=1` to print that view directly.
 - When a test fails outside `--json` mode, the runner prints the program's actual stdout (and stderr if non-empty) beneath the failure, truncated to the first 30 lines / 2000 characters. Use `--verbose` for full output.
 - `list`, `doctor`, and `validate-pack` tolerate a single malformed pack in a search directory: `list` warns on stderr and still lists the valid packs, `doctor` reports the broken pack, and `validate-pack` reports it and exits non-zero.
 

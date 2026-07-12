@@ -5,6 +5,7 @@ pub mod config;
 pub mod context;
 pub mod fs_util;
 pub mod integrity;
+pub mod learning_web;
 pub mod pack;
 pub mod process;
 pub mod runner;

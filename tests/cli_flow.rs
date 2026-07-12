@@ -227,6 +227,30 @@ fn starter_project_initializes_and_fails_current_stage() {
     assert_eq!(parsed_overview["project"], "flashindex");
     assert_eq!(parsed_overview["roadmap"].as_array().unwrap().len(), 10);
 
+    let generated_overview = run_deltaforge(["overview", "--no-open"], &project_dir);
+    assert_success(&generated_overview);
+    assert_stdout_contains(&generated_overview, "Generated learning page:");
+    let learning_page_path = project_dir
+        .join(".deltaforge")
+        .join("ui")
+        .join("learning.html");
+    let learning_page = fs::read_to_string(&learning_page_path).unwrap();
+    assert!(learning_page.contains("Project overview"));
+    assert!(learning_page.contains("Start with the big idea"));
+    assert!(learning_page.contains("data-tab=\"overview-roadmap\""));
+    assert!(learning_page.contains("Stage 10"));
+    assert!(!learning_page.contains("https://"));
+
+    let generated_instructions = run_deltaforge(
+        ["instructions", "--stage", "02_filter_files", "--no-open"],
+        &project_dir,
+    );
+    assert_success(&generated_instructions);
+    let learning_page = fs::read_to_string(&learning_page_path).unwrap();
+    assert!(learning_page.contains("data-initial-target=\"stage-02_filter_files\""));
+    assert!(learning_page.contains("Choose searchable files"));
+    assert!(learning_page.contains("Why?"));
+
     let status = run_deltaforge(["status"], &project_dir);
     assert_success(&status);
     assert_stdout_contains(&status, "→ 01_scan_files - Scan files");
