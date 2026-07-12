@@ -1,0 +1,2 @@
+struct Gamma {}
+fn gamma() {}

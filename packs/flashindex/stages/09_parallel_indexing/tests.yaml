@@ -1,0 +1,53 @@
+tests:
+  - name: single thread matches the canonical index
+    fixture: parallel_project
+    command: ["index", "{fixture_path}", "--threads", "1"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        Gamma lib/core.rs
+        alpha src/a.rs src/b.rs
+        beta src/a.rs src/b.rs
+        delta src/b.rs
+        fn lib/core.rs src/a.rs src/b.rs
+        gamma lib/core.rs src/a.rs
+        let src/a.rs src/b.rs
+        struct lib/core.rs
+
+  - name: four threads produce byte-identical output
+    fixture: parallel_project
+    command: ["index", "{fixture_path}", "--threads", "4"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        Gamma lib/core.rs
+        alpha src/a.rs src/b.rs
+        beta src/a.rs src/b.rs
+        delta src/b.rs
+        fn lib/core.rs src/a.rs src/b.rs
+        gamma lib/core.rs src/a.rs
+        let src/a.rs src/b.rs
+        struct lib/core.rs
+
+  - name: more threads than files still indexes everything
+    fixture: parallel_project
+    command: ["index", "{fixture_path}", "--threads", "16"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "alpha src/a.rs src/b.rs"
+        - "struct lib/core.rs"
+
+  - name: zero threads is rejected
+    fixture: parallel_project
+    command: ["index", "{fixture_path}", "--threads", "0"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+
+  - name: non-numeric thread count is rejected
+    fixture: parallel_project
+    command: ["index", "{fixture_path}", "--threads", "abc"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""

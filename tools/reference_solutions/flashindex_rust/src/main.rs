@@ -25,11 +25,16 @@ fn run() -> Result<(), String> {
         [command, root, flag, out] if command == "index" && flag == "--out" => {
             write_index(Path::new(root), Path::new(out))
         }
+        [command, root, flag, threads] if command == "index" && flag == "--threads" => {
+            parallel_index(Path::new(root), threads)
+        }
         [command, index_path, token] if command == "query" => query(Path::new(index_path), token),
+        [command, root, query] if command == "rank" => rank(Path::new(root), query),
         [command, root] if command == "bench" => bench(Path::new(root)),
         [command, root] if command == "summary" => summary(Path::new(root)),
         _ => Err(
-            "usage: flashindex <scan|tokenize|search|index|query|bench|summary> ...".to_string(),
+            "usage: flashindex <scan|tokenize|search|index|query|rank|bench|summary> ..."
+                .to_string(),
         ),
     }
 }
@@ -99,6 +104,131 @@ fn write_index(root: &Path, output: &Path) -> Result<(), String> {
     }
     fs::write(output, serialized).map_err(|error| error.to_string())?;
     println!("wrote {}", output.display());
+    Ok(())
+}
+
+fn parallel_index(root: &Path, threads: &str) -> Result<(), String> {
+    let worker_count: usize = threads
+        .parse()
+        .ok()
+        .filter(|count| *count >= 1)
+        .ok_or_else(|| format!("--threads expects a positive integer, got {threads:?}"))?;
+
+    // Collect the deterministic file list once, then partition it across
+    // worker-local indexes. Each worker owns a disjoint slice of files, so no
+    // shared mutable state is touched during indexing.
+    let files = source_files(root)?;
+    let chunk_size = files.len().div_ceil(worker_count).max(1);
+    let chunks: Vec<Vec<PathBuf>> = files
+        .chunks(chunk_size)
+        .map(|chunk| chunk.to_vec())
+        .collect();
+
+    let root = root.to_path_buf();
+    let mut handles = Vec::new();
+    for chunk in chunks {
+        let root = root.clone();
+        handles.push(std::thread::spawn(move || index_files(&root, &chunk)));
+    }
+
+    // Merge worker-local indexes deterministically. Because the merge iterates
+    // sorted maps and unions sorted sets, the printed output is byte-identical
+    // to the single-threaded `index` command regardless of the worker count.
+    let mut merged = BTreeMap::<String, BTreeSet<PathBuf>>::new();
+    for handle in handles {
+        let local = handle
+            .join()
+            .map_err(|_| "worker thread panicked".to_string())??;
+        for (token, paths) in local {
+            merged.entry(token).or_default().extend(paths);
+        }
+    }
+
+    for (token, paths) in merged {
+        let paths = paths
+            .into_iter()
+            .map(|path| portable_path(&path))
+            .collect::<Vec<_>>()
+            .join(" ");
+        println!("{token} {paths}");
+    }
+    Ok(())
+}
+
+fn index_files(
+    root: &Path,
+    files: &[PathBuf],
+) -> Result<BTreeMap<String, BTreeSet<PathBuf>>, String> {
+    let mut index = BTreeMap::<String, BTreeSet<PathBuf>>::new();
+    for relative_path in files {
+        let path = root.join(relative_path);
+        let source = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+        for occurrence in tokens_in_source(&source) {
+            index
+                .entry(occurrence)
+                .or_default()
+                .insert(relative_path.clone());
+        }
+    }
+    Ok(index)
+}
+
+fn tokens_in_source(source: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for line in source.lines() {
+        let mut token_start = None;
+        for (byte_index, ch) in line.char_indices() {
+            if is_token_char(ch) {
+                token_start.get_or_insert(byte_index);
+            } else if let Some(start) = token_start.take() {
+                tokens.push(line[start..byte_index].to_string());
+            }
+        }
+        if let Some(start) = token_start {
+            tokens.push(line[start..].to_string());
+        }
+    }
+    tokens
+}
+
+fn rank(root: &Path, query: &str) -> Result<(), String> {
+    let query_tokens: BTreeSet<String> = query
+        .split_whitespace()
+        .map(|token| token.to_string())
+        .collect();
+    if query_tokens.is_empty() {
+        return Err("rank expects a non-empty query of one or more tokens".to_string());
+    }
+    let total = query_tokens.len();
+
+    // Path-keyed BTreeMap gives a path-sorted starting order; the stable sort
+    // below then only reorders by the ranking metrics, leaving path ascending
+    // as the deterministic final tie-break.
+    let mut per_file: BTreeMap<PathBuf, (BTreeSet<String>, usize)> = BTreeMap::new();
+    for occurrence in token_occurrences(root)? {
+        if query_tokens.contains(&occurrence.token) {
+            let entry = per_file.entry(occurrence.path).or_default();
+            entry.0.insert(occurrence.token);
+            entry.1 += 1;
+        }
+    }
+
+    let mut ranked: Vec<(PathBuf, usize, usize)> = per_file
+        .into_iter()
+        .map(|(path, (matched, occurrences))| (path, matched.len(), occurrences))
+        .collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
+
+    for (rank, (path, matched, occurrences)) in ranked.iter().take(10).enumerate() {
+        println!(
+            "{}. {} (matched {}/{} tokens, {} occurrences)",
+            rank + 1,
+            portable_path(path),
+            matched,
+            total,
+            occurrences
+        );
+    }
     Ok(())
 }
 

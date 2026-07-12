@@ -1,0 +1,19 @@
+benchmarks:
+  - name: index_with_threads
+    fixture: bench_codebase
+    command: ["index", "{fixture_path}", "--threads", "{threads}"]
+    iterations: 4
+    warmup: 1
+    timeout_ms: 30000
+    matrix:
+      threads: [1, 2, 4, 8]
+
+performance_gates:
+  - name: parallel speedup
+    benchmark: index_with_threads
+    metric: speedup
+    min: 1.5
+    advice:
+      - "A lock around the shared index serialises the workers — give each worker a thread-local index instead."
+      - "Per-token locking trades one big lock for many small ones; contention still dominates. Merge after, not during."
+      - "If the merge rebuilds the whole index, it can cost more than it saves — union sorted partials rather than re-inserting every occurrence."

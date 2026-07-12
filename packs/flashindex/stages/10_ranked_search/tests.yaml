@@ -1,0 +1,45 @@
+tests:
+  - name: ranks by coverage then density
+    fixture: rank_project
+    command: ["rank", "{fixture_path}", "alpha beta gamma"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        1. src/three.rs (matched 3/3 tokens, 3 occurrences)
+        2. src/two_hi.rs (matched 2/3 tokens, 3 occurrences)
+        3. src/two_lo.rs (matched 2/3 tokens, 2 occurrences)
+        4. src/one.rs (matched 1/3 tokens, 1 occurrences)
+
+  - name: single token orders by occurrences then path
+    fixture: rank_project
+    command: ["rank", "{fixture_path}", "alpha"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        1. src/two_hi.rs (matched 1/1 tokens, 2 occurrences)
+        2. src/one.rs (matched 1/1 tokens, 1 occurrences)
+        3. src/three.rs (matched 1/1 tokens, 1 occurrences)
+        4. src/two_lo.rs (matched 1/1 tokens, 1 occurrences)
+
+  - name: exact ties break by ascending path
+    fixture: tie_project
+    command: ["rank", "{fixture_path}", "gamma"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        1. src/tie_a.rs (matched 1/1 tokens, 1 occurrences)
+        2. src/tie_b.rs (matched 1/1 tokens, 1 occurrences)
+
+  - name: token absent from every file prints nothing
+    fixture: rank_project
+    command: ["rank", "{fixture_path}", "nonexistent_token"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""
+
+  - name: empty query is an error
+    fixture: rank_project
+    command: ["rank", "{fixture_path}", ""]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
