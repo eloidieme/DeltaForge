@@ -241,7 +241,7 @@ fn starter_project_initializes_and_fails_current_stage() {
 
     let test = run_deltaforge(["test"], &project_dir);
     assert_failure(&test);
-    assert_stdout_contains(&test, "0 passed, 3 failed");
+    assert_stdout_contains(&test, "0 passed, 5 failed");
     assert_stderr_contains(&test, "error: tests failed");
 
     let json_test = run_deltaforge(["test", "--json"], &project_dir);
@@ -254,8 +254,8 @@ fn starter_project_initializes_and_fails_current_stage() {
         serde_json::from_slice(&json_test.stdout).expect("test --json should emit valid JSON");
     assert_eq!(parsed[0]["stage_id"], "01_scan_files");
     assert_eq!(parsed[0]["passed"], 0);
-    assert_eq!(parsed[0]["failed"], 3);
-    assert_eq!(parsed[0]["results"].as_array().unwrap().len(), 3);
+    assert_eq!(parsed[0]["failed"], 5);
+    assert_eq!(parsed[0]["results"].as_array().unwrap().len(), 5);
 
     let config_json = run_deltaforge(["config", "show", "--json"], &project_dir);
     assert_success(&config_json);
@@ -748,7 +748,7 @@ fn test_runner_selection_flags_are_user_facing() {
     assert_success(&list);
     let listed: serde_json::Value =
         serde_json::from_slice(&list.stdout).expect("test --list-tests --json is valid JSON");
-    assert_eq!(listed[0]["results"].as_array().unwrap().len(), 3);
+    assert_eq!(listed[0]["results"].as_array().unwrap().len(), 5);
     assert_stdout_contains(&list, "scans files in a basic project");
 
     let filtered = run_deltaforge(["test", "--filter", "nested"], &project_dir);
@@ -1616,7 +1616,7 @@ keep_temp = false
     let timeout = run_deltaforge(["test"], &timeout_project);
     assert_failure(&timeout);
     assert_stdout_contains(&timeout, "command timed out after 1 ms");
-    assert_stdout_contains(&timeout, "0 passed, 3 failed");
+    assert_stdout_contains(&timeout, "0 passed, 5 failed");
     assert_stderr_contains(&timeout, "error: tests failed");
 }
 
@@ -1643,7 +1643,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
     let stage1 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage1);
     assert_stdout_contains(&stage1, "Stage 01_scan_files: Scan files");
-    assert_stdout_contains(&stage1, "3 passed");
+    assert_stdout_contains(&stage1, "5 passed");
 
     let next1 = run_deltaforge(["next"], &project_dir);
     assert_success(&next1);
@@ -1655,7 +1655,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
     let stage2 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage2);
     assert_stdout_contains(&stage2, "Stage 02_filter_files: Filter source files");
-    assert_stdout_contains(&stage2, "3 passed");
+    assert_stdout_contains(&stage2, "4 passed");
 
     let next2 = run_deltaforge(["next"], &project_dir);
     assert_success(&next2);
@@ -1664,7 +1664,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
     let stage3 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage3);
     assert_stdout_contains(&stage3, "Stage 03_tokenize: Tokenize files");
-    assert_stdout_contains(&stage3, "3 passed");
+    assert_stdout_contains(&stage3, "5 passed");
 
     let next3 = run_deltaforge(["next"], &project_dir);
     assert_success(&next3);
@@ -2175,7 +2175,7 @@ fn assert_reference_solution_passes(pack: &str, source_path: &str, final_stage: 
     let all = run_deltaforge(["test", "--all"], &project_dir);
     assert_success(&all);
     assert_stdout_contains(&all, final_stage);
-    assert_stdout_contains(&all, "3 passed, 0 failed");
+    assert_stdout_contains(&all, "0 failed");
 }
 
 fn init_project_from_pack_copy(name: &str) -> (PathBuf, PathBuf, PathBuf) {

@@ -1293,15 +1293,42 @@ pub fn diagnose_pack(pack: &LoadedPack) -> AuthoringReport {
                     stage.id
                 ));
             }
+            for heading in ["Edge cases", "Non-goals"] {
+                if !has_markdown_heading(&source, heading) {
+                    problems.push(format!(
+                        "stage {} instructions are missing a {heading} heading",
+                        stage.id
+                    ));
+                }
+            }
+        }
+        let hints = pack.hints_path(stage);
+        if let Ok(source) = fs::read_to_string(&hints) {
+            let count = hint_heading_count(&source);
+            if count < 3 {
+                problems.push(format!(
+                    "stage {} has {count} hints; at least 3 are recommended",
+                    stage.id
+                ));
+            }
         }
         let tests = pack.tests_path(stage);
-        if let Ok(source) = fs::read_to_string(&tests)
-            && source.contains("replace-me")
-        {
-            problems.push(format!(
-                "stage {} tests still contain scaffold placeholder text",
-                stage.id
-            ));
+        if let Ok(source) = fs::read_to_string(&tests) {
+            if source.contains("replace-me") {
+                problems.push(format!(
+                    "stage {} tests still contain scaffold placeholder text",
+                    stage.id
+                ));
+            }
+            if let Ok(stage_tests) = serde_yaml::from_str::<StageTests>(&source)
+                && stage_tests.tests.len() < 2
+            {
+                problems.push(format!(
+                    "stage {} has {} tests; at least 2 are recommended",
+                    stage.id,
+                    stage_tests.tests.len()
+                ));
+            }
         }
     }
 
@@ -1319,6 +1346,30 @@ pub fn diagnose_pack(pack: &LoadedPack) -> AuthoringReport {
             next_actions,
         )
     }
+}
+
+fn has_markdown_heading(source: &str, expected: &str) -> bool {
+    source.lines().any(|line| {
+        let line = line.trim();
+        let Some(text) = line.strip_prefix('#') else {
+            return false;
+        };
+        text.trim_start_matches('#')
+            .trim()
+            .eq_ignore_ascii_case(expected)
+    })
+}
+
+fn hint_heading_count(source: &str) -> usize {
+    source
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            line.strip_prefix("# Hint ").is_some_and(|level| {
+                !level.is_empty() && level.chars().all(|ch| ch.is_ascii_digit())
+            })
+        })
+        .count()
 }
 
 pub fn check_reference(request: &CheckReferenceRequest) -> Result<AuthoringReport> {
@@ -1881,6 +1932,18 @@ fn stage_tests(title: &str) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_depth_heuristics_recognize_real_headings() {
+        let instructions = "# Stage\n\n## Edge cases\n\n- empty\n\n### Non-goals\n";
+        assert!(has_markdown_heading(instructions, "Edge cases"));
+        assert!(has_markdown_heading(instructions, "Non-goals"));
+        assert!(!has_markdown_heading("Edge cases:\n", "Edge cases"));
+
+        let hints = "# Hint 1\nfirst\n# Hint 2\nsecond\n# Hint 3\nthird\n";
+        assert_eq!(hint_heading_count(hints), 3);
+        assert_eq!(hint_heading_count("# Hint 1\none\n# Hint two\n"), 1);
+    }
 
     #[test]
     fn capability_delete_blocks_intermediate_symlink_swap() {

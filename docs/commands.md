@@ -4,7 +4,7 @@
 - `pack list|show|install`: inspect or copy discovered packs.
 - `pack new`: scaffold a local pack.
 - `pack add-stage`: add a scaffold stage to a pack.
-- `pack doctor`: report authoring quality gaps.
+- `pack doctor`: report authoring quality gaps, including missing edge-case/non-goal sections, fewer than three hints, and fewer than two tests.
 - `pack check-reference`: prove a pack with a reference solution.
 - `init <pack> --lang <language>`: create a learner repo.
 - `overview`: show what the project is, why it matters, and the full stage roadmap.

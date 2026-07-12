@@ -84,6 +84,8 @@ performance_gates:
 
 Each run carries one entry in `points` per measured configuration; benchmarks without a parameter matrix produce a single point with empty `params`. Legacy history files (a bare JSON array with a flat `results` object per record, written before the file was versioned) are converted automatically on read; saving rewrites the file in the current format. Files with a newer `schema_version` are rejected rather than silently misread.
 
+Benchmark commands are direct argument vectors and do not receive stdin. A command normally driven by stdin should expose a behaviorally equivalent file-input form when it needs fixture-backed benchmarking (TinyHTTP's `parse <request-file>` is the bundled example). Keep fixtures representative but small enough to copy before every warmup and measured iteration.
+
 ## Peak memory
 
 `peak_memory_mb` is a best-effort, approximate peak resident set size of the benchmarked process, taken as the maximum across a point's measured iterations. It is sampled from the runner's 10 ms poll loop: Linux reads the kernel high-water mark (`VmHWM` in `/proc/<pid>/status`), macOS samples resident size via `proc_pid_rusage`, and Windows reads `PeakWorkingSetSize`. It is `null` on other platforms, when every sample fails, or when the process exits before the first sample lands — a failed sample never fails the benchmark. Treat it as indicative (sampling granularity, OS accounting differences), not as an exact measurement.
