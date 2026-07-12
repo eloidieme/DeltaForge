@@ -354,31 +354,12 @@ fn is_ignored_dir(name: &str) -> bool {
 }
 
 fn is_source_like(path: &Path) -> bool {
-    if path
-        .extension()
+    path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
             matches!(
                 extension,
-                "bin" | "dat" | "png" | "jpg" | "jpeg" | "gif" | "o"
-            )
-        })
-    {
-        return false;
-    }
-
-    matches!(
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default(),
-        "README.md" | "CMakeLists.txt"
-    ) || path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension,
-                "rs" | "cpp" | "c" | "h" | "hpp" | "py" | "txt" | "md"
+                "rs" | "cpp" | "c" | "h" | "hpp" | "py" | "txt" | "md" | "cmake"
             )
         })
 }

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Browser learning surface and approachable FlashIndex opening (FlashIndex 0.4.0)
+
+- Changed interactive `overview` and `instructions` from a long terminal document to a self-contained local learning page. It opens in the system browser with stage navigation, progress state, task/example/rationale/reference tabs, neighboring-stage previews, copyable examples, responsive layout, and accessible keyboard-friendly controls. No pack content or external asset leaves the machine.
+- Added `--terminal` for the original renderer, `--no-open` for generating `.deltaforge/ui/learning.html` without launching a browser, and `DELTAFORGE_NO_BROWSER=1` for terminal-only environments. Redirected and piped commands retain terminal behavior, and `overview --json` is unchanged.
+- Rewrote FlashIndex stages 01–03 from first principles, using shorter explanations, concrete project trees and source examples, and explicit labels for teaching policies that are choices rather than universal rules.
+- Corrected the Stage 02 corpus contract: removed the unexplained `.glsl` promise, made `.cmake` support real and tested, and removed redundant special cases for `CMakeLists.txt` and `README.md` from the reference solution because `.txt` and `.md` already include them.
+- Bumped FlashIndex to `0.4.0`. The Stage 02 fixture and tests changed, so existing FlashIndex learners should run `deltaforge sync-pack`; a previously completed Stage 02 intentionally requires revalidation. Instruction-only changes to Stages 01 and 03 do not invalidate their proofs.
+
 ### Curriculum study aids (all bundled packs 0.3.1)
 
 - Expanded every pack overview with a cumulative concept map or protocol/opcode reference, a focused glossary, historical field notes, diagnostic failure-analysis labs, and optional extensions. Corrected the MiniKV, TinyHTTP, and ByteForgeVM summaries so their final-stage capabilities match the actual roadmaps.
