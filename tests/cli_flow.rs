@@ -841,6 +841,58 @@ fn bench_report_and_portfolio_generate_project_artifacts() {
 }
 
 #[test]
+fn bench_matrix_prints_table_speedup_and_saves_per_point_history() {
+    let root = temp_project_path("bench-matrix");
+    let packs = root.join("packs");
+    let external_pack = packs.join("flashindex");
+    copy_dir_recursive(&repo_root().join("packs/flashindex"), &external_pack);
+    let benchmarks_path = external_pack.join("stages/01_scan_files/benchmarks.yaml");
+    let mut benchmarks = fs::read_to_string(&benchmarks_path).unwrap();
+    benchmarks.push_str("    matrix:\n      threads: [1, 2]\n");
+    fs::write(&benchmarks_path, benchmarks).unwrap();
+
+    let project = root.join("project");
+    let init = run_deltaforge_with_env(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+        &[("DELTAFORGE_PACKS_DIR", &packs)],
+    );
+    assert_success(&init);
+
+    let bench = run_deltaforge_with_env(
+        ["bench", "--iterations", "1", "--warmup", "0", "--save"],
+        &project,
+        &[("DELTAFORGE_PACKS_DIR", &packs)],
+    );
+    assert_success(&bench);
+    assert_stdout_contains(&bench, "params");
+    assert_stdout_contains(&bench, "median");
+    assert_stdout_contains(&bench, "threads=1");
+    assert_stdout_contains(&bench, "threads=2");
+    assert_stdout_contains(&bench, "speedup_1_to_2:");
+
+    let history: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(project.join(".deltaforge/benchmark_history.json")).unwrap(),
+    )
+    .unwrap();
+    let points = history["runs"][0]["points"].as_array().unwrap();
+    assert_eq!(points.len(), 2);
+    assert_eq!(points[0]["params"]["threads"], "1");
+    assert_eq!(points[1]["params"]["threads"], "2");
+    assert!(history["runs"][0]["derived"].is_null());
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn legacy_benchmark_history_is_converted_on_save() {
     let project_dir = temp_project_path("bench-legacy-history");
     let init = run_deltaforge(

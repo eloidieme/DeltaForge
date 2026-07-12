@@ -16,7 +16,17 @@
 - `hint`: reveal progressive hints. `--level N` never lowers previously recorded progress.
 - `status`: show stage progress. Completed stages whose tests, fixtures, or commands changed since they passed are marked `!` (needs revalidation). Supports `--json` (project, language, current stage, and per-stage status on stdout only).
 - `config show|validate`: inspect project config.
-- `bench`: run pack benchmarks. Timing uses the pack's `bench_run` command (falling back to `run`).
+- `bench`: run pack benchmarks. Timing uses the pack's `bench_run` command (falling back to `run`). Human output is an aligned table per benchmark, one row per matrix point, e.g.:
+
+  ```
+  01_scan_files / scan_parallel
+    params      median        p95   throughput  peak mem
+    threads=1  812.40 ms  845.10 ms   61.52 MB/s  118.2 MB
+    threads=8  102.75 ms  110.90 ms  486.40 MB/s  131.7 MB
+    speedup_1_to_8: 7.91x
+  ```
+
+  The `speedup_<min>_to_<max>` line is derived at display time when a numeric `threads` matrix parameter is the only varying parameter (median at min threads / median at max threads); `--json` attaches it per record as a `derived` object and emits JSON only. `--save` appends to `.deltaforge/benchmark_history.json`; derived metrics are never persisted.
 - `report`: generate Markdown or HTML reports. `--output` defaults to `report.md`.
 - `portfolio`: generate a portfolio summary. `--output` defaults to `PORTFOLIO.md`.
 - `design`: show prompts or edit design notes.

@@ -82,6 +82,51 @@ impl BenchmarkPoint {
     }
 }
 
+/// Derived speedup across a `threads` matrix parameter. Computed at display
+/// time from the points and never persisted (the history schema stays fixed).
+pub struct ThreadSpeedup {
+    /// e.g. `speedup_1_to_8`
+    pub key: String,
+    pub value: f64,
+}
+
+/// Speedup = median(min threads) / median(max threads), for benchmarks whose
+/// points vary over a numeric `threads` parameter. `None` when there are
+/// fewer than two distinct thread counts, when `threads` is not the only
+/// varying parameter (multiple points per extreme), when a thread value is
+/// non-numeric, or when either extreme's median is missing.
+pub fn thread_speedup(points: &[BenchmarkPoint]) -> Option<ThreadSpeedup> {
+    let mut by_threads: BTreeMap<u64, Vec<&BenchmarkPoint>> = BTreeMap::new();
+    for point in points {
+        if let Some(threads) = point.params.get("threads") {
+            by_threads
+                .entry(threads.parse().ok()?)
+                .or_default()
+                .push(point);
+        }
+    }
+    if by_threads.len() < 2 {
+        return None;
+    }
+    let (min_threads, min_points) = by_threads.first_key_value()?;
+    let (max_threads, max_points) = by_threads.last_key_value()?;
+    let [min_point] = min_points.as_slice() else {
+        return None;
+    };
+    let [max_point] = max_points.as_slice() else {
+        return None;
+    };
+    let min_median = min_point.runtime_median_ms?;
+    let max_median = max_point.runtime_median_ms?;
+    if max_median <= 0.0 {
+        return None;
+    }
+    Some(ThreadSpeedup {
+        key: format!("speedup_{min_threads}_to_{max_threads}"),
+        value: min_median / max_median,
+    })
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VersionedHistory {
@@ -175,37 +220,16 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
     }
 
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&records)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&records_json(&records)?)?
+        );
     } else if records.is_empty() {
         println!("No benchmarks defined for selected stage(s).");
     } else {
         for record in &records {
             println!("{} / {}", record.stage, record.benchmark);
-            for point in &record.points {
-                let label = point.params_label();
-                if !label.is_empty() {
-                    println!("  [{label}]");
-                }
-                let indent = if label.is_empty() { "  " } else { "    " };
-                if point.success {
-                    println!(
-                        "{indent}median: {:.2} ms",
-                        point.runtime_median_ms.unwrap_or_default()
-                    );
-                    println!(
-                        "{indent}p95: {:.2} ms",
-                        point.runtime_p95_ms.unwrap_or_default()
-                    );
-                    if let Some(throughput) = point.throughput_mb_s {
-                        println!("{indent}throughput: {throughput:.2} MB/s");
-                    }
-                    if let Some(peak) = point.peak_memory_mb {
-                        println!("{indent}peak memory: {peak:.1} MB");
-                    }
-                } else if let Some(error) = &point.error {
-                    println!("{indent}failed: {error}");
-                }
-            }
+            print!("{}", render_benchmark_human(record));
         }
         if args.save {
             println!(
@@ -222,6 +246,103 @@ pub fn run(args: BenchArgs, options: &GlobalOptions) -> Result<()> {
         bail!("one or more benchmarks failed");
     }
     Ok(())
+}
+
+/// JSON output for `bench --json`: the records, each augmented with a
+/// `derived` object (e.g. `{"speedup_1_to_8": 3.4}`) when a speedup applies.
+/// Derived metrics are attached only here, never written to history.
+fn records_json(records: &[BenchmarkRecord]) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(records)?;
+    if let serde_json::Value::Array(items) = &mut value {
+        for (item, record) in items.iter_mut().zip(records) {
+            if let Some(speedup) = thread_speedup(&record.points) {
+                item["derived"] = serde_json::json!({ speedup.key: speedup.value });
+            }
+        }
+    }
+    Ok(value)
+}
+
+/// Aligned per-point table (params, median, p95, throughput, peak memory),
+/// followed by the derived speedup line and any per-point failures.
+fn render_benchmark_human(record: &BenchmarkRecord) -> String {
+    let mut out = String::new();
+
+    let successful: Vec<&BenchmarkPoint> =
+        record.points.iter().filter(|point| point.success).collect();
+    if !successful.is_empty() {
+        let has_params = successful.iter().any(|point| !point.params.is_empty());
+        let mut rows: Vec<Vec<String>> = Vec::with_capacity(successful.len() + 1);
+        let mut header = Vec::new();
+        if has_params {
+            header.push("params".to_string());
+        }
+        header.extend(
+            ["median", "p95", "throughput", "peak mem"]
+                .iter()
+                .map(ToString::to_string),
+        );
+        rows.push(header);
+        for point in &successful {
+            let mut row = Vec::new();
+            if has_params {
+                row.push(point.params_label());
+            }
+            row.push(format_measure(point.runtime_median_ms, "ms", 2));
+            row.push(format_measure(point.runtime_p95_ms, "ms", 2));
+            row.push(format_measure(point.throughput_mb_s, "MB/s", 2));
+            row.push(format_measure(point.peak_memory_mb, "MB", 1));
+            rows.push(row);
+        }
+
+        let columns = rows[0].len();
+        let widths: Vec<usize> = (0..columns)
+            .map(|column| rows.iter().map(|row| row[column].len()).max().unwrap_or(0))
+            .collect();
+        for row in &rows {
+            out.push_str("  ");
+            for (column, cell) in row.iter().enumerate() {
+                if column > 0 {
+                    out.push_str("  ");
+                }
+                let width = widths[column];
+                if has_params && column == 0 {
+                    out.push_str(&format!("{cell:<width$}"));
+                } else {
+                    out.push_str(&format!("{cell:>width$}"));
+                }
+            }
+            while out.ends_with(' ') {
+                out.pop();
+            }
+            out.push('\n');
+        }
+    }
+
+    if let Some(speedup) = thread_speedup(&record.points) {
+        out.push_str(&format!("  {}: {:.2}x\n", speedup.key, speedup.value));
+    }
+
+    for point in &record.points {
+        if !point.success
+            && let Some(error) = &point.error
+        {
+            let label = point.params_label();
+            if label.is_empty() {
+                out.push_str(&format!("  failed: {error}\n"));
+            } else {
+                out.push_str(&format!("  [{label}] failed: {error}\n"));
+            }
+        }
+    }
+    out
+}
+
+fn format_measure(value: Option<f64>, unit: &str, decimals: usize) -> String {
+    value.map_or_else(
+        || "-".to_string(),
+        |value| format!("{value:.decimals$} {unit}"),
+    )
 }
 
 fn run_stage_benchmarks(
@@ -924,6 +1045,140 @@ matrix:
         assert_eq!(matrix["fast"], vec!["true", "false"]);
         assert_eq!(matrix["label"], vec!["a"]);
         assert_eq!(cartesian_points(&matrix).len(), 4);
+    }
+
+    fn point(params: &[(&str, &str)], median: Option<f64>) -> BenchmarkPoint {
+        BenchmarkPoint {
+            params: params
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+            success: true,
+            iterations: 3,
+            warmup: 1,
+            runtime_median_ms: median,
+            runtime_p95_ms: median,
+            throughput_mb_s: Some(100.0),
+            peak_memory_mb: Some(32.0),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn speedup_uses_min_and_max_thread_medians() {
+        let points = vec![
+            point(&[("threads", "1")], Some(800.0)),
+            point(&[("threads", "2")], Some(400.0)),
+            point(&[("threads", "8")], Some(100.0)),
+        ];
+        let speedup = thread_speedup(&points).unwrap();
+        assert_eq!(speedup.key, "speedup_1_to_8");
+        assert!((speedup.value - 8.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn speedup_orders_thread_counts_numerically_not_lexically() {
+        let points = vec![
+            point(&[("threads", "2")], Some(400.0)),
+            point(&[("threads", "16")], Some(100.0)),
+        ];
+        let speedup = thread_speedup(&points).unwrap();
+        assert_eq!(speedup.key, "speedup_2_to_16");
+        assert!((speedup.value - 4.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn speedup_requires_two_distinct_thread_counts() {
+        assert!(thread_speedup(&[point(&[("threads", "4")], Some(100.0))]).is_none());
+        assert!(thread_speedup(&[point(&[], Some(100.0))]).is_none());
+        assert!(thread_speedup(&[]).is_none());
+    }
+
+    #[test]
+    fn speedup_skips_missing_medians_and_non_numeric_threads() {
+        assert!(
+            thread_speedup(&[
+                point(&[("threads", "1")], None),
+                point(&[("threads", "8")], Some(100.0)),
+            ])
+            .is_none()
+        );
+        assert!(
+            thread_speedup(&[
+                point(&[("threads", "one")], Some(800.0)),
+                point(&[("threads", "8")], Some(100.0)),
+            ])
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn speedup_requires_threads_to_be_the_only_varying_parameter() {
+        let points = vec![
+            point(&[("threads", "1"), ("mode", "fast")], Some(800.0)),
+            point(&[("threads", "1"), ("mode", "safe")], Some(900.0)),
+            point(&[("threads", "8"), ("mode", "fast")], Some(100.0)),
+            point(&[("threads", "8"), ("mode", "safe")], Some(120.0)),
+        ];
+        assert!(thread_speedup(&points).is_none());
+    }
+
+    #[test]
+    fn human_output_renders_aligned_table_and_speedup() {
+        let mut record = sample_record();
+        record.points = vec![
+            point(&[("threads", "1")], Some(800.0)),
+            point(&[("threads", "8")], Some(100.0)),
+        ];
+        let rendered = render_benchmark_human(&record);
+        assert_eq!(
+            rendered,
+            "  params        median        p95   throughput  peak mem\n  \
+             threads=1  800.00 ms  800.00 ms  100.00 MB/s   32.0 MB\n  \
+             threads=8  100.00 ms  100.00 ms  100.00 MB/s   32.0 MB\n  \
+             speedup_1_to_8: 8.00x\n"
+        );
+    }
+
+    #[test]
+    fn human_output_without_params_omits_params_column() {
+        let mut record = sample_record();
+        record.points = vec![point(&[], Some(10.0))];
+        record.points[0].peak_memory_mb = None;
+        let rendered = render_benchmark_human(&record);
+        assert!(rendered.contains("median"), "{rendered}");
+        assert!(!rendered.contains("params"), "{rendered}");
+        assert!(rendered.contains("10.00 ms"), "{rendered}");
+        assert!(!rendered.contains("speedup"), "{rendered}");
+    }
+
+    #[test]
+    fn human_output_reports_failed_points_after_table() {
+        let mut record = sample_record();
+        let mut failed = point(&[("threads", "8")], None);
+        failed.success = false;
+        failed.error = Some("command failed".to_string());
+        record.points = vec![point(&[("threads", "1")], Some(800.0)), failed];
+        let rendered = render_benchmark_human(&record);
+        assert!(
+            rendered.contains("[threads=8] failed: command failed"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("speedup"), "{rendered}");
+    }
+
+    #[test]
+    fn json_records_attach_derived_speedup_without_persisting() {
+        let mut record = sample_record();
+        record.points = vec![
+            point(&[("threads", "1")], Some(800.0)),
+            point(&[("threads", "8")], Some(100.0)),
+        ];
+        let json = records_json(std::slice::from_ref(&record)).unwrap();
+        assert_eq!(json[0]["derived"]["speedup_1_to_8"], 8.0);
+        // The persisted form stays free of derived metrics.
+        let persisted = serde_json::to_value(&record).unwrap();
+        assert!(persisted.get("derived").is_none());
     }
 
     #[test]
