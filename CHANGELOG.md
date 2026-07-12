@@ -9,6 +9,7 @@
 ## V2 working tree
 
 - Added grounded MCP pack-authoring reads for manifests, stage documents, structured tests and benchmarks, and recursively listed UTF-8 fixtures, plus confirmed fixture-file deletion with traversal, symlink, special-file, and 1 MiB protections.
+- Hardened MCP fixture reads, recursive listing, and deletion against concurrent symlink swaps with no-follow directory capabilities and handle-relative unlinking; read-only pack discovery no longer extracts the embedded cache.
 - Added fail-closed, digest-pinned performance gates for benchmarked stages, including authoring validation, MCP support, progression enforcement, status, JSON, and the `gates.enforce` escape hatch.
 - Hardened gate reporting and validation so partial runs cannot claim individual passes, display-only gate renames preserve proofs, recorded outcomes are recomputed from measurements, and speedup matrices reject duplicate or nonnumeric thread values.
 

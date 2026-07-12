@@ -13,7 +13,9 @@ use deltaforge::authoring::{
     replace_stage_tests, update_pack_metadata, update_stage_metadata, write_fixture_file,
     write_stage_document,
 };
-use deltaforge::pack::{PackSearchOptions, discover_packs_with_options, load_pack, validate_pack};
+use deltaforge::pack::{
+    PackSearchOptions, discover_packs_read_only_with_options, load_pack_read_only, validate_pack,
+};
 use serde_json::{Value, json};
 
 fn main() {
@@ -357,7 +359,7 @@ fn call_tool(request: &Value) -> Result<Value> {
             Ok(serde_json::to_value(report)?)
         }
         "diagnose_pack" => {
-            let pack = load_pack(
+            let pack = load_pack_read_only(
                 &required_string(&arguments, "project")?,
                 &PackSearchOptions {
                     packs_dir: optional_path(&arguments, "packs_dir"),
@@ -366,7 +368,7 @@ fn call_tool(request: &Value) -> Result<Value> {
             Ok(serde_json::to_value(diagnose_pack(&pack))?)
         }
         "validate_pack" => {
-            let pack = load_pack(
+            let pack = load_pack_read_only(
                 &required_string(&arguments, "project")?,
                 &PackSearchOptions {
                     packs_dir: optional_path(&arguments, "packs_dir"),
@@ -396,7 +398,7 @@ fn call_tool(request: &Value) -> Result<Value> {
             Ok(serde_json::to_value(report)?)
         }
         "inspect_packs" => {
-            let packs = discover_packs_with_options(&PackSearchOptions {
+            let packs = discover_packs_read_only_with_options(&PackSearchOptions {
                 packs_dir: optional_path(&arguments, "packs_dir"),
             })?
             .packs;

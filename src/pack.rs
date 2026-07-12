@@ -460,6 +460,12 @@ fn embedded_packs_digest() -> String {
     digest_named_contents(entries)
 }
 
+fn embedded_packs_cache_dir() -> PathBuf {
+    let digest = embedded_packs_digest();
+    let hash = digest.strip_prefix("fnv1a64:").unwrap_or(&digest);
+    embedded_cache_root().join(format!("packs-{hash}"))
+}
+
 fn embedded_staging_dir(parent: &Path) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -469,9 +475,7 @@ fn embedded_staging_dir(parent: &Path) -> PathBuf {
 }
 
 pub fn embedded_packs_dir() -> Result<PathBuf> {
-    let digest = embedded_packs_digest();
-    let hash = digest.strip_prefix("fnv1a64:").unwrap_or(&digest);
-    let target = embedded_cache_root().join(format!("packs-{hash}"));
+    let target = embedded_packs_cache_dir();
 
     if target.join("flashindex").join("project.yaml").is_file() {
         return Ok(target);
@@ -562,6 +566,19 @@ fn path_is_under(path: &Path, base: &Path) -> bool {
 }
 
 pub fn pack_search_dirs(options: &PackSearchOptions) -> Vec<PathBuf> {
+    let mut dirs = pack_search_dirs_read_only(options);
+
+    if let Ok(dir) = embedded_packs_dir()
+        && !dirs.contains(&dir)
+    {
+        dirs.push(dir);
+    }
+    dirs
+}
+
+/// Pack search paths that never extract embedded packs or otherwise write to
+/// the filesystem. Used by MCP tools carrying `readOnlyHint: true`.
+pub fn pack_search_dirs_read_only(options: &PackSearchOptions) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 
     if let Some(dir) = &options.packs_dir {
@@ -573,7 +590,9 @@ pub fn pack_search_dirs(options: &PackSearchOptions) -> Vec<PathBuf> {
     }
 
     dirs.push(builtin_packs_dir());
-    if let Ok(dir) = embedded_packs_dir() {
+    let embedded = embedded_packs_cache_dir();
+    if embedded.is_dir() && !dirs.contains(&embedded) {
+        let dir = embedded;
         dirs.push(dir);
     }
     dirs
@@ -585,6 +604,16 @@ pub fn load_builtin_pack(project_id: &str) -> Result<LoadedPack> {
 }
 
 pub fn load_pack(project_id: &str, options: &PackSearchOptions) -> Result<LoadedPack> {
+    load_pack_from_dirs(project_id, pack_search_dirs(options))
+}
+
+/// Load a pack without extracting the embedded cache or writing filesystem
+/// state. Intended for MCP tools advertised as read-only.
+pub fn load_pack_read_only(project_id: &str, options: &PackSearchOptions) -> Result<LoadedPack> {
+    load_pack_from_dirs(project_id, pack_search_dirs_read_only(options))
+}
+
+fn load_pack_from_dirs(project_id: &str, search_dirs: Vec<PathBuf>) -> Result<LoadedPack> {
     if !is_safe_relative_path(Path::new(project_id))
         || Path::new(project_id).components().count() != 1
     {
@@ -592,7 +621,7 @@ pub fn load_pack(project_id: &str, options: &PackSearchOptions) -> Result<Loaded
     }
     let mut searched_manifests = Vec::new();
 
-    for packs_dir in pack_search_dirs(options) {
+    for packs_dir in search_dirs {
         let root = packs_dir.join(project_id);
         let manifest_path = root.join("project.yaml");
         searched_manifests.push(manifest_path.clone());
@@ -630,10 +659,19 @@ pub struct PackDiscovery {
 }
 
 pub fn discover_packs_with_options(options: &PackSearchOptions) -> Result<PackDiscovery> {
+    discover_packs_in_dirs(pack_search_dirs(options))
+}
+
+/// Discover packs without extracting embedded content or writing cache state.
+pub fn discover_packs_read_only_with_options(options: &PackSearchOptions) -> Result<PackDiscovery> {
+    discover_packs_in_dirs(pack_search_dirs_read_only(options))
+}
+
+fn discover_packs_in_dirs(search_dirs: Vec<PathBuf>) -> Result<PackDiscovery> {
     let mut discovery = PackDiscovery::default();
     let mut seen_ids = BTreeSet::new();
 
-    for packs_dir in pack_search_dirs(options) {
+    for packs_dir in search_dirs {
         if !packs_dir.is_dir() {
             continue;
         }

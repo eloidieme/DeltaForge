@@ -122,7 +122,7 @@ async fn official_rust_sdk_negotiates_lists_calls_and_closes() -> anyhow::Result
 
 #[tokio::test]
 async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result<()> {
-    let packs_dir = temp_path("safe-authoring-tools");
+    let packs_dir = short_temp_path("safe-tools");
     let transport = TokioChildProcess::new(
         tokio::process::Command::new(deltaforge_pack_mcp_bin()).configure(|command| {
             command.env("DELTAFORGE_BIN", deltaforge_bin());
@@ -398,8 +398,25 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
                 "tests": [{
                     "name": "echoes a fixture value",
                     "fixture": "sample",
+                    "stdin": "input from stdin\n",
+                    "env": {"ALPHA": "one", "BETA": "two"},
                     "command": ["echo", "hello safe authoring"],
-                    "expect": {"exit_code": 0, "stdout_exact": "hello safe authoring\n"}
+                    "expect": {
+                        "exit_code": 0,
+                        "stdout_exact": "hello safe authoring\n",
+                        "stdout_contains": ["hello", "authoring"],
+                        "stdout_not_contains": ["forbidden"],
+                        "stderr_contains": ["diagnostic"],
+                        "file_exists": ["{temp_dir}/created.txt"],
+                        "file_not_exists": ["{temp_dir}/missing.txt"],
+                        "file_contains": [{
+                            "path": "{temp_dir}/created.txt",
+                            "contains": "payload"
+                        }],
+                        "regex_match": ["^hello"],
+                        "json_equals": {"ok": true, "count": 2},
+                        "timeout_ms": 4321
+                    }
                 }]
             }),
         ))
@@ -416,8 +433,9 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
             }),
         ))
         .await?;
-    let mut tests_array = tool_text_as_json(&tests_read)?["tests"].clone();
-    tests_array[0]["name"] = serde_json::json!("echoes grounded fixture value");
+    let initial_tests = tool_text_as_json(&tests_read)?["tests"].clone();
+    let mut expected_tests = initial_tests.clone();
+    expected_tests[0]["name"] = serde_json::json!("echoes grounded fixture value");
     let tests_replaced = client
         .call_tool(tool_params(
             "replace_stage_tests",
@@ -425,7 +443,7 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
                 "project": "safeauthor",
                 "packs_dir": packs_dir,
                 "stage": "01_first_stage",
-                "tests": tests_array
+                "tests": expected_tests.clone()
             }),
         ))
         .await?;
@@ -440,10 +458,7 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
             }),
         ))
         .await?;
-    assert_eq!(
-        tool_text_as_json(&tests_reread)?["tests"][0]["name"],
-        "echoes grounded fixture value"
-    );
+    assert_eq!(tool_text_as_json(&tests_reread)?["tests"], expected_tests);
 
     let benchmarks = client
         .call_tool(tool_params(
@@ -452,20 +467,53 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
                 "project": "safeauthor",
                 "packs_dir": packs_dir,
                 "stage": "01_first_stage",
-                "benchmarks": [{
-                    "name": "echo_fixture",
-                    "fixture": "sample",
-                    "command": ["echo", "{fixture_path}"],
-                    "iterations": 2,
-                    "warmup": 1,
-                    "timeout_ms": 1000
-                }],
-                "performance_gates": [{
-                    "name": "echo throughput",
-                    "benchmark": "echo_fixture",
-                    "metric": "throughput_mb_s",
-                    "min": 0
-                }]
+                "benchmarks": [
+                    {
+                        "name": "echo_fixture",
+                        "fixture": "sample",
+                        "command": [
+                            "echo", "{fixture_path}", "{threads}", "{mode}", "{enabled}", "{ratio}"
+                        ],
+                        "matrix": {
+                            "threads": [1, 2],
+                            "mode": ["fast", "safe"],
+                            "enabled": [true, false],
+                            "ratio": [1.5]
+                        },
+                        "iterations": 2,
+                        "warmup": 1,
+                        "timeout_ms": 1000
+                    },
+                    {
+                        "name": "echo_scaling",
+                        "fixture": "sample",
+                        "command": ["echo", "{fixture_path}", "{threads}"],
+                        "matrix": {"threads": [1, 2, 8]},
+                        "iterations": 4,
+                        "warmup": 2,
+                        "timeout_ms": 2000
+                    }
+                ],
+                "performance_gates": [
+                    {
+                        "name": "echo throughput",
+                        "benchmark": "echo_fixture",
+                        "metric": "throughput_mb_s",
+                        "min": 0,
+                        "params": {
+                            "threads": "2", "mode": "safe", "enabled": "true", "ratio": "1.5"
+                        },
+                        "advice": ["reduce copies", "reuse buffers"]
+                    },
+                    {
+                        "name": "scaling ceiling",
+                        "benchmark": "echo_scaling",
+                        "metric": "speedup",
+                        "max": 100,
+                        "params": {},
+                        "advice": ["inspect thread coordination"]
+                    }
+                ]
             }),
         ))
         .await?;
@@ -482,9 +530,10 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
         ))
         .await?;
     let benchmarks_read = tool_text_as_json(&benchmarks_read)?;
-    let preserved_gates = benchmarks_read["performance_gates"].clone();
-    let mut benchmark_array = benchmarks_read["benchmarks"].clone();
-    benchmark_array[0]["iterations"] = serde_json::json!(3);
+    let initial_benchmarks = benchmarks_read["benchmarks"].clone();
+    let initial_gates = benchmarks_read["performance_gates"].clone();
+    let mut expected_benchmarks = initial_benchmarks.clone();
+    expected_benchmarks[0]["iterations"] = serde_json::json!(3);
     let benchmark_replaced = client
         .call_tool(tool_params(
             "replace_stage_benchmarks",
@@ -492,8 +541,8 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
                 "project": "safeauthor",
                 "packs_dir": packs_dir,
                 "stage": "01_first_stage",
-                "benchmarks": benchmark_array,
-                "performance_gates": preserved_gates.clone()
+                "benchmarks": expected_benchmarks.clone(),
+                "performance_gates": initial_gates.clone()
             }),
         ))
         .await?;
@@ -509,8 +558,8 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
         ))
         .await?;
     let benchmarks_reread = tool_text_as_json(&benchmarks_reread)?;
-    assert_eq!(benchmarks_reread["benchmarks"][0]["iterations"], 3);
-    assert_eq!(benchmarks_reread["performance_gates"], preserved_gates);
+    assert_eq!(benchmarks_reread["benchmarks"], expected_benchmarks);
+    assert_eq!(benchmarks_reread["performance_gates"], initial_gates);
 
     let invalid_gate = client
         .call_tool(tool_params(
@@ -599,51 +648,96 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
         "hello safe authoring\n"
     );
 
-    let unsafe_calls = [
-        (
-            "read_fixture_file",
-            serde_json::json!({
-                "project": "safeauthor", "packs_dir": packs_dir,
-                "stage": "01_first_stage", "fixture": "sample", "path": "../input.txt"
-            }),
-        ),
-        (
-            "read_fixture_file",
-            serde_json::json!({
-                "project": "safeauthor", "packs_dir": packs_dir,
-                "stage": "01_first_stage", "fixture": "sample", "path": "/tmp/escape"
-            }),
-        ),
-        (
-            "read_fixture_file",
-            serde_json::json!({
-                "project": "safeauthor", "packs_dir": packs_dir,
-                "stage": "01_first_stage", "fixture": "sample", "path": "nested/../../escape"
-            }),
-        ),
-        (
-            "list_fixture_files",
-            serde_json::json!({
-                "project": "safeauthor", "packs_dir": packs_dir,
-                "stage": "01_first_stage", "fixture": "../sample"
-            }),
-        ),
-        (
-            "delete_fixture_file",
-            serde_json::json!({
-                "project": "safeauthor", "packs_dir": packs_dir,
-                "stage": "01_first_stage", "fixture": "sample", "path": "../input.txt",
-                "confirm": true
-            }),
-        ),
+    let unsafe_paths = [
+        "/abs",
+        r"C:\abs",
+        r"\\server\share",
+        "../escape",
+        "nested/../../escape",
+        "",
+        ".",
+        "/",
+        r"\",
+        "nested//file",
+        r"nested\..\escape",
+        r"nested/..\escape",
     ];
-    for (name, arguments) in unsafe_calls {
+    for path in unsafe_paths {
+        for name in ["read_fixture_file", "delete_fixture_file"] {
+            let mut arguments = serde_json::json!({
+                "project": "safeauthor", "packs_dir": packs_dir,
+                "stage": "01_first_stage", "fixture": "sample", "path": path
+            });
+            if name == "delete_fixture_file" {
+                arguments["confirm"] = serde_json::json!(true);
+            }
+            let result = client.call_tool(tool_params(name, arguments)).await?;
+            assert_eq!(
+                result.is_error,
+                Some(true),
+                "{name} accepted unsafe path {path:?}"
+            );
+            assert_eq!(tool_text_as_json(&result)?["status"], "blocked");
+        }
+    }
+    for fixture in [
+        "../sample",
+        "nested/sample",
+        "",
+        ".",
+        "/",
+        r"\",
+        r"C:\fixture",
+        r"\\server\fixture",
+        "double//separator",
+        r"mixed/\separator",
+    ] {
+        let result = client
+            .call_tool(tool_params(
+                "list_fixture_files",
+                serde_json::json!({
+                    "project": "safeauthor", "packs_dir": packs_dir,
+                    "stage": "01_first_stage", "fixture": fixture
+                }),
+            ))
+            .await?;
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "list_fixture_files accepted {fixture:?}"
+        );
+    }
+    for (name, arguments) in [
+        (
+            "read_pack_manifest",
+            serde_json::json!({"project": "../safeauthor", "packs_dir": packs_dir}),
+        ),
+        (
+            "read_stage_document",
+            serde_json::json!({
+                "project": "safeauthor", "packs_dir": packs_dir,
+                "stage": "../01_first_stage", "document": "instructions"
+            }),
+        ),
+        (
+            "read_stage_tests",
+            serde_json::json!({
+                "project": "safeauthor", "packs_dir": packs_dir, "stage": "../01_first_stage"
+            }),
+        ),
+        (
+            "read_stage_benchmarks",
+            serde_json::json!({
+                "project": "safeauthor", "packs_dir": packs_dir, "stage": "../01_first_stage"
+            }),
+        ),
+    ] {
         let result = client.call_tool(tool_params(name, arguments)).await?;
-        assert_eq!(result.is_error, Some(true), "{name} accepted unsafe path");
-        let report = tool_text_as_json(&result)?;
-        assert_eq!(report["status"], "blocked");
-        assert!(report.get("pack").is_some());
-        assert!(report.get("path").is_some());
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "{name} accepted unsafe identity"
+        );
     }
 
     let unexpected = client
@@ -729,12 +823,47 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
     fs::remove_file(binary_path)?;
     fs::remove_file(large_path)?;
 
+    #[cfg(unix)]
+    for name in [r"bad\name", "C:fixture"] {
+        let invalid_fixture = pack_root.join("stages/01_first_stage/fixtures").join(name);
+        fs::create_dir(&invalid_fixture)?;
+        let result = client
+            .call_tool(tool_params(
+                "list_fixture_files",
+                serde_json::json!({
+                    "project": "safeauthor", "packs_dir": packs_dir, "stage": "01_first_stage"
+                }),
+            ))
+            .await?;
+        assert_eq!(
+            result.is_error,
+            Some(true),
+            "listed unsafe fixture {name:?}"
+        );
+        fs::remove_dir(invalid_fixture)?;
+    }
+
     {
         let outside = temp_path("symlink-outside");
         fs::create_dir_all(&outside)?;
         fs::write(outside.join("outside.txt"), "outside\n")?;
         let link = pack_root.join("stages/01_first_stage/fixtures/linked");
-        if try_create_dir_symlink(&outside, &link) {
+        #[cfg(unix)]
+        let symlink_available = {
+            std::os::unix::fs::symlink(&outside, &link)?;
+            true
+        };
+        #[cfg(windows)]
+        let symlink_available = match std::os::windows::fs::symlink_dir(&outside, &link) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!(
+                    "SKIP: Windows symlink privilege unavailable for MCP security test: {error}"
+                );
+                false
+            }
+        };
+        if symlink_available {
             for (name, arguments) in [
                 (
                     "read_fixture_file",
@@ -765,7 +894,137 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
             assert!(outside.join("outside.txt").is_file());
             let _ = fs::remove_file(link);
         }
+
+        #[cfg(unix)]
+        {
+            let sample = pack_root.join("stages/01_first_stage/fixtures/sample");
+            let nested_link = sample.join("nested-link");
+            std::os::unix::fs::symlink(&outside, &nested_link)?;
+            for (name, arguments) in [
+                (
+                    "read_fixture_file",
+                    serde_json::json!({
+                        "project": "safeauthor", "packs_dir": packs_dir,
+                        "stage": "01_first_stage", "fixture": "sample",
+                        "path": "nested-link/outside.txt"
+                    }),
+                ),
+                (
+                    "list_fixture_files",
+                    serde_json::json!({
+                        "project": "safeauthor", "packs_dir": packs_dir,
+                        "stage": "01_first_stage", "fixture": "sample"
+                    }),
+                ),
+                (
+                    "delete_fixture_file",
+                    serde_json::json!({
+                        "project": "safeauthor", "packs_dir": packs_dir,
+                        "stage": "01_first_stage", "fixture": "sample",
+                        "path": "nested-link/outside.txt", "confirm": true
+                    }),
+                ),
+            ] {
+                let result = client.call_tool(tool_params(name, arguments)).await?;
+                assert_eq!(
+                    result.is_error,
+                    Some(true),
+                    "{name} followed nested symlink"
+                );
+            }
+            assert!(outside.join("outside.txt").is_file());
+            fs::remove_file(nested_link)?;
+
+            let final_link = sample.join("final-link.txt");
+            std::os::unix::fs::symlink(outside.join("outside.txt"), &final_link)?;
+            for (name, arguments) in [
+                (
+                    "read_fixture_file",
+                    serde_json::json!({
+                        "project": "safeauthor", "packs_dir": packs_dir,
+                        "stage": "01_first_stage", "fixture": "sample",
+                        "path": "final-link.txt"
+                    }),
+                ),
+                (
+                    "list_fixture_files",
+                    serde_json::json!({
+                        "project": "safeauthor", "packs_dir": packs_dir,
+                        "stage": "01_first_stage", "fixture": "sample"
+                    }),
+                ),
+                (
+                    "delete_fixture_file",
+                    serde_json::json!({
+                        "project": "safeauthor", "packs_dir": packs_dir,
+                        "stage": "01_first_stage", "fixture": "sample",
+                        "path": "final-link.txt", "confirm": true
+                    }),
+                ),
+            ] {
+                let result = client.call_tool(tool_params(name, arguments)).await?;
+                assert_eq!(result.is_error, Some(true), "{name} followed final symlink");
+            }
+            assert!(outside.join("outside.txt").is_file());
+            fs::remove_file(final_link)?;
+        }
         let _ = fs::remove_dir_all(outside);
+    }
+
+    #[cfg(unix)]
+    {
+        let sample = pack_root.join("stages/01_first_stage/fixtures/sample");
+        macro_rules! assert_special_blocked {
+            ($entry:expr) => {{
+                for (name, arguments) in [
+                    (
+                        "read_fixture_file",
+                        serde_json::json!({
+                            "project": "safeauthor", "packs_dir": packs_dir,
+                            "stage": "01_first_stage", "fixture": "sample", "path": $entry
+                        }),
+                    ),
+                    (
+                        "list_fixture_files",
+                        serde_json::json!({
+                            "project": "safeauthor", "packs_dir": packs_dir,
+                            "stage": "01_first_stage", "fixture": "sample"
+                        }),
+                    ),
+                    (
+                        "delete_fixture_file",
+                        serde_json::json!({
+                            "project": "safeauthor", "packs_dir": packs_dir,
+                            "stage": "01_first_stage", "fixture": "sample", "path": $entry,
+                            "confirm": true
+                        }),
+                    ),
+                ] {
+                    let result = client.call_tool(tool_params(name, arguments)).await?;
+                    assert_eq!(result.is_error, Some(true), "{name} accepted special file");
+                }
+            }};
+        }
+        let socket_path = sample.join("special.sock");
+        match std::os::unix::net::UnixDatagram::bind(&socket_path) {
+            Ok(socket) => {
+                assert_special_blocked!("special.sock");
+                drop(socket);
+                fs::remove_file(socket_path)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                eprintln!("SKIP: sandbox forbids Unix socket creation for MCP test: {error}");
+            }
+            Err(error) => return Err(error.into()),
+        }
+
+        let fifo_path = sample.join("special.fifo");
+        let output = std::process::Command::new("mkfifo")
+            .arg(&fifo_path)
+            .output()?;
+        assert!(output.status.success(), "mkfifo failed: {output:?}");
+        assert_special_blocked!("special.fifo");
+        fs::remove_file(fifo_path)?;
     }
 
     let invalid_tests = client
@@ -822,6 +1081,110 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
     Ok(())
 }
 
+#[tokio::test]
+async fn every_external_read_tool_leaves_fresh_cache_untouched() -> anyhow::Result<()> {
+    let packs_dir = short_temp_path("read-only-tools");
+    let cache = temp_path("read-only-cache");
+    let output = std::process::Command::new(deltaforge_bin())
+        .args([
+            "pack",
+            "new",
+            "readonlypack",
+            "--name",
+            "Read Only Pack",
+            "--description",
+            "Read-only MCP regression pack",
+            "--dest",
+            packs_dir.to_str().unwrap(),
+        ])
+        .output()?;
+    assert!(output.status.success(), "pack scaffold failed: {output:?}");
+
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(deltaforge_pack_mcp_bin()).configure(|command| {
+            command.env("DELTAFORGE_BIN", deltaforge_bin());
+            command.env("XDG_CACHE_HOME", &cache);
+            command.env("LOCALAPPDATA", &cache);
+            command.env("HOME", &cache);
+        }),
+    )?;
+    let client = ().serve(transport).await?;
+    for (name, arguments) in [
+        (
+            "read_pack_manifest",
+            serde_json::json!({"project": "readonlypack", "packs_dir": packs_dir}),
+        ),
+        (
+            "read_stage_document",
+            serde_json::json!({
+                "project": "readonlypack", "packs_dir": packs_dir,
+                "stage": "01_first_stage", "document": "instructions"
+            }),
+        ),
+        (
+            "read_stage_tests",
+            serde_json::json!({
+                "project": "readonlypack", "packs_dir": packs_dir, "stage": "01_first_stage"
+            }),
+        ),
+        (
+            "read_stage_benchmarks",
+            serde_json::json!({
+                "project": "readonlypack", "packs_dir": packs_dir, "stage": "01_first_stage"
+            }),
+        ),
+        (
+            "list_fixture_files",
+            serde_json::json!({
+                "project": "readonlypack", "packs_dir": packs_dir, "stage": "01_first_stage"
+            }),
+        ),
+        (
+            "read_fixture_file",
+            serde_json::json!({
+                "project": "readonlypack", "packs_dir": packs_dir,
+                "stage": "01_first_stage", "fixture": "example", "path": "input.txt"
+            }),
+        ),
+    ] {
+        let result = client.call_tool(tool_params(name, arguments)).await?;
+        assert_ne!(result.is_error, Some(true), "{name} failed");
+        assert!(!cache.exists(), "{name} created cache state");
+    }
+    client.cancel().await?;
+    assert!(!cache.exists());
+    fs::remove_dir_all(packs_dir)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn bundled_read_does_not_extract_embedded_cache() -> anyhow::Result<()> {
+    let cache = temp_path("bundled-read-cache");
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(deltaforge_pack_mcp_bin()).configure(|command| {
+            command.env("DELTAFORGE_BIN", deltaforge_bin());
+            command.env("XDG_CACHE_HOME", &cache);
+            command.env("LOCALAPPDATA", &cache);
+            command.env("HOME", &cache);
+        }),
+    )?;
+    let client = ().serve(transport).await?;
+    let read = client
+        .call_tool(tool_params(
+            "read_pack_manifest",
+            serde_json::json!({"project": "flashindex"}),
+        ))
+        .await?;
+    assert_eq!(tool_text_as_json(&read)?["manifest"]["id"], "flashindex");
+    client.cancel().await?;
+    assert!(
+        !cache.exists(),
+        "bundled MCP read extracted cache state at {}",
+        cache.display()
+    );
+    Ok(())
+}
+
 fn tool_text_as_json(result: &rmcp::model::CallToolResult) -> anyhow::Result<serde_json::Value> {
     let text = result
         .content
@@ -853,11 +1216,11 @@ fn temp_path(name: &str) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn try_create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> bool {
-    std::os::unix::fs::symlink(target, link).is_ok()
+fn short_temp_path(name: &str) -> PathBuf {
+    PathBuf::from("/tmp").join(format!("df-{name}-{}", std::process::id()))
 }
 
 #[cfg(windows)]
-fn try_create_dir_symlink(target: &std::path::Path, link: &std::path::Path) -> bool {
-    std::os::windows::fs::symlink_dir(target, link).is_ok()
+fn short_temp_path(name: &str) -> PathBuf {
+    temp_path(name)
 }

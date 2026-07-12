@@ -1,16 +1,21 @@
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use cap_fs_ext::{DirExt, FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, OpenOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::fs_util::atomic_write;
 use crate::integrity::is_safe_relative_path;
 use crate::pack::{
-    LoadedPack, PackSearchOptions, ProjectPack, StageBenchmarks, load_pack, pack_search_dirs,
-    validate_pack, validate_stage_benchmarks_source, validate_stage_tests_source,
+    LoadedPack, PackSearchOptions, ProjectPack, StageBenchmarks, load_pack, load_pack_read_only,
+    pack_search_dirs_read_only, validate_pack, validate_stage_benchmarks_source,
+    validate_stage_tests_source,
 };
 use crate::runner::StageTests;
 
@@ -794,38 +799,36 @@ pub fn list_fixture_files(request: &ListFixtureFilesRequest) -> Result<ListFixtu
     let pack = load_read_authoring_pack(&request.project, request.packs_dir.as_deref())?;
     let stage = require_stage(&pack, &request.stage)?;
     let fixtures_relative = stage.path.join("fixtures");
-    reject_symlink_components(&pack.root, &fixtures_relative)?;
     let fixtures_root = pack.root.join(&fixtures_relative);
-    let metadata = match fs::symlink_metadata(&fixtures_root) {
-        Ok(metadata) if metadata.is_dir() => metadata,
-        Ok(_) => {
-            return Ok(ListFixtureFilesReport {
-                report: read_blocked(&pack, &fixtures_root, "fixtures path is not a directory"),
-                fixtures: None,
-                files: None,
-            });
-        }
+    let pack_root = open_pack_root_capability(&pack.root)?;
+    let fixtures_dir = match open_relative_dir_nofollow(pack_root, &fixtures_relative) {
+        Ok(dir) => dir,
         Err(error) => {
             return Ok(ListFixtureFilesReport {
-                report: read_blocked(
-                    &pack,
-                    &fixtures_root,
-                    format!("failed to inspect fixtures directory: {error}"),
-                ),
+                report: read_blocked(&pack, &fixtures_root, format!("{error:#}")),
                 fixtures: None,
                 files: None,
             });
         }
     };
-    debug_assert!(metadata.is_dir());
 
     if let Some(fixture) = &request.fixture {
         validate_fixture_name(fixture)?;
-        let relative = fixtures_relative.join(fixture);
-        reject_symlink_components(&pack.root, &relative)?;
-        let fixture_root = pack.root.join(relative);
+        let fixture_root = fixtures_root.join(fixture);
+        let fixture_dir = match fixtures_dir.open_dir_nofollow(fixture) {
+            Ok(dir) => dir,
+            Err(error) => {
+                return Ok(ListFixtureFilesReport {
+                    report: read_blocked(&pack, &fixture_root, format!("{error:#}")),
+                    fixtures: None,
+                    files: None,
+                });
+            }
+        };
         let mut files = Vec::new();
-        if let Err(error) = collect_fixture_files(&fixture_root, &fixture_root, &mut files) {
+        if let Err(error) =
+            collect_fixture_files_capability(&fixture_dir, Path::new(""), &mut files)
+        {
             return Ok(ListFixtureFilesReport {
                 report: read_blocked(&pack, &fixture_root, format!("{error:#}")),
                 fixtures: None,
@@ -845,36 +848,40 @@ pub fn list_fixture_files(request: &ListFixtureFilesRequest) -> Result<ListFixtu
     }
 
     let mut fixtures = Vec::new();
-    let entries = fs::read_dir(&fixtures_root).with_context(|| {
-        format!(
-            "failed to read fixtures directory {}",
-            fixtures_root.display()
-        )
-    })?;
-    for entry in entries {
+    for entry in fixtures_dir.entries()? {
         let entry = entry?;
+        let name = match entry.file_name().into_string() {
+            Ok(name) => name,
+            Err(_) => {
+                return Ok(ListFixtureFilesReport {
+                    report: read_blocked(&pack, &fixtures_root, "fixture name is not valid UTF-8"),
+                    fixtures: None,
+                    files: None,
+                });
+            }
+        };
+        if let Err(error) = validate_fixture_name(&name) {
+            return Ok(ListFixtureFilesReport {
+                report: read_blocked(&pack, &fixtures_root.join(&name), format!("{error:#}")),
+                fixtures: None,
+                files: None,
+            });
+        }
         let file_type = entry.file_type()?;
-        if file_type.is_symlink() || !file_type.is_dir() {
+        if file_type.is_symlink()
+            || !file_type.is_dir()
+            || fixtures_dir.open_dir_nofollow(&name).is_err()
+        {
             return Ok(ListFixtureFilesReport {
                 report: read_blocked(
                     &pack,
-                    &entry.path(),
+                    &fixtures_root.join(&name),
                     "fixture entries must be real directories; symlinks and special files are forbidden",
                 ),
                 fixtures: None,
                 files: None,
             });
         }
-        let name = match entry.file_name().into_string() {
-            Ok(name) => name,
-            Err(_) => {
-                return Ok(ListFixtureFilesReport {
-                    report: read_blocked(&pack, &entry.path(), "fixture name is not valid UTF-8"),
-                    fixtures: None,
-                    files: None,
-                });
-            }
-        };
         fixtures.push(name);
     }
     fixtures.sort();
@@ -901,9 +908,19 @@ pub fn read_fixture_file(request: &ReadFixtureFileRequest) -> Result<ReadFixture
         .join("fixtures")
         .join(&request.fixture)
         .join(&request.path);
-    reject_symlink_components(&pack.root, &relative)?;
-    let path = pack.root.join(relative);
-    let bytes = match read_authored_regular_file(&path) {
+    let path = pack.root.join(&relative);
+    let fixture_relative = stage.path.join("fixtures").join(&request.fixture);
+    let pack_root = open_pack_root_capability(&pack.root)?;
+    let fixture_dir = match open_relative_dir_nofollow(pack_root, &fixture_relative) {
+        Ok(dir) => dir,
+        Err(error) => {
+            return Ok(ReadFixtureFileReport {
+                report: read_blocked(&pack, &path, format!("{error:#}")),
+                content: None,
+            });
+        }
+    };
+    let bytes = match read_capability_file(&fixture_dir, &request.path) {
         Ok(bytes) => bytes,
         Err(error) => {
             return Ok(ReadFixtureFileReport {
@@ -939,6 +956,13 @@ pub fn read_fixture_file(request: &ReadFixtureFileRequest) -> Result<ReadFixture
 }
 
 pub fn delete_fixture_file(request: &DeleteFixtureFileRequest) -> Result<AuthoringReport> {
+    delete_fixture_file_with_hook(request, || {})
+}
+
+fn delete_fixture_file_with_hook(
+    request: &DeleteFixtureFileRequest,
+    before_relative_open: impl FnOnce(),
+) -> Result<AuthoringReport> {
     validate_fixture_name(&request.fixture)?;
     if !is_safe_relative_path(&request.path) {
         bail!("unsafe fixture file path: {}", request.path.display());
@@ -965,36 +989,50 @@ pub fn delete_fixture_file(request: &DeleteFixtureFileRequest) -> Result<Authori
     let pack = load_explicit_authoring_pack(&request.project, &request.packs_dir)?;
     let stage = require_stage(&pack, &request.stage)?;
     let fixture_relative = stage.path.join("fixtures").join(&request.fixture);
-    reject_symlink_components(&pack.root, &fixture_relative)?;
     let fixture_root = pack.root.join(&fixture_relative);
-    let relative = fixture_relative.join(&request.path);
-    reject_symlink_components(&pack.root, &relative)?;
-    let path = pack.root.join(relative);
-    let metadata = match fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => metadata,
-        Ok(_) => {
+    let path = fixture_root.join(&request.path);
+    let pack_root = open_pack_root_capability(&pack.root)?;
+    let fixture_dir = match open_relative_dir_nofollow(pack_root, &fixture_relative) {
+        Ok(dir) => dir,
+        Err(error) => {
             return Ok(AuthoringReport::blocked(
-                Some(pack.manifest.id),
+                Some(pack.manifest.id.clone()),
                 Some(&path),
-                vec!["delete target is not a regular file".to_string()],
-                vec!["Choose one regular file beneath the named fixture.".to_string()],
+                vec![format!("{error:#}")],
+                vec!["Fix the fixture path and retry without symbolic links.".to_string()],
             ));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    };
+    before_relative_open();
+    let (parent, file_name) = match open_parent_dir_nofollow(fixture_dir, &request.path) {
+        Ok(opened) => opened,
+        Err(error) => {
             return Ok(AuthoringReport::blocked(
-                Some(pack.manifest.id),
+                Some(pack.manifest.id.clone()),
                 Some(&path),
-                vec!["fixture file does not exist".to_string()],
+                vec![format!("fixture file cannot be opened safely: {error:#}")],
                 vec!["List the fixture again and choose an existing regular file.".to_string()],
             ));
         }
+    };
+    let file = match open_regular_file_nofollow(&parent, &file_name) {
+        Ok(file) => file,
         Err(error) => {
-            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+            return Ok(AuthoringReport::blocked(
+                Some(pack.manifest.id.clone()),
+                Some(&path),
+                vec![format!("delete target is not a regular file: {error:#}")],
+                vec!["Choose one existing regular file beneath the named fixture.".to_string()],
+            ));
         }
     };
-    debug_assert!(metadata.is_file());
-    fs::remove_file(&path).with_context(|| format!("failed to delete {}", path.display()))?;
-    remove_empty_fixture_parents(path.parent(), &fixture_root);
+    // Keep the verified file handle alive until the handle-relative unlink.
+    // A concurrent parent rename cannot redirect this operation outside the
+    // already-opened fixture-root capability.
+    parent
+        .remove_file(&file_name)
+        .with_context(|| format!("failed to delete {}", path.display()))?;
+    drop(file);
     Ok(AuthoringReport::ok(
         pack.manifest.id,
         path,
@@ -1070,75 +1108,162 @@ fn require_regular_file(path: &Path) -> Result<fs::Metadata> {
 
 fn validate_fixture_name(fixture: &str) -> Result<()> {
     let path = Path::new(fixture);
-    if !is_safe_relative_path(path) || path.components().count() != 1 {
+    if !is_safe_relative_path(path)
+        || path.components().count() != 1
+        || fixture.contains(['/', '\\', ':'])
+    {
         bail!("unsafe fixture name: {fixture}");
     }
     Ok(())
 }
 
-fn collect_fixture_files(
-    fixture_root: &Path,
-    current: &Path,
-    files: &mut Vec<FixtureFileEntry>,
-) -> Result<()> {
-    let metadata = fs::symlink_metadata(current)
-        .with_context(|| format!("failed to inspect fixture path {}", current.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+fn open_pack_root_capability(root: &Path) -> Result<Dir> {
+    let expected = fs::symlink_metadata(root)
+        .with_context(|| format!("failed to inspect pack root {}", root.display()))?;
+    if expected.file_type().is_symlink() || !expected.is_dir() {
+        bail!("pack root must be a real directory: {}", root.display());
+    }
+    let parent = root
+        .parent()
+        .with_context(|| format!("pack root has no parent: {}", root.display()))?;
+    let name = root
+        .file_name()
+        .with_context(|| format!("pack root has no directory name: {}", root.display()))?;
+    let parent = Dir::open_ambient_dir(parent, ambient_authority())
+        .with_context(|| format!("failed to open pack parent for {}", root.display()))?;
+    let opened = parent
+        .open_dir_nofollow(name)
+        .with_context(|| format!("pack root must be a real directory: {}", root.display()))?;
+    let actual = opened.dir_metadata()?;
+    if expected.dev() != actual.dev() || expected.ino() != actual.ino() {
+        bail!("pack root changed while opening: {}", root.display());
+    }
+    Ok(opened)
+}
+
+fn open_relative_dir_nofollow(mut current: Dir, relative: &Path) -> Result<Dir> {
+    if !is_safe_relative_path(relative) {
+        bail!("unsafe capability directory path: {}", relative.display());
+    }
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            bail!("unsafe capability directory path: {}", relative.display());
+        };
+        current = current.open_dir_nofollow(name).with_context(|| {
+            format!(
+                "directory path crosses a symlink or non-directory component: {}",
+                relative.display()
+            )
+        })?;
+    }
+    Ok(current)
+}
+
+fn open_parent_dir_nofollow(mut current: Dir, relative: &Path) -> Result<(Dir, PathBuf)> {
+    if !is_safe_relative_path(relative) {
+        bail!("unsafe fixture file path: {}", relative.display());
+    }
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let std::path::Component::Normal(name) = component else {
+            bail!("unsafe fixture file path: {}", relative.display());
+        };
+        if components.peek().is_none() {
+            return Ok((current, PathBuf::from(name)));
+        }
+        current = current.open_dir_nofollow(name).with_context(|| {
+            format!(
+                "fixture path crosses a symlink or non-directory component: {}",
+                relative.display()
+            )
+        })?;
+    }
+    bail!("fixture file path must not be empty")
+}
+
+fn open_regular_file_nofollow(dir: &Dir, name: &Path) -> Result<cap_std::fs::File> {
+    let metadata = dir.symlink_metadata(name)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("fixture entry is not a regular file: {}", name.display());
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let file = dir.open_with(name, &options).with_context(|| {
+        format!(
+            "refusing to follow fixture-file symlink: {}",
+            name.display()
+        )
+    })?;
+    if !file.metadata()?.is_file() {
+        bail!("fixture entry is not a regular file: {}", name.display());
+    }
+    Ok(file)
+}
+
+fn read_capability_file(fixture_dir: &Dir, relative: &Path) -> Result<Vec<u8>> {
+    let (parent, name) = open_parent_dir_nofollow(fixture_dir.try_clone()?, relative)?;
+    let file = open_regular_file_nofollow(&parent, &name)?;
+    if file.metadata()?.len() > MAX_AUTHORED_TEXT_BYTES as u64 {
         bail!(
-            "fixture root must be a real directory: {}",
-            fixture_root.display()
+            "file exceeds the {} byte authored-text limit",
+            MAX_AUTHORED_TEXT_BYTES
         );
     }
-    for entry in fs::read_dir(current)
-        .with_context(|| format!("failed to read fixture directory {}", current.display()))?
-    {
+    let mut bytes = Vec::new();
+    file.take(MAX_AUTHORED_TEXT_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_AUTHORED_TEXT_BYTES {
+        bail!(
+            "file exceeds the {} byte authored-text limit",
+            MAX_AUTHORED_TEXT_BYTES
+        );
+    }
+    Ok(bytes)
+}
+
+fn collect_fixture_files_capability(
+    current: &Dir,
+    prefix: &Path,
+    files: &mut Vec<FixtureFileEntry>,
+) -> Result<()> {
+    for entry in current.entries()? {
         let entry = entry?;
-        let path = entry.path();
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("fixture path component is not valid UTF-8"))?;
+        validate_fixture_name(&name)?;
+        let relative = prefix.join(&name);
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
-            bail!("fixture tree contains a symbolic link: {}", path.display());
+            bail!(
+                "fixture tree contains a symbolic link: {}",
+                relative.display()
+            );
         }
         if file_type.is_dir() {
-            collect_fixture_files(fixture_root, &path, files)?;
+            let child = current.open_dir_nofollow(&name).with_context(|| {
+                format!(
+                    "fixture directory changed or is a symlink: {}",
+                    relative.display()
+                )
+            })?;
+            collect_fixture_files_capability(&child, &relative, files)?;
             continue;
         }
         if !file_type.is_file() {
-            bail!("fixture tree contains a special file: {}", path.display());
+            bail!(
+                "fixture tree contains a special file: {}",
+                relative.display()
+            );
         }
-        let relative = path.strip_prefix(fixture_root)?;
-        if !is_safe_relative_path(relative) {
-            bail!("fixture tree contains an unsafe path: {}", path.display());
-        }
-        let relative = relative
-            .to_str()
-            .with_context(|| format!("fixture path is not valid UTF-8: {}", path.display()))?
-            .replace('\\', "/");
-        let metadata = fs::symlink_metadata(&path)
-            .with_context(|| format!("failed to inspect fixture file {}", path.display()))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            bail!("fixture entry changed while listing: {}", path.display());
-        }
+        let file = open_regular_file_nofollow(current, Path::new(&name))?;
         files.push(FixtureFileEntry {
-            path: relative,
-            size: metadata.len(),
+            path: relative.to_string_lossy().replace('\\', "/"),
+            size: file.metadata()?.len(),
         });
     }
     Ok(())
-}
-
-fn remove_empty_fixture_parents(mut current: Option<&Path>, fixture_root: &Path) {
-    while let Some(directory) = current {
-        if directory == fixture_root || !directory.starts_with(fixture_root) {
-            break;
-        }
-        let empty = fs::read_dir(directory)
-            .map(|mut entries| entries.next().is_none())
-            .unwrap_or(false);
-        if !empty || fs::remove_dir(directory).is_err() {
-            break;
-        }
-        current = directory.parent();
-    }
 }
 
 pub fn diagnose_pack(pack: &LoadedPack) -> AuthoringReport {
@@ -1301,7 +1426,7 @@ fn load_read_authoring_pack(project: &str, packs_dir: Option<&Path>) -> Result<L
     if !is_safe_relative_path(Path::new(project)) || Path::new(project).components().count() != 1 {
         bail!("unsafe project pack id: {project}");
     }
-    for search_dir in pack_search_dirs(&options) {
+    for search_dir in pack_search_dirs_read_only(&options) {
         let root = search_dir.join(project);
         let manifest = root.join("project.yaml");
         match fs::symlink_metadata(&root) {
@@ -1330,7 +1455,7 @@ fn load_read_authoring_pack(project: &str, packs_dir: Option<&Path>) -> Result<L
                 );
             }
             Ok(_) => {
-                return load_pack(project, &options);
+                return load_pack_read_only(project, &options);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -1339,7 +1464,7 @@ fn load_read_authoring_pack(project: &str, packs_dir: Option<&Path>) -> Result<L
             }
         }
     }
-    load_pack(project, &options)
+    load_pack_read_only(project, &options)
 }
 
 fn load_explicit_authoring_pack(project: &str, packs_dir: &Path) -> Result<LoadedPack> {
@@ -1744,4 +1869,84 @@ fn stage_tests(title: &str) -> String {
         - "replace-me"
 "#
     )
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capability_delete_blocks_intermediate_symlink_swap() {
+        let root = std::env::temp_dir().join(format!(
+            "deltaforge-cap-delete-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        create_pack(&NewPackRequest {
+            id: "racepack".to_string(),
+            name: "Race Pack".to_string(),
+            description: "Capability deletion regression".to_string(),
+            dest: root.clone(),
+            language: "rust".to_string(),
+            force: false,
+        })
+        .unwrap();
+
+        let pack = root.join("racepack");
+        let fixture = pack.join("stages/01_first_stage/fixtures/example");
+        let nested = fixture.join("nested");
+        let preserved = fixture.join("nested-preserved");
+        let sibling = pack.join("stages/01_first_stage/fixtures/sibling");
+        let external = root.join("external");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(nested.join("victim.txt"), "fixture victim").unwrap();
+        fs::write(fixture.join("neighbor.txt"), "neighbor").unwrap();
+        fs::write(sibling.join("sibling.txt"), "sibling").unwrap();
+        fs::write(external.join("victim.txt"), "external victim").unwrap();
+
+        let report = delete_fixture_file_with_hook(
+            &DeleteFixtureFileRequest {
+                project: "racepack".to_string(),
+                packs_dir: root.clone(),
+                stage: "01_first_stage".to_string(),
+                fixture: "example".to_string(),
+                path: PathBuf::from("nested/victim.txt"),
+                confirm: true,
+            },
+            || {
+                fs::rename(&nested, &preserved).unwrap();
+                std::os::unix::fs::symlink(&external, &nested).unwrap();
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.status, "blocked");
+        assert_eq!(
+            fs::read_to_string(external.join("victim.txt")).unwrap(),
+            "external victim"
+        );
+        assert_eq!(
+            fs::read_to_string(preserved.join("victim.txt")).unwrap(),
+            "fixture victim"
+        );
+        assert!(fixture.is_dir());
+        assert_eq!(
+            fs::read_to_string(fixture.join("neighbor.txt")).unwrap(),
+            "neighbor"
+        );
+        assert_eq!(
+            fs::read_to_string(sibling.join("sibling.txt")).unwrap(),
+            "sibling"
+        );
+        assert!(pack.join("stages/01_first_stage/tests.yaml").is_file());
+        assert!(pack.join("project.yaml").is_file());
+
+        fs::remove_file(nested).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
 }
