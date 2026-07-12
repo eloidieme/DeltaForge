@@ -36,7 +36,7 @@ fn run() -> Result<(), String> {
 
 fn scan(root: &Path) -> Result<(), String> {
     for file in source_files(root)? {
-        println!("{}", file.display());
+        println!("{}", portable_path(&file));
     }
     Ok(())
 }
@@ -45,7 +45,7 @@ fn tokenize_command(root: &Path) -> Result<(), String> {
     for occurrence in token_occurrences(root)? {
         println!(
             "{}:{}:{} {}",
-            occurrence.path.display(),
+            portable_path(&occurrence.path),
             occurrence.line,
             occurrence.column,
             occurrence.token
@@ -59,7 +59,7 @@ fn search(root: &Path, query: &str) -> Result<(), String> {
         if occurrence.token == query {
             println!(
                 "{}:{}:{} {}",
-                occurrence.path.display(),
+                portable_path(&occurrence.path),
                 occurrence.line,
                 occurrence.column,
                 occurrence.token
@@ -73,7 +73,7 @@ fn print_index(root: &Path) -> Result<(), String> {
     for (token, paths) in build_index(root)? {
         let paths = paths
             .into_iter()
-            .map(|path| path.display().to_string())
+            .map(|path| portable_path(&path))
             .collect::<Vec<_>>()
             .join(" ");
         println!("{token} {paths}");
@@ -86,7 +86,7 @@ fn write_index(root: &Path, output: &Path) -> Result<(), String> {
     for (token, paths) in build_index(root)? {
         let paths = paths
             .into_iter()
-            .map(|path| path.display().to_string())
+            .map(|path| portable_path(&path))
             .collect::<Vec<_>>()
             .join("\t");
         serialized.push_str(&token);
@@ -251,4 +251,8 @@ fn is_source_like(path: &Path) -> bool {
 
 fn is_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+fn portable_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }

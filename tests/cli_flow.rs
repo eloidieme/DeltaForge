@@ -1464,7 +1464,8 @@ fn missing_pack_error_lists_external_and_dev_search_paths() {
     assert_stderr_contains(
         &init,
         &packs_root
-            .join("missingpack/project.yaml")
+            .join("missingpack")
+            .join("project.yaml")
             .display()
             .to_string(),
     );
