@@ -131,32 +131,32 @@ fn render_learning_page(
         InitialView::Overview => "overview".to_string(),
         InitialView::Stage(stage) => format!("stage-{stage}"),
     };
+    let total = stages.len();
     let completed = stages
         .iter()
         .filter(|stage| stage.status == "complete")
         .count();
-    let progress = if stages.is_empty() {
-        0
-    } else {
-        completed * 100 / stages.len()
-    };
-    let mut sidebar = String::new();
+
+    let notches = stages
+        .iter()
+        .map(|stage| format!(r#"<span class="notch {}"></span>"#, stage.status))
+        .collect::<String>();
+
+    let mut contents_rows = String::new();
     for (index, stage) in stages.iter().enumerate() {
-        let marker = match stage.status {
-            "complete" => "✓",
-            "current" => "→",
-            _ => "·",
-        };
-        sidebar.push_str(&format!(
-            r#"<button class="stage-link {status}" data-target="stage-{id}" aria-label="Open stage {number}: {title}"><span class="stage-marker">{marker}</span><span><small>Stage {number}</small>{title}</span></button>"#,
+        contents_rows.push_str(&format!(
+            r#"<li><button class="toc-link {status}" data-target="stage-{id}" aria-label="Stage {number}: {title} — {label}"><span class="toc-num" aria-hidden="true">{numbered:02}</span><span class="toc-title">{title}</span><span class="toc-state" aria-hidden="true">{glyph}</span></button></li>"#,
             status = stage.status,
             id = escape_attr(&stage.id),
             number = index + 1,
+            numbered = index + 1,
             title = escape_html(&stage.title),
+            label = status_label(stage.status),
+            glyph = status_glyph(stage.status),
         ));
     }
 
-    let overview_panel = render_overview_panel(overview, stages);
+    let overview_panel = render_overview_panel(pack_name, overview, stages);
     let stage_panels = stages
         .iter()
         .enumerate()
@@ -169,167 +169,290 @@ fn render_learning_page(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
 <title>{pack_name} · DeltaForge</title>
-<style>{CSS}</style>
+<style>{css}</style>
 </head>
 <body data-initial-target="{initial_target}">
 <a class="skip-link" href="#main-content">Skip to content</a>
-<div class="app-shell">
-  <aside id="mobile-drawer" class="sidebar" aria-label="Course navigation">
-    <div class="brand"><span class="brand-mark">Δ</span><span><strong>DeltaForge</strong><small>{pack_name}</small></span></div>
-    <button class="overview-link" data-target="overview"><span>⌂</span> Project overview</button>
-    <div class="progress-card"><div><span>Your progress</span><strong>{completed}/{total}</strong></div><div class="progress-track"><span style="width:{progress}%"></span></div></div>
-    <nav class="stage-nav" aria-label="Stages">{sidebar}</nav>
-    <div class="sidebar-meta"><span>{project}</span><span>{language}</span></div>
-  </aside>
-  <main id="main-content" class="main-content">
-    <header class="mobile-header"><button id="menu-button" aria-expanded="false" aria-controls="mobile-drawer">☰</button><strong>{pack_name}</strong></header>
-    {overview_panel}
-    {stage_panels}
-  </main>
+<header class="masthead">
+  <button id="menu-button" class="menu-button" aria-expanded="false" aria-controls="contents-nav">Contents</button>
+  <div class="brand"><span class="mark" aria-hidden="true">Δ</span><span class="brand-text"><span class="brand-name">DeltaForge</span><span class="brand-pack">{pack_name}</span></span></div>
+  <div class="masthead-meta"><span class="workbench">{project} · {language}</span><div class="progress"><span class="notches" role="img" aria-label="{completed} of {total} stages complete">{notches}</span><span class="progress-count">{completed} of {total} complete</span></div></div>
+</header>
+<div class="layout">
+<nav id="contents-nav" class="contents" aria-label="Chapters">
+  <p class="contents-label" aria-hidden="true">Contents</p>
+  <button class="toc-link front" data-target="overview" aria-label="Project overview"><span class="toc-num" aria-hidden="true">Δ</span><span class="toc-title">Project overview</span></button>
+  <ol class="toc-list">{contents_rows}</ol>
+</nav>
+<main id="main-content">
+{overview_panel}
+{stage_panels}
+</main>
 </div>
-<div id="toast" role="status" aria-live="polite"></div>
-<script>{JS}</script>
+<div id="scrim" class="scrim" aria-hidden="true"></div>
+<script>{js}</script>
 </body>
 </html>"##,
         pack_name = escape_html(pack_name),
         project = escape_html(project),
         language = escape_html(language),
-        total = stages.len(),
         initial_target = escape_attr(&initial_target),
+        css = CSS,
+        js = JS,
     )
 }
 
-fn render_overview_panel(overview: &str, stages: &[StagePage]) -> String {
+fn render_overview_panel(pack_name: &str, overview: &str, stages: &[StagePage]) -> String {
     let sections = split_h2_sections(overview);
-    let start = select_sections(
-        &sections,
-        &["What you are building", "Why this is useful", "Big picture"],
-    );
-    let practice = select_sections(&sections, &["Failure-analysis lab"]);
-    let explore = select_sections(&sections, &["Optional extensions"]);
-    let reference = sections
-        .iter()
-        .filter(|(title, _)| {
-            !matches!(
-                title.as_str(),
-                "What you are building"
-                    | "Why this is useful"
-                    | "Big picture"
-                    | "Failure-analysis lab"
-                    | "Optional extensions"
-                    | "What good looks like"
-            )
-        })
-        .map(|(title, body)| format!("## {title}\n\n{body}"))
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let good = select_sections(&sections, &["What good looks like"]);
-    let roadmap = stages
+    let lede = section_body(&sections, "What you are building")
+        .map(markdown_to_html)
+        .unwrap_or_default();
+
+    let mut secs = String::new();
+    let mut rail = String::new();
+    let mut number = 0;
+
+    if let Some(body) = section_body(&sections, "Why this is useful") {
+        push_section(
+            &mut secs,
+            &mut rail,
+            &mut number,
+            "overview",
+            "Why this is useful",
+            &markdown_to_html(body),
+            false,
+        );
+    }
+
+    let roadmap_rows = stages
         .iter()
         .enumerate()
         .map(|(index, stage)| {
-            let summary = stage_summary(&stage.source);
             format!(
-                r#"<article class="roadmap-card {status}"><span class="roadmap-number">{number}</span><div><small>{label}</small><h3>{title}</h3><p>{summary}</p></div></article>"#,
+                r#"<li><button class="roadmap-row {status}" data-target="stage-{id}"><span class="roadmap-head"><span class="roadmap-num" aria-hidden="true">{number:02}</span><span class="roadmap-title">{title}</span><span class="roadmap-leader" aria-hidden="true"></span><span class="roadmap-state">{state}</span></span><span class="roadmap-summary">{summary}</span></button></li>"#,
                 status = stage.status,
+                id = escape_attr(&stage.id),
                 number = index + 1,
-                label = status_label(stage.status),
                 title = escape_html(&stage.title),
-                summary = escape_html(&summary),
+                state = roadmap_state(stage.status),
+                summary = escape_html(&stage_summary(&stage.source)),
             )
         })
         .collect::<String>();
+    push_section(
+        &mut secs,
+        &mut rail,
+        &mut number,
+        "overview",
+        "The road ahead",
+        &format!(r#"<ol class="roadmap">{roadmap_rows}</ol>"#),
+        false,
+    );
+
+    for (title, body) in &sections {
+        if title.eq_ignore_ascii_case("What you are building")
+            || title.eq_ignore_ascii_case("Why this is useful")
+        {
+            continue;
+        }
+        let boxed = title.eq_ignore_ascii_case("What good looks like");
+        push_section(
+            &mut secs,
+            &mut rail,
+            &mut number,
+            "overview",
+            title,
+            &markdown_to_html(body),
+            boxed,
+        );
+    }
+    if sections.is_empty() && !overview.trim().is_empty() {
+        push_section(
+            &mut secs,
+            &mut rail,
+            &mut number,
+            "overview",
+            "About this project",
+            &markdown_to_html(overview),
+            false,
+        );
+    }
+
+    let lede_block = if lede.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<div class="lede">{lede}</div>"#)
+    };
+
     format!(
-        r#"<section id="overview" class="page-panel" hidden>
-<div class="page-width">
-  <div class="eyebrow">Project overview</div>
-  <h1>Start with the big idea</h1>
-  <p class="lede">See what you are building, why each step exists, and how the stages fit together. You can return here whenever the details start to feel disconnected.</p>
-  {good}
-  <div class="tabs" role="tablist" aria-label="Overview sections">
-    <button role="tab" aria-selected="true" data-tab="overview-start">Start here</button>
-    <button role="tab" aria-selected="false" data-tab="overview-roadmap">Roadmap</button>
-    <button role="tab" aria-selected="false" data-tab="overview-practice">Practice</button>
-    <button role="tab" aria-selected="false" data-tab="overview-reference">Reference</button>
-  </div>
-  <div id="overview-start" class="tab-panel active">{start}</div>
-  <div id="overview-roadmap" class="tab-panel"><div class="roadmap-grid">{roadmap}</div></div>
-  <div id="overview-practice" class="tab-panel">{practice}{explore}</div>
-  <div id="overview-reference" class="tab-panel">{reference}</div>
-</div></section>"#,
-        start = markdown_to_html(&start),
-        good = callout("What good looks like", &plain_text(&good), "success"),
-        practice = markdown_to_html(&practice),
-        explore = markdown_to_html(&explore),
-        reference = markdown_to_html(&reference),
+        r#"<section id="overview" class="chapter" hidden>
+<div class="chapter-main">
+<header class="chapter-head">
+<p class="kicker"><span>Project overview</span></p>
+<h1 class="chapter-title" tabindex="-1">{pack_name}</h1>
+{lede_block}
+</header>
+<aside class="rail"><nav aria-label="Sections on this page"><p class="rail-label">On this page</p><ol>{rail}</ol></nav></aside>
+<div class="prose">{secs}</div>
+</div>
+</section>"#,
+        pack_name = escape_html(pack_name),
     )
 }
 
 fn render_stage_panel(stage: &StagePage, index: usize, stages: &[StagePage]) -> String {
     let sections = split_h2_sections(&stage.source);
-    let goal = select_sections(&sections, &["Goal"]);
-    let background = select_sections(&sections, &["Background"]);
-    let requirements = select_sections(&sections, &["Requirements", "Edge cases"]);
-    let example = select_sections(&sections, &["Example"]);
-    let success = select_sections(&sections, &["Success criteria"]);
-    let non_goals = select_sections(&sections, &["Non-goals"]);
-    let previous = index
+    let panel_id = format!("stage-{}", stage.id);
+    let goal = section_body(&sections, "Goal")
+        .map(markdown_to_html)
+        .unwrap_or_default();
+
+    let mut secs = String::new();
+    let mut rail = String::new();
+    let mut number = 0;
+    for (title, body) in &sections {
+        if title.eq_ignore_ascii_case("Goal") {
+            continue;
+        }
+        let boxed = title.eq_ignore_ascii_case("Non-goals");
+        push_section(
+            &mut secs,
+            &mut rail,
+            &mut number,
+            &panel_id,
+            title,
+            &markdown_to_html(body),
+            boxed,
+        );
+    }
+
+    let (previous_target, previous_title) = index
         .checked_sub(1)
         .and_then(|previous| stages.get(previous))
-        .map_or("The project overview".to_string(), |stage| {
-            stage.title.clone()
-        });
+        .map_or_else(
+            || ("overview".to_string(), "Project overview".to_string()),
+            |stage| (format!("stage-{}", stage.id), stage.title.clone()),
+        );
     let next = stages
         .get(index + 1)
-        .map_or("The finished project".to_string(), |stage| {
-            stage.title.clone()
+        .map(|stage| (format!("stage-{}", stage.id), stage.title.clone()));
+    let next_waypoint = next
+        .as_ref()
+        .map_or("The finished project".to_string(), |(_, title)| {
+            title.clone()
         });
-    let status = status_label(stage.status);
+    let turn_next = next.as_ref().map_or_else(
+        || {
+            r#"<p class="turn-end">This is the final stage. Everything past it is yours to design.</p>"#
+                .to_string()
+        },
+        |(target, title)| {
+            format!(
+                r#"<button class="turn next" data-target="{target}"><span class="turn-label">Next →</span><span class="turn-title">{title}</span></button>"#,
+                target = escape_attr(target),
+                title = escape_html(title),
+            )
+        },
+    );
+
     format!(
-        r#"<section id="stage-{id}" class="page-panel" hidden>
-<div class="page-width">
-  <div class="stage-heading"><div><div class="eyebrow">Stage {number} · {status}</div><h1>{title}</h1><p class="lede">{summary}</p></div><span class="status-pill {status_class}">{status}</span></div>
-  <div class="orientation-grid">
-    <article><small>You already have</small><strong>{previous}</strong></article>
-    <article class="accent"><small>This stage adds</small><strong>{summary}</strong></article>
-    <article><small>Coming next</small><strong>{next}</strong></article>
-  </div>
-  <div class="tabs" role="tablist" aria-label="Stage {number} sections">
-    <button role="tab" aria-selected="true" data-tab="{id}-task">Task</button>
-    <button role="tab" aria-selected="false" data-tab="{id}-example">Example</button>
-    <button role="tab" aria-selected="false" data-tab="{id}-why">Why?</button>
-    <button role="tab" aria-selected="false" data-tab="{id}-reference">Reference</button>
-  </div>
-  <div id="{id}-task" class="tab-panel active">{goal}{requirements}{success}</div>
-  <div id="{id}-example" class="tab-panel">{example}</div>
-  <div id="{id}-why" class="tab-panel">{background}</div>
-  <div id="{id}-reference" class="tab-panel">{non_goals}</div>
-</div></section>"#,
-        id = escape_attr(&stage.id),
+        r#"<section id="{panel_id}" class="chapter" hidden>
+<div class="chapter-main">
+<header class="chapter-head">
+<p class="kicker"><span>Stage {number:02} of {total}</span><span aria-hidden="true">·</span><span class="st-{status}">{label}</span></p>
+<h1 class="chapter-title" tabindex="-1">{title}</h1>
+<div class="lede">{goal}</div>
+</header>
+<div class="waypoints">
+<div class="waypoint"><span class="waypoint-label">Behind you</span><span class="waypoint-title">{previous_title}</span></div>
+<div class="waypoint ahead"><span class="waypoint-label">Ahead</span><span class="waypoint-title">{next_waypoint}</span></div>
+</div>
+<aside class="rail"><nav aria-label="Sections in this chapter"><p class="rail-label">In this chapter</p><ol>{rail}</ol></nav></aside>
+<div class="prose">{secs}</div>
+<nav class="page-turn" aria-label="Chapter navigation"><button class="turn prev" data-target="{previous_target}"><span class="turn-label">← Previous</span><span class="turn-title">{previous_title}</span></button>{turn_next}</nav>
+</div>
+</section>"#,
+        panel_id = escape_attr(&panel_id),
         number = index + 1,
-        status = status,
-        status_class = stage.status,
+        total = stages.len(),
+        status = stage.status,
+        label = status_label(stage.status),
         title = escape_html(&stage.title),
-        summary = escape_html(&stage_summary(&stage.source)),
-        previous = escape_html(&previous),
-        next = escape_html(&next),
-        goal = markdown_to_html(&goal),
-        requirements = markdown_to_html(&requirements),
-        success = markdown_to_html(&success),
-        example = markdown_to_html(&example),
-        background = markdown_to_html(&background),
-        non_goals = markdown_to_html(&non_goals),
+        previous_target = escape_attr(&previous_target),
+        previous_title = escape_html(&previous_title),
+        next_waypoint = escape_html(&next_waypoint),
     )
+}
+
+fn push_section(
+    secs: &mut String,
+    rail: &mut String,
+    number: &mut usize,
+    panel_id: &str,
+    title: &str,
+    body_html: &str,
+    boxed: bool,
+) {
+    *number += 1;
+    let anchor = format!("{}-{}", panel_id, slugify(title));
+    secs.push_str(&format!(
+        r##"<section class="sec{boxed}" id="{anchor}"><h2><span class="sec-num" aria-hidden="true">§{number}</span>{title}</h2>{body_html}</section>"##,
+        boxed = if boxed { " sec-box" } else { "" },
+        anchor = escape_attr(&anchor),
+        title = inline_html(title),
+    ));
+    rail.push_str(&format!(
+        r##"<li><a href="#{anchor}">{title}</a></li>"##,
+        anchor = escape_attr(&anchor),
+        title = inline_html(title),
+    ));
 }
 
 fn status_label(status: &str) -> &'static str {
     match status {
-        "complete" => "Complete",
-        "current" => "Current",
-        _ => "Later",
+        "complete" => "Done",
+        "current" => "In progress",
+        _ => "Ahead",
     }
+}
+
+fn status_glyph(status: &str) -> &'static str {
+    match status {
+        "complete" => "▪",
+        "current" => "◆",
+        _ => "▫",
+    }
+}
+
+fn roadmap_state(status: &str) -> &'static str {
+    match status {
+        "complete" => "done",
+        "current" => "you are here",
+        _ => "ahead",
+    }
+}
+
+fn slugify(value: &str) -> String {
+    let mut slug = String::new();
+    let mut pending_dash = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            if pending_dash && !slug.is_empty() {
+                slug.push('-');
+            }
+            pending_dash = false;
+            slug.push(ch.to_ascii_lowercase());
+        } else {
+            pending_dash = true;
+        }
+    }
+    if slug.is_empty() {
+        slug.push_str("section");
+    }
+    slug
 }
 
 fn split_h2_sections(source: &str) -> Vec<(String, String)> {
@@ -353,26 +476,16 @@ fn split_h2_sections(source: &str) -> Vec<(String, String)> {
     sections
 }
 
-fn select_sections(sections: &[(String, String)], names: &[&str]) -> String {
-    names
+fn section_body<'a>(sections: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    sections
         .iter()
-        .filter_map(|name| {
-            sections
-                .iter()
-                .find(|(title, _)| title.eq_ignore_ascii_case(name))
-                .map(|(title, body)| format!("## {title}\n\n{body}"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+        .find(|(title, _)| title.eq_ignore_ascii_case(name))
+        .map(|(_, body)| body.as_str())
 }
 
 fn stage_summary(source: &str) -> String {
     let sections = split_h2_sections(source);
-    let goal = sections
-        .iter()
-        .find(|(title, _)| title.eq_ignore_ascii_case("Goal"))
-        .map(|(_, body)| body.as_str())
-        .unwrap_or("Learn the next project behavior.");
+    let goal = section_body(&sections, "Goal").unwrap_or("Learn the next project behavior.");
     first_paragraph(goal)
 }
 
@@ -572,14 +685,6 @@ fn inline_html(source: &str) -> String {
     html
 }
 
-fn callout(title: &str, body: &str, kind: &str) -> String {
-    format!(
-        "<aside class=\"callout {kind}\"><strong>{}</strong><p>{}</p></aside>",
-        escape_html(title),
-        escape_html(body)
-    )
-}
-
 fn escape_html(source: &str) -> String {
     source
         .replace('&', "&amp;")
@@ -593,23 +698,245 @@ fn escape_attr(source: &str) -> String {
     escape_html(source)
 }
 
-const CSS: &str = r#"
-:root{--ink:#18202b;--muted:#667085;--paper:#f7f5ef;--card:#fff;--line:#e5e1d8;--nav:#17243a;--nav2:#223451;--brand:#7756ff;--brand-soft:#eee9ff;--orange:#e56b3f;--green:#1f8a64;--shadow:0 18px 50px rgba(23,36,58,.10);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--paper)}
-*{box-sizing:border-box}body{margin:0;line-height:1.65}.skip-link{position:fixed;left:1rem;top:-5rem;z-index:20;background:#fff;padding:.8rem 1rem;border-radius:.5rem}.skip-link:focus{top:1rem}.app-shell{min-height:100vh}.sidebar{position:fixed;inset:0 auto 0 0;width:288px;background:linear-gradient(180deg,var(--nav),#101a2c);color:#fff;padding:1.4rem 1rem;display:flex;flex-direction:column;overflow:auto;z-index:10}.brand{display:flex;align-items:center;gap:.75rem;padding:.25rem .55rem 1.25rem}.brand-mark{display:grid;place-items:center;width:42px;height:42px;border-radius:13px;background:var(--brand);font-size:1.35rem;font-weight:800}.brand strong,.brand small{display:block}.brand small{color:#afbdd0}.overview-link,.stage-link{width:100%;border:0;background:transparent;color:#d7e0ec;text-align:left;border-radius:10px;cursor:pointer;font:inherit}.overview-link{padding:.75rem;margin-bottom:.65rem;display:flex;gap:.7rem;font-weight:700}.overview-link:hover,.overview-link.active,.stage-link:hover,.stage-link.active{background:var(--nav2);color:#fff}.progress-card{padding:.85rem;border:1px solid rgba(255,255,255,.12);border-radius:12px;margin-bottom:1rem;background:rgba(255,255,255,.04)}.progress-card>div:first-child{display:flex;justify-content:space-between;font-size:.82rem}.progress-track{height:6px;border-radius:9px;background:rgba(255,255,255,.12);margin-top:.65rem;overflow:hidden}.progress-track span{display:block;height:100%;background:#9d88ff}.stage-nav{display:grid;gap:.25rem}.stage-link{padding:.6rem .65rem;display:grid;grid-template-columns:24px 1fr;align-items:center;gap:.4rem}.stage-link small,.stage-link span span{display:block}.stage-link small{color:#8fa1b8;font-size:.68rem;text-transform:uppercase;letter-spacing:.08em}.stage-link.complete .stage-marker{color:#6ee7b7}.stage-link.current .stage-marker{color:#c4b5fd}.stage-marker{font-weight:900}.sidebar-meta{margin-top:auto;padding:1rem .6rem 0;color:#8295ad;font-size:.75rem;display:flex;justify-content:space-between}.main-content{margin-left:288px;min-height:100vh}.mobile-header{display:none}.page-panel{padding:3.6rem 3rem 6rem}.page-width{width:min(960px,100%);margin:0 auto}.eyebrow{color:var(--brand);font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.12em;margin-bottom:.65rem}h1{font-size:clamp(2.15rem,5vw,3.7rem);line-height:1.05;letter-spacing:-.045em;margin:.2rem 0 1rem}h2{font-size:1.55rem;line-height:1.25;margin:2rem 0 .75rem}h3{font-size:1.08rem;margin:1.6rem 0 .5rem}.lede{font-size:1.16rem;color:#4d5968;max-width:760px;margin-bottom:2rem}.stage-heading{display:flex;gap:2rem;justify-content:space-between;align-items:flex-start}.status-pill{white-space:nowrap;border-radius:999px;padding:.45rem .8rem;font-size:.77rem;font-weight:800;text-transform:uppercase;letter-spacing:.07em;background:#eef1f5;color:#657084}.status-pill.current{background:var(--brand-soft);color:#5b3fd1}.status-pill.complete{background:#def7ec;color:#187252}.orientation-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.8rem;margin:2rem 0}.orientation-grid article{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1rem;box-shadow:0 6px 18px rgba(23,36,58,.04)}.orientation-grid article.accent{border-color:#c9bcff;background:#f6f3ff}.orientation-grid small,.orientation-grid strong{display:block}.orientation-grid small{color:var(--muted);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;font-weight:750;margin-bottom:.35rem}.orientation-grid strong{line-height:1.35}.tabs{display:flex;gap:.4rem;border-bottom:1px solid var(--line);margin:2.4rem 0 1.5rem;overflow:auto}.tabs button{appearance:none;border:0;background:transparent;padding:.8rem 1rem;border-bottom:3px solid transparent;font:inherit;font-weight:750;color:var(--muted);cursor:pointer}.tabs button:hover{color:var(--ink)}.tabs button[aria-selected=true]{color:var(--brand);border-color:var(--brand)}.tab-panel{display:none;animation:fade .16s ease}.tab-panel.active{display:block}.tab-panel>h2:first-child{margin-top:.5rem}.tab-panel p,.tab-panel li{max-width:780px}.tab-panel li{margin:.35rem 0}.callout{border-radius:14px;padding:1rem 1.15rem;margin:1.2rem 0;background:#eaf8f2;border-left:4px solid var(--green)}.callout p{margin:.35rem 0 0}.roadmap-grid{display:grid;gap:.75rem}.roadmap-card{display:grid;grid-template-columns:48px 1fr;gap:1rem;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1rem}.roadmap-card.current{border-color:#b8a8ff;box-shadow:0 0 0 3px var(--brand-soft)}.roadmap-number{display:grid;place-items:center;width:42px;height:42px;border-radius:12px;background:#eef0f4;font-weight:850}.roadmap-card h3{margin:.1rem 0}.roadmap-card p{margin:.25rem 0;color:var(--muted)}.roadmap-card small{color:var(--brand);font-weight:800;text-transform:uppercase;letter-spacing:.08em}.code-block{position:relative;margin:1rem 0}.code-block pre{overflow:auto;background:#111c2e;color:#e8edf5;padding:1.15rem;border-radius:12px;line-height:1.5}.copy-button{position:absolute;right:.6rem;top:.6rem;border:1px solid #40506a;background:#1d2d45;color:#fff;border-radius:7px;padding:.35rem .55rem;cursor:pointer}.tab-panel code:not(pre code){background:#eeeaf9;color:#563ec3;padding:.12rem .33rem;border-radius:4px}.table-wrap{overflow:auto;margin:1rem 0;border:1px solid var(--line);border-radius:12px}table{border-collapse:collapse;width:100%;background:#fff}th,td{text-align:left;padding:.75rem;border-bottom:1px solid var(--line);vertical-align:top}th{background:#f1efe9;font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}#toast{position:fixed;right:1.2rem;bottom:1.2rem;background:#17243a;color:#fff;padding:.7rem 1rem;border-radius:9px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}#toast.show{opacity:1;transform:none}@keyframes fade{from{opacity:.3;transform:translateY(3px)}to{opacity:1;transform:none}}
-@media(max-width:850px){.sidebar{transform:translateX(-100%);transition:.2s;width:min(88vw,300px)}.sidebar.open{transform:none}.main-content{margin-left:0}.mobile-header{display:flex;position:sticky;top:0;z-index:8;align-items:center;gap:1rem;background:rgba(247,245,239,.94);backdrop-filter:blur(12px);padding:.8rem 1rem;border-bottom:1px solid var(--line)}.mobile-header button{font-size:1.2rem;border:0;background:transparent}.page-panel{padding:2rem 1.15rem 4rem}.orientation-grid{grid-template-columns:1fr}.stage-heading{display:block}.status-pill{display:inline-block;margin-bottom:1rem}}
-@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
-"#;
+const CSS: &str = r##"
+:root{
+  color-scheme:light dark;
+  --paper:#f6f1e6;--panel:#fdfaf1;--ink:#282217;--muted:#6e6353;
+  --line:#d6cbb4;--line-soft:#e6ddc9;
+  --ember:#b23c17;
+  --code-bg:#282218;--code-ink:#ede3d0;--code-line:#55492f;
+  --inline-code:#ece3cd;
+  --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
+  --serif:"Charter","Bitstream Charter","Sitka Text",Cambria,Georgia,serif;
+}
+@media (prefers-color-scheme:dark){:root{
+  --paper:#171410;--panel:#1e1a14;--ink:#e8dfcb;--muted:#a4977f;
+  --line:#3b3425;--line-soft:#2b2519;
+  --ember:#e5723e;
+  --code-bg:#100e0a;--code-ink:#e4dac5;--code-line:#463c27;
+  --inline-code:#2b2519;
+}}
+*{box-sizing:border-box}
+html{background:var(--paper);scroll-behavior:smooth}
+body{margin:0;font-family:var(--serif);font-size:1.0625rem;line-height:1.75;color:var(--ink);background:var(--paper)}
+[hidden]{display:none!important}
+:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
+button{font:inherit;color:inherit}
+.skip-link{position:fixed;left:1rem;top:-4rem;z-index:40;background:var(--panel);border:1px solid var(--ink);padding:.6rem 1rem;font-family:var(--mono);font-size:.8rem;color:var(--ink);text-decoration:none}
+.skip-link:focus{top:1rem}
 
-const JS: &str = r#"
-const sidebar=document.querySelector('.sidebar');
-const menu=document.querySelector('#menu-button');
-function showPanel(target){document.querySelectorAll('.page-panel').forEach(p=>p.hidden=p.id!==target);document.querySelectorAll('[data-target]').forEach(b=>b.classList.toggle('active',b.dataset.target===target));sidebar.classList.remove('open');menu?.setAttribute('aria-expanded','false');window.scrollTo({top:0,behavior:'instant'});}
-document.querySelectorAll('[data-target]').forEach(button=>button.addEventListener('click',()=>showPanel(button.dataset.target)));
-document.querySelectorAll('.tabs').forEach(tabs=>tabs.addEventListener('click',event=>{const button=event.target.closest('[data-tab]');if(!button)return;const page=tabs.closest('.page-panel');tabs.querySelectorAll('[data-tab]').forEach(tab=>tab.setAttribute('aria-selected',String(tab===button)));page.querySelectorAll('.tab-panel').forEach(panel=>panel.classList.toggle('active',panel.id===button.dataset.tab));}));
-document.querySelectorAll('.copy-button').forEach(button=>button.addEventListener('click',async()=>{const text=button.nextElementSibling.innerText;try{await navigator.clipboard.writeText(text);button.textContent='Copied';setTimeout(()=>button.textContent='Copy',1200)}catch{const range=document.createRange();range.selectNodeContents(button.nextElementSibling);const selection=getSelection();selection.removeAllRanges();selection.addRange(range)}}));
-menu?.addEventListener('click',()=>{const open=sidebar.classList.toggle('open');menu.setAttribute('aria-expanded',String(open))});
-showPanel(document.body.dataset.initialTarget||'overview');
-"#;
+/* Masthead */
+.masthead{display:flex;align-items:center;gap:1.25rem;padding:1rem 2rem;border-bottom:3px double var(--line);background:var(--paper)}
+.menu-button{display:none}
+.brand{display:flex;align-items:center;gap:.8rem}
+.mark{display:grid;place-items:center;width:2.25rem;height:2.25rem;border:2px solid var(--ink);font-family:var(--mono);font-size:1.15rem;font-weight:700}
+.brand-text{display:flex;flex-direction:column;line-height:1.3}
+.brand-name{font-family:var(--mono);font-size:.66rem;font-weight:600;letter-spacing:.24em;text-transform:uppercase;color:var(--muted)}
+.brand-pack{font-size:1.2rem;font-weight:700}
+.masthead-meta{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:.3rem}
+.workbench{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+.progress{display:flex;align-items:center;gap:.6rem}
+.notches{display:flex;gap:3px}
+.notch{width:13px;height:8px;border:1px solid var(--muted)}
+.notch.complete{background:var(--ink);border-color:var(--ink)}
+.notch.current{background:var(--ember);border-color:var(--ember)}
+.progress-count{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+
+/* Layout and contents */
+.layout{display:grid;grid-template-columns:272px minmax(0,1fr);align-items:start}
+.contents{position:sticky;top:0;max-height:100vh;overflow-y:auto;padding:2.2rem 1.4rem 2.2rem 2rem;border-right:1px solid var(--line)}
+.contents-label{font-family:var(--mono);font-size:.66rem;letter-spacing:.24em;text-transform:uppercase;color:var(--muted);margin:0 0 .9rem .6rem}
+.toc-list{list-style:none;margin:.7rem 0 0;padding:.7rem 0 0;border-top:1px solid var(--line-soft)}
+.toc-link{display:grid;grid-template-columns:1.7rem 1fr auto;align-items:baseline;gap:.5rem;width:100%;padding:.42rem .55rem;border:0;background:none;text-align:left;cursor:pointer;border-left:3px solid transparent}
+.toc-link:hover .toc-title{text-decoration:underline}
+.toc-link.active{border-left-color:var(--ember);background:var(--panel)}
+.toc-num{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+.toc-title{font-size:.95rem;line-height:1.35}
+.toc-link.upcoming .toc-title{color:var(--muted)}
+.toc-state{font-size:.72rem;color:var(--muted)}
+.toc-link.current .toc-state{color:var(--ember)}
+.toc-link.current .toc-title{font-weight:700}
+
+/* Chapter frame */
+.chapter{display:flex;justify-content:center;padding:3.2rem 3rem 5.5rem}
+.chapter-main{display:grid;grid-template-columns:minmax(0,66ch) minmax(150px,190px);column-gap:3.2rem;min-width:0}
+.chapter-main>*{grid-column:1;min-width:0}
+.rail{grid-column:2;grid-row:1/span 32;position:sticky;top:2.2rem;align-self:start;font-size:.85rem}
+.rail-label{font-family:var(--mono);font-size:.64rem;letter-spacing:.22em;text-transform:uppercase;color:var(--muted);margin:0 0 .7rem}
+.rail ol{list-style:none;margin:0;padding:0}
+.rail li{margin:.4rem 0}
+.rail a{display:block;color:var(--muted);text-decoration:none;border-left:2px solid var(--line-soft);padding-left:.65rem;line-height:1.4}
+.rail a:hover{color:var(--ink)}
+.rail a.active{color:var(--ember);border-left-color:var(--ember)}
+.kicker{display:flex;flex-wrap:wrap;gap:.6rem;margin:0 0 .9rem;font-family:var(--mono);font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.kicker .st-current{color:var(--ember);font-weight:700}
+.kicker .st-complete{color:var(--ink);font-weight:700}
+.chapter-title{margin:0;font-size:clamp(1.9rem,4vw,2.55rem);line-height:1.12;font-weight:700;letter-spacing:-.01em}
+.chapter-title:focus{outline:none}
+.chapter-title::after{content:"";display:block;width:3.2rem;border-bottom:4px solid var(--ember);margin-top:1rem}
+.lede{margin-top:1.3rem}
+.lede p{margin:.4rem 0;font-size:1.2rem;line-height:1.62}
+
+/* Waypoints */
+.waypoints{display:flex;justify-content:space-between;gap:2rem;margin:2.2rem 0 .6rem;padding:.85rem 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.waypoint{display:flex;flex-direction:column;gap:.1rem;min-width:0}
+.waypoint.ahead{text-align:right}
+.waypoint-label{font-family:var(--mono);font-size:.62rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+.waypoint-title{font-size:.95rem}
+
+/* Sections and prose */
+.sec{position:relative;margin-top:2.9rem;scroll-margin-top:5rem}
+.sec h2{position:relative;margin:0 0 .8rem;font-size:1.38rem;line-height:1.3}
+.sec-num{font-family:var(--mono);font-size:.74rem;font-weight:600;color:var(--ember);margin-right:.65rem;letter-spacing:.05em}
+.sec-box{border:1px solid var(--line);background:var(--panel);padding:1.2rem 1.5rem 1.35rem;margin-top:3.2rem}
+.sec-box h2{font-size:1.05rem}
+.prose p{margin:.9em 0}
+.prose ul{padding-left:1.3rem;margin:.9em 0}
+.prose ul li{list-style:square;margin:.45em 0}
+.prose ol{padding-left:1.5rem;margin:.9em 0}
+.prose ol li{margin:.45em 0}
+.prose h3{font-size:1.06rem;margin:1.8em 0 .5em}
+.prose :not(pre)>code,.lede code{font-family:var(--mono);font-size:.85em;background:var(--inline-code);padding:.08em .35em;border-radius:2px}
+
+/* Code */
+.code-block{position:relative;margin:1.5rem 0}
+.code-block pre{margin:0;padding:1.05rem 1.2rem;background:var(--code-bg);color:var(--code-ink);border-left:3px solid var(--ember);overflow-x:auto;font-family:var(--mono);font-size:.85rem;line-height:1.65}
+.code-block code{font-family:inherit}
+.copy-button{position:absolute;top:.55rem;right:.55rem;font-family:var(--mono);font-size:.64rem;letter-spacing:.12em;text-transform:uppercase;padding:.3rem .6rem;background:transparent;color:var(--code-ink);border:1px solid var(--code-line);cursor:pointer}
+.copy-button:hover{border-color:var(--code-ink)}
+
+/* Tables */
+.table-wrap{overflow-x:auto;margin:1.5rem 0}
+table{border-collapse:collapse;width:100%}
+th{font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;text-align:left;padding:.5rem .7rem;border-bottom:2px solid var(--ink)}
+td{padding:.6rem .7rem;border-bottom:1px solid var(--line-soft);vertical-align:top}
+
+/* Roadmap */
+.roadmap{list-style:none;margin:0;padding:0}
+.roadmap li{border-bottom:1px solid var(--line-soft)}
+.roadmap-row{display:block;width:100%;padding:.95rem .2rem;border:0;background:none;text-align:left;cursor:pointer}
+.roadmap-head{display:flex;align-items:baseline;gap:.8rem}
+.roadmap-num{font-family:var(--mono);font-size:.76rem;color:var(--muted)}
+.roadmap-title{font-size:1.06rem;font-weight:700}
+.roadmap-row:hover .roadmap-title{text-decoration:underline}
+.roadmap-row.upcoming .roadmap-title{color:var(--muted);font-weight:600}
+.roadmap-leader{flex:1;min-width:2rem;border-bottom:1px dotted var(--line);transform:translateY(-.28em)}
+.roadmap-state{font-family:var(--mono);font-size:.66rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+.roadmap-row.current .roadmap-state,.roadmap-row.current .roadmap-num{color:var(--ember)}
+.roadmap-row.current .roadmap-state{font-weight:700}
+.roadmap-summary{display:block;margin:.3rem 0 0 2.4rem;color:var(--muted);font-size:.94rem;line-height:1.55}
+
+/* Page turns */
+.page-turn{display:flex;justify-content:space-between;gap:2rem;margin-top:4rem;border-top:3px double var(--line);padding-top:1.4rem}
+.turn{display:flex;flex-direction:column;gap:.2rem;border:0;background:none;cursor:pointer;text-align:left;padding:0;max-width:46%}
+.turn.next{margin-left:auto;text-align:right;align-items:flex-end}
+.turn-label{font-family:var(--mono);font-size:.64rem;letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+.turn-title{font-size:1.02rem;font-weight:700}
+.turn:hover .turn-title{text-decoration:underline}
+.turn-end{margin:0 0 0 auto;max-width:46%;text-align:right;color:var(--muted);font-size:.92rem;font-style:italic}
+
+/* Drawer scrim */
+.scrim{position:fixed;inset:0;background:rgba(22,16,8,.42);z-index:20;opacity:0;pointer-events:none;transition:opacity .2s}
+.scrim.show{opacity:1;pointer-events:auto}
+
+@media(min-width:1280px){.sec-num{position:absolute;right:100%;margin-right:1.1rem;top:.45em}}
+@media(max-width:960px){
+  .masthead{position:sticky;top:0;z-index:10;padding:.6rem 1rem;gap:.8rem}
+  .menu-button{display:inline-block;font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;border:1px solid var(--ink);background:var(--paper);padding:.45rem .7rem;cursor:pointer}
+  .mark{display:none}
+  .brand-name{display:none}
+  .brand-pack{font-size:1.02rem}
+  .workbench,.progress-count{display:none}
+  .layout{display:block}
+  .contents{position:fixed;inset:0 auto 0 0;z-index:30;width:min(82vw,320px);background:var(--paper);transform:translateX(-103%);transition:transform .2s}
+  .contents.open{transform:none;box-shadow:0 0 44px rgba(0,0,0,.3)}
+  .chapter{display:block;padding:1.8rem 1.1rem 4rem}
+  .chapter-main{display:block}
+  .rail{position:static;margin:1.7rem 0;border:1px solid var(--line-soft);background:var(--panel);padding:.85rem 1rem}
+  .rail ol{display:flex;flex-wrap:wrap;gap:.1rem 1.1rem}
+  .rail a{border-left:0;padding-left:0}
+  .sec{scroll-margin-top:4.2rem}
+  .waypoints{flex-direction:column;gap:.6rem}
+  .waypoint.ahead{text-align:left}
+  .page-turn{flex-direction:column;gap:1.2rem}
+  .turn,.turn.next,.turn-end{max-width:100%;margin-left:0;text-align:left;align-items:flex-start}
+}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *{transition:none!important;animation:none!important}
+}
+@media print{
+  .masthead,.contents,.rail,.page-turn,.copy-button,.skip-link,.scrim{display:none!important}
+  .chapter{display:block;padding:0}
+}
+"##;
+
+const JS: &str = r##"
+const menu=document.getElementById('menu-button');
+const drawer=document.getElementById('contents-nav');
+const scrim=document.getElementById('scrim');
+function setDrawer(open){
+  drawer.classList.toggle('open',open);
+  scrim.classList.toggle('show',open);
+  menu.setAttribute('aria-expanded',String(open));
+}
+menu.addEventListener('click',()=>setDrawer(!drawer.classList.contains('open')));
+scrim.addEventListener('click',()=>setDrawer(false));
+document.addEventListener('keydown',(event)=>{if(event.key==='Escape')setDrawer(false);});
+function showPanel(target,moveFocus){
+  document.querySelectorAll('.chapter').forEach((panel)=>{panel.hidden=panel.id!==target;});
+  document.querySelectorAll('.toc-link').forEach((link)=>{
+    const active=link.dataset.target===target;
+    link.classList.toggle('active',active);
+    if(active){link.setAttribute('aria-current','page');}else{link.removeAttribute('aria-current');}
+  });
+  setDrawer(false);
+  window.scrollTo(0,0);
+  if(moveFocus){
+    const heading=document.querySelector('#'+CSS.escape(target)+' .chapter-title');
+    if(heading)heading.focus({preventScroll:true});
+  }
+}
+document.querySelectorAll('[data-target]').forEach((button)=>{
+  button.addEventListener('click',()=>showPanel(button.dataset.target,true));
+});
+document.querySelectorAll('.copy-button').forEach((button)=>{
+  button.addEventListener('click',async()=>{
+    const pre=button.parentElement.querySelector('pre');
+    try{
+      await navigator.clipboard.writeText(pre.innerText);
+      button.textContent='Copied';
+    }catch{
+      const range=document.createRange();
+      range.selectNodeContents(pre);
+      const selection=getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      button.textContent='Selected';
+    }
+    setTimeout(()=>{button.textContent='Copy';},1400);
+  });
+});
+if('IntersectionObserver' in window){
+  document.querySelectorAll('.chapter').forEach((chapter)=>{
+    const links=new Map();
+    chapter.querySelectorAll('.rail a').forEach((link)=>{
+      links.set(link.getAttribute('href').slice(1),link);
+    });
+    if(links.size===0)return;
+    const observer=new IntersectionObserver((entries)=>{
+      entries.forEach((entry)=>{
+        if(!entry.isIntersecting)return;
+        links.forEach((link)=>link.classList.remove('active'));
+        const link=links.get(entry.target.id);
+        if(link)link.classList.add('active');
+      });
+    },{rootMargin:'-10% 0px -75% 0px'});
+    chapter.querySelectorAll('.sec[id]').forEach((section)=>observer.observe(section));
+  });
+}
+showPanel(document.body.dataset.initialTarget||'overview',false);
+"##;
 
 #[cfg(test)]
 mod tests {
@@ -634,10 +961,17 @@ mod tests {
         );
         assert_eq!(sections.len(), 2);
         assert_eq!(stage_summary("## Goal\n\nStart small."), "Start small.");
-        assert!(select_sections(&sections, &["Goal"]).contains("Start small"));
+        assert_eq!(section_body(&sections, "goal"), Some("Start small."));
         assert_eq!(
             stage_display_title("# Stage 02 — Choose searchable files", "Fallback"),
             "Choose searchable files"
         );
+    }
+
+    #[test]
+    fn slugs_are_stable_anchor_names() {
+        assert_eq!(slugify("Edge cases"), "edge-cases");
+        assert_eq!(slugify("Non-goals"), "non-goals");
+        assert_eq!(slugify("§ ?!"), "section");
     }
 }
