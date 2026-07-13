@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use regex::Regex;
@@ -82,10 +82,38 @@ pub struct TestResult {
     pub name: String,
     pub passed: bool,
     pub failures: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<TestDiagnostic>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expectations: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual_exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u128>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub stdout: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub stderr: String,
+    #[serde(skip)]
+    pub report_stdout: Option<String>,
+    #[serde(skip)]
+    pub report_stderr: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TestDiagnostic {
+    pub kind: &'static str,
+    pub title: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+}
+
+struct TestComparison {
+    failures: Vec<String>,
+    diagnostics: Vec<TestDiagnostic>,
 }
 
 impl TestRunSummary {
@@ -148,6 +176,10 @@ pub fn run_stage_tests(
     }
 
     let human_output = !args.json;
+    let compact_output = human_output
+        && !args.verbose
+        && !args.terminal
+        && (args.open || crate::learning_web::should_use_browser(false));
     if human_output {
         println!("Stage {}: {}", stage.id, stage.title);
         println!();
@@ -160,8 +192,14 @@ pub fn run_stage_tests(
                 name: test.name.clone(),
                 passed: true,
                 failures: Vec::new(),
+                diagnostics: Vec::new(),
+                expectations: describe_expectations(&test.expect),
+                actual_exit_code: None,
+                duration_ms: None,
                 stdout: String::new(),
                 stderr: String::new(),
+                report_stdout: None,
+                report_stderr: None,
             })
             .collect::<Vec<_>>();
         if human_output {
@@ -200,10 +238,12 @@ pub fn run_stage_tests(
                 println!("✓ {}", test.name);
             } else {
                 println!("✗ {}", test.name);
-                for failure in &result.failures {
-                    println!("  {failure}");
+                if !compact_output {
+                    for failure in &result.failures {
+                        println!("  {failure}");
+                    }
                 }
-                if !args.verbose {
+                if !args.verbose && !compact_output {
                     print_actual_output(&result);
                 }
             }
@@ -335,8 +375,20 @@ fn run_test_case(
                 name: test.name.clone(),
                 passed: false,
                 failures: vec![format!("{error:#}")],
+                diagnostics: vec![TestDiagnostic {
+                    kind: "runner",
+                    title: "The test could not run".to_string(),
+                    summary: format!("{error:#}"),
+                    expected: None,
+                    actual: None,
+                }],
+                expectations: describe_expectations(&test.expect),
+                actual_exit_code: None,
+                duration_ms: None,
                 stdout: String::new(),
                 stderr: String::new(),
+                report_stdout: None,
+                report_stderr: None,
             },
         };
 
@@ -407,6 +459,7 @@ fn run_test_case_in_temp(
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let started = Instant::now();
     let output = run_command_with_input_and_env(
         &full_command,
         &context.root,
@@ -417,15 +470,37 @@ fn run_test_case_in_temp(
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    let failures = compare_expectations(&test.expect, &output.status, &stdout, &stderr, temp_dir);
+    let mut comparison =
+        compare_expectations(&test.expect, &output.status, &stdout, &stderr, temp_dir);
+    for diagnostic in &mut comparison.diagnostics {
+        if let Some(actual) = &mut diagnostic.actual {
+            *actual = sanitize_report_text(actual, &fixture_path, temp_dir);
+        }
+    }
+    let report_stdout = sanitize_report_text(&stdout, &fixture_path, temp_dir);
+    let report_stderr = sanitize_report_text(&stderr, &fixture_path, temp_dir);
 
     Ok(TestResult {
         name: test.name.clone(),
-        passed: failures.is_empty(),
-        failures,
+        passed: comparison.failures.is_empty(),
+        failures: comparison.failures,
+        diagnostics: comparison.diagnostics,
+        expectations: describe_expectations(&test.expect),
+        actual_exit_code: output.status.code(),
+        duration_ms: Some(started.elapsed().as_millis()),
         stdout,
         stderr,
+        report_stdout: Some(report_stdout),
+        report_stderr: Some(report_stderr),
     })
+}
+
+fn sanitize_report_text(value: &str, fixture_path: &Path, temp_dir: &Path) -> String {
+    let fixture_path = fixture_path.to_string_lossy();
+    let temp_dir = temp_dir.to_string_lossy();
+    value
+        .replace(fixture_path.as_ref(), "{fixture_path}")
+        .replace(temp_dir.as_ref(), "{temp_dir}")
 }
 
 fn compare_expectations(
@@ -434,15 +509,22 @@ fn compare_expectations(
     stdout: &str,
     stderr: &str,
     temp_dir: &Path,
-) -> Vec<String> {
+) -> TestComparison {
     let mut failures = Vec::new();
+    let mut diagnostics = Vec::new();
 
     if let Some(expected_code) = expect.exit_code {
         let actual_code = status.code().unwrap_or(-1);
         if actual_code != expected_code {
-            failures.push(format!(
-                "expected exit code {expected_code}, got {actual_code}"
-            ));
+            let message = format!("expected exit code {expected_code}, got {actual_code}");
+            failures.push(message.clone());
+            diagnostics.push(TestDiagnostic {
+                kind: "exit-code",
+                title: "Unexpected exit code".to_string(),
+                summary: message,
+                expected: Some(expected_code.to_string()),
+                actual: Some(actual_code.to_string()),
+            });
         }
     }
 
@@ -453,37 +535,85 @@ fn compare_expectations(
             "expected stdout exactly {:?}, got {:?}",
             expected_stdout, stdout
         ));
+        diagnostics.push(TestDiagnostic {
+            kind: "stdout-exact",
+            title: "Standard output differs".to_string(),
+            summary: "The program's standard output does not exactly match the required text."
+                .to_string(),
+            expected: Some(expected_stdout.clone()),
+            actual: Some(stdout.to_string()),
+        });
     }
 
     for expected in &expect.stdout_contains {
         if !stdout.contains(expected) {
-            failures.push(format!("expected stdout to contain {:?}", expected));
+            let message = format!("expected stdout to contain {:?}", expected);
+            failures.push(message.clone());
+            diagnostics.push(TestDiagnostic {
+                kind: "stdout-contains",
+                title: "Required text is missing".to_string(),
+                summary: message,
+                expected: Some(expected.clone()),
+                actual: Some(stdout.to_string()),
+            });
         }
     }
 
     for unexpected in &expect.stdout_not_contains {
         if stdout.contains(unexpected) {
-            failures.push(format!("expected stdout not to contain {:?}", unexpected));
+            let message = format!("expected stdout not to contain {:?}", unexpected);
+            failures.push(message.clone());
+            diagnostics.push(TestDiagnostic {
+                kind: "stdout-excludes",
+                title: "Unexpected text was printed".to_string(),
+                summary: message,
+                expected: Some(format!("output without {unexpected:?}")),
+                actual: Some(stdout.to_string()),
+            });
         }
     }
 
     for expected in &expect.stderr_contains {
         if !stderr.contains(expected) {
-            failures.push(format!("expected stderr to contain {:?}", expected));
+            let message = format!("expected stderr to contain {:?}", expected);
+            failures.push(message.clone());
+            diagnostics.push(TestDiagnostic {
+                kind: "stderr-contains",
+                title: "The error explanation is missing".to_string(),
+                summary: message,
+                expected: Some(expected.clone()),
+                actual: Some(stderr.to_string()),
+            });
         }
     }
 
     for expected_path in &expect.file_exists {
         let path = resolve_expectation_path(temp_dir, expected_path);
         if !path.exists() {
-            failures.push(format!("expected file to exist: {}", path.display()));
+            let message = format!("expected file to exist: {}", path.display());
+            failures.push(message.clone());
+            diagnostics.push(TestDiagnostic {
+                kind: "file-exists",
+                title: "Expected file was not created".to_string(),
+                summary: format!("The command did not create {expected_path}."),
+                expected: Some(expected_path.clone()),
+                actual: Some("file not found".to_string()),
+            });
         }
     }
 
     for unexpected_path in &expect.file_not_exists {
         let path = resolve_expectation_path(temp_dir, unexpected_path);
         if path.exists() {
-            failures.push(format!("expected file not to exist: {}", path.display()));
+            let message = format!("expected file not to exist: {}", path.display());
+            failures.push(message.clone());
+            diagnostics.push(TestDiagnostic {
+                kind: "file-absent",
+                title: "An unwanted file was created".to_string(),
+                summary: format!("The command created {unexpected_path}, which should be absent."),
+                expected: Some(format!("{} absent", unexpected_path)),
+                actual: Some("file exists".to_string()),
+            });
         }
     }
 
@@ -491,12 +621,35 @@ fn compare_expectations(
         let path = resolve_expectation_path(temp_dir, &expected_file.path);
         match fs::read_to_string(&path) {
             Ok(contents) if contents.contains(&expected_file.contains) => {}
-            Ok(_) => failures.push(format!(
-                "expected file {} to contain {:?}",
-                path.display(),
-                expected_file.contains
-            )),
-            Err(error) => failures.push(format!("failed to read file {}: {error}", path.display())),
+            Ok(contents) => {
+                let message = format!(
+                    "expected file {} to contain {:?}",
+                    path.display(),
+                    expected_file.contains
+                );
+                failures.push(message.clone());
+                diagnostics.push(TestDiagnostic {
+                    kind: "file-contains",
+                    title: "Generated file is missing required text".to_string(),
+                    summary: format!(
+                        "{} does not contain {:?}.",
+                        expected_file.path, expected_file.contains
+                    ),
+                    expected: Some(expected_file.contains.clone()),
+                    actual: Some(contents),
+                });
+            }
+            Err(error) => {
+                let message = format!("failed to read file {}: {error}", path.display());
+                failures.push(message.clone());
+                diagnostics.push(TestDiagnostic {
+                    kind: "file-read",
+                    title: "Generated file could not be read".to_string(),
+                    summary: format!("{} could not be read: {error}", expected_file.path),
+                    expected: Some(expected_file.path.clone()),
+                    actual: None,
+                });
+            }
         }
     }
 
@@ -504,35 +657,167 @@ fn compare_expectations(
         let path = resolve_expectation_path(temp_dir, &unexpected_file.path);
         match fs::read_to_string(&path) {
             Ok(contents) if !contents.contains(&unexpected_file.contains) => {}
-            Ok(_) => failures.push(format!(
-                "expected file {} not to contain {:?}",
-                path.display(),
-                unexpected_file.contains
-            )),
-            Err(error) => failures.push(format!("failed to read file {}: {error}", path.display())),
+            Ok(contents) => {
+                let message = format!(
+                    "expected file {} not to contain {:?}",
+                    path.display(),
+                    unexpected_file.contains
+                );
+                failures.push(message.clone());
+                diagnostics.push(TestDiagnostic {
+                    kind: "file-excludes",
+                    title: "Generated file retained unwanted text".to_string(),
+                    summary: format!(
+                        "{} still contains {:?}.",
+                        unexpected_file.path, unexpected_file.contains
+                    ),
+                    expected: Some(format!("file without {:?}", unexpected_file.contains)),
+                    actual: Some(contents),
+                });
+            }
+            Err(error) => {
+                let message = format!("failed to read file {}: {error}", path.display());
+                failures.push(message.clone());
+                diagnostics.push(TestDiagnostic {
+                    kind: "file-read",
+                    title: "Generated file could not be read".to_string(),
+                    summary: format!("{} could not be read: {error}", unexpected_file.path),
+                    expected: Some(unexpected_file.path.clone()),
+                    actual: None,
+                });
+            }
         }
     }
 
     for pattern in &expect.regex_match {
         match Regex::new(pattern) {
             Ok(regex) if regex.is_match(stdout) => {}
-            Ok(_) => failures.push(format!("expected stdout to match regex {pattern:?}")),
-            Err(error) => failures.push(format!("invalid regex {pattern:?}: {error}")),
+            Ok(_) => {
+                let message = format!("expected stdout to match regex {pattern:?}");
+                failures.push(message.clone());
+                diagnostics.push(TestDiagnostic {
+                    kind: "stdout-regex",
+                    title: "Output does not match the required pattern".to_string(),
+                    summary: message,
+                    expected: Some(pattern.clone()),
+                    actual: Some(stdout.to_string()),
+                });
+            }
+            Err(error) => {
+                let message = format!("invalid regex {pattern:?}: {error}");
+                failures.push(message.clone());
+                diagnostics.push(TestDiagnostic {
+                    kind: "invalid-regex",
+                    title: "The pack contains an invalid test pattern".to_string(),
+                    summary: message,
+                    expected: Some(pattern.clone()),
+                    actual: None,
+                });
+            }
         }
     }
 
     if let Some(expected_json) = &expect.json_equals {
         match serde_json::from_str::<Value>(stdout) {
             Ok(actual_json) if &actual_json == expected_json => {}
-            Ok(actual_json) => failures.push(format!(
-                "expected stdout JSON {}, got {}",
-                expected_json, actual_json
-            )),
-            Err(error) => failures.push(format!("expected stdout to be JSON: {error}")),
+            Ok(actual_json) => {
+                let message = format!(
+                    "expected stdout JSON {}, got {}",
+                    expected_json, actual_json
+                );
+                failures.push(message.clone());
+                diagnostics.push(TestDiagnostic {
+                    kind: "json",
+                    title: "JSON values differ".to_string(),
+                    summary: message,
+                    expected: Some(pretty_json(expected_json)),
+                    actual: Some(pretty_json(&actual_json)),
+                });
+            }
+            Err(error) => {
+                let message = format!("expected stdout to be JSON: {error}");
+                failures.push(message.clone());
+                diagnostics.push(TestDiagnostic {
+                    kind: "json-parse",
+                    title: "Standard output is not valid JSON".to_string(),
+                    summary: message,
+                    expected: Some(pretty_json(expected_json)),
+                    actual: Some(stdout.to_string()),
+                });
+            }
         }
     }
 
-    failures
+    TestComparison {
+        failures,
+        diagnostics,
+    }
+}
+
+fn pretty_json(value: &Value) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+}
+
+fn describe_expectations(expect: &Expectations) -> Vec<String> {
+    let mut descriptions = Vec::new();
+    if let Some(code) = expect.exit_code {
+        descriptions.push(format!("exit code is {code}"));
+    }
+    if let Some(stdout) = &expect.stdout_exact {
+        descriptions.push(format!("stdout exactly matches {stdout:?}"));
+    }
+    descriptions.extend(
+        expect
+            .stdout_contains
+            .iter()
+            .map(|value| format!("stdout contains {value:?}")),
+    );
+    descriptions.extend(
+        expect
+            .stdout_not_contains
+            .iter()
+            .map(|value| format!("stdout excludes {value:?}")),
+    );
+    descriptions.extend(
+        expect
+            .stderr_contains
+            .iter()
+            .map(|value| format!("stderr contains {value:?}")),
+    );
+    descriptions.extend(
+        expect
+            .file_exists
+            .iter()
+            .map(|path| format!("file exists: {path}")),
+    );
+    descriptions.extend(
+        expect
+            .file_not_exists
+            .iter()
+            .map(|path| format!("file is absent: {path}")),
+    );
+    descriptions.extend(
+        expect
+            .file_contains
+            .iter()
+            .map(|item| format!("file {} contains {:?}", item.path, item.contains)),
+    );
+    descriptions.extend(
+        expect
+            .file_not_contains
+            .iter()
+            .map(|item| format!("file {} excludes {:?}", item.path, item.contains)),
+    );
+    descriptions.extend(
+        expect
+            .regex_match
+            .iter()
+            .map(|pattern| format!("stdout matches {pattern:?}")),
+    );
+    if let Some(value) = &expect.json_equals {
+        descriptions.push(format!("stdout JSON equals {}", value));
+    }
+    descriptions
 }
 
 fn run_command(command: &[String], cwd: &Path, timeout_ms: u64) -> Result<Output> {
@@ -697,10 +982,11 @@ tests:
             timeout_ms: None,
         };
 
-        let failures = compare_expectations(&expect, &status, r#"{"name":"delta"}"#, "", &temp);
+        let comparison = compare_expectations(&expect, &status, r#"{"name":"delta"}"#, "", &temp);
 
         let _ = std::fs::remove_dir_all(temp);
-        assert_eq!(failures, Vec::<String>::new());
+        assert_eq!(comparison.failures, Vec::<String>::new());
+        assert!(comparison.diagnostics.is_empty());
     }
 
     #[cfg(unix)]

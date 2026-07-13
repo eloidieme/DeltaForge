@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Browser test reports
+
+- Added a self-contained `.deltaforge/ui/test-report.html` for failed human-readable test runs. Interactive failures open it automatically; redirected runs print its path without launching a browser.
+- Made test failures easier to diagnose with failure-first grouping, structured expected/actual comparisons for text, exit codes, files, patterns, and JSON, separate stdout/stderr views, visible whitespace, stage-instruction links, runtimes, and copyable filtered rerun commands.
+- Added `deltaforge test --open` to show a report after successful runs and `deltaforge test --terminal` to retain detailed terminal-only behavior. `--json`, `DELTAFORGE_NO_BROWSER=1`, and non-interactive output remain safe for automation.
+- Reduced interactive terminal noise to test progress and the final summary when a browser report is available. Detailed output remains the fallback for redirected commands and terminal-only environments.
+
 ### Natural-language editorial pass (all bundled packs 1.0.1)
 
 - Removed authoring-history language from pack overviews, guides, hints, and design prompts so the material reads as one coherent explanation rather than a commentary on curriculum revisions.

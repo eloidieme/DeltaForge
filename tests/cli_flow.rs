@@ -266,7 +266,38 @@ fn starter_project_initializes_and_fails_current_stage() {
     let test = run_deltaforge(["test"], &project_dir);
     assert_failure(&test);
     assert_stdout_contains(&test, "0 passed, 5 failed");
+    assert_stdout_contains(&test, "Test report:");
     assert_stderr_contains(&test, "error: tests failed");
+
+    let test_report_path = project_dir
+        .join(".deltaforge")
+        .join("ui")
+        .join("test-report.html");
+    let test_report = fs::read_to_string(&test_report_path).unwrap();
+    assert!(test_report.contains("5 tests need attention"));
+    assert!(test_report.contains("Needs attention"));
+    assert!(test_report.contains("data-tab=\"output\""));
+    assert!(test_report.contains("event.key==='ArrowRight'"));
+    assert!(test_report.contains("Show whitespace"));
+    assert!(test_report.contains("deltaforge test --stage 01_scan_files --filter"));
+    assert!(test_report.contains("Read the instructions"));
+    assert!(test_report.contains("{fixture_path}"));
+    assert!(!test_report.contains("deltaforge-"));
+    assert!(!test_report.contains("https://"));
+
+    fs::remove_file(&test_report_path).unwrap();
+    let terminal_test = run_deltaforge(
+        [
+            "test",
+            "--terminal",
+            "--filter",
+            "scans files in a basic project",
+        ],
+        &project_dir,
+    );
+    assert_failure(&terminal_test);
+    assert_stdout_contains(&terminal_test, "actual stdout");
+    assert!(!test_report_path.exists());
 
     let json_test = run_deltaforge(["test", "--json"], &project_dir);
     assert_failure(&json_test);

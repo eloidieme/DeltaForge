@@ -166,8 +166,16 @@ pub struct TestArgs {
     pub keep_temp: bool,
 
     /// Print machine-readable JSON results.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["open", "terminal"])]
     pub json: bool,
+
+    /// Generate and open the browser test report, even when every test passes.
+    #[arg(long, conflicts_with_all = ["json", "terminal", "list_tests"])]
+    pub open: bool,
+
+    /// Keep detailed test diagnostics in the terminal and do not generate a browser report.
+    #[arg(long, conflicts_with = "open")]
+    pub terminal: bool,
 }
 
 #[derive(Debug, Args)]

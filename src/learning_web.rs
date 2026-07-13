@@ -898,7 +898,10 @@ function showPanel(target,moveFocus){
   }
 }
 document.querySelectorAll('[data-target]').forEach((button)=>{
-  button.addEventListener('click',()=>showPanel(button.dataset.target,true));
+  button.addEventListener('click',()=>{
+    showPanel(button.dataset.target,true);
+    history.replaceState(null,'','#'+button.dataset.target);
+  });
 });
 document.querySelectorAll('.copy-button').forEach((button)=>{
   button.addEventListener('click',async()=>{
@@ -935,7 +938,9 @@ if('IntersectionObserver' in window){
     chapter.querySelectorAll('.sec[id]').forEach((section)=>observer.observe(section));
   });
 }
-showPanel(document.body.dataset.initialTarget||'overview',false);
+const linkedTarget=decodeURIComponent(location.hash.slice(1));
+const linkedPanel=document.getElementById(linkedTarget);
+showPanel(linkedPanel&&linkedPanel.classList.contains('chapter')?linkedTarget:(document.body.dataset.initialTarget||'overview'),false);
 "##;
 
 #[cfg(test)]

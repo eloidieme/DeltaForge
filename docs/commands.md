@@ -9,7 +9,7 @@
 - `init <pack> --lang <language>`: create a learner repo.
 - `overview`: open the local learning page at the project overview, including the big picture, progress, and full stage roadmap.
 - `instructions`: open the local learning page at the current stage (or a stage selected with `--stage`).
-- `test`: run black-box stage tests.
+- `test`: run black-box stage tests. Failed human-readable runs generate `.deltaforge/ui/test-report.html`; interactive runs open it automatically.
 - `explain-failure`: summarize the last failed test run and suggest next steps.
 - `next`: unlock the next stage after tests pass. Gate-bearing stages also require a current passing performance record from `deltaforge bench`, unless `[gates] enforce = false`; the latter prints `performance gates skipped: gates.enforce = false` without claiming a pass.
 - `sync-pack`: adopt the currently discovered pack after a pack upgrade. Updates only the project-level pin (version, source, digest); completion proofs keep the digests of what actually passed. Reports each completed stage as valid or needing revalidation. Supports `--json`.
@@ -48,7 +48,9 @@ Display behavior:
 - Pass `--terminal` to use the original terminal renderer. Pass `--no-open` to generate the page and print its path without launching a browser; this is useful in remote environments and automated tests.
 - Set `DELTAFORGE_NO_BROWSER=1` to make browser-capable commands use their terminal view by default. Piped or redirected commands also stay in the terminal so scripts do not launch a GUI. `overview --json` remains JSON-only.
 - The terminal renderer may open `$PAGER`, defaulting to `less -R`. Set `DELTAFORGE_NO_PAGER=1` to print that view directly.
-- When a test fails outside `--json` mode, the runner prints the program's actual stdout (and stderr if non-empty) beneath the failure, truncated to the first 30 lines / 2000 characters. Use `--verbose` for full output.
+- In an interactive terminal, `test` keeps its live output compact and opens a failure-first browser report when the run fails. The self-contained report groups failures before passes, presents structured expected/actual comparisons, exposes stdout and stderr separately, can reveal spaces/tabs/line endings, links back to the stage instructions, and provides a copyable filtered rerun command.
+- Pass `test --open` to generate and open the report even when every test passes. Pass `test --terminal` to keep detailed diagnostics in the terminal and skip report generation. `DELTAFORGE_NO_BROWSER=1` suppresses automatic report generation and browser launches; an explicit `test --open` still generates the report and prints its path. `test --json` remains JSON-only and never launches a browser.
+- When browser reporting is unavailable because output is redirected, a failed run still generates the report and prints its path while retaining detailed terminal diagnostics. Program output in the terminal is truncated to the first 30 lines / 2000 characters; use `--verbose` for full output.
 - `list`, `doctor`, and `validate-pack` tolerate a single malformed pack in a search directory: `list` warns on stderr and still lists the valid packs, `doctor` reports the broken pack, and `validate-pack` reports it and exits non-zero.
 
 Pack pinning and upgrades:

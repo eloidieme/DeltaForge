@@ -11,3 +11,4 @@ pub mod process;
 pub mod runner;
 pub mod state;
 pub mod terminal;
+pub mod test_web;
