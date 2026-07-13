@@ -502,6 +502,8 @@ fn sanitize_report_text(value: &str, fixture_path: &Path, temp_dir: &Path) -> St
 
 fn replace_report_path(value: &str, path: &Path, replacement: &str) -> String {
     let native = path.to_string_lossy();
+    let escaped = native.replace('\\', "\\\\");
+    let value = value.replace(&escaped, replacement);
     let value = value.replace(native.as_ref(), replacement);
     let portable = native.replace('\\', "/");
     if portable == native {
@@ -974,11 +976,19 @@ tests:
 
         assert_eq!(
             sanitize_report_text(
-                "C:/Temp/deltaforge-123/fixture/src/main.rs\nC:/Temp/deltaforge-123/log.txt",
+                concat!(
+                    "C:/Temp/deltaforge-123/fixture/src/main.rs\n",
+                    r#"args: ["C:\\Temp\\deltaforge-123\\fixture"]"#,
+                    "\nC:/Temp/deltaforge-123/log.txt",
+                ),
                 fixture,
                 temp,
             ),
-            "{fixture_path}/src/main.rs\n{temp_dir}/log.txt"
+            concat!(
+                "{fixture_path}/src/main.rs\n",
+                r#"args: ["{fixture_path}"]"#,
+                "\n{temp_dir}/log.txt",
+            )
         );
     }
 

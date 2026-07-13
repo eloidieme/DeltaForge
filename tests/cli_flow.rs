@@ -282,7 +282,14 @@ fn starter_project_initializes_and_fails_current_stage() {
     assert!(test_report.contains("deltaforge test --stage 01_scan_files --filter"));
     assert!(test_report.contains("Read the instructions"));
     assert!(test_report.contains("{fixture_path}"));
-    assert!(!test_report.contains("deltaforge-"));
+    assert!(
+        !test_report.contains("deltaforge-"),
+        "test report leaked a temporary path in: {}",
+        test_report
+            .lines()
+            .find(|line| line.contains("deltaforge-"))
+            .unwrap_or("<line unavailable>")
+    );
     assert!(!test_report.contains("https://"));
 
     fs::remove_file(&test_report_path).unwrap();
