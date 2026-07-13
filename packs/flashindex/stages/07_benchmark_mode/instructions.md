@@ -1,40 +1,71 @@
-# Stage 07 — Benchmark mode
+# Stage 09 — Describe a scan as data
 
 ## Goal
 
-Expose a compact machine-readable snapshot of FlashIndex's current scan workload so external tooling can record and compare measurements.
+Add a command that reports the size and elapsed time of one corpus scan as a small JSON object.
+
+DeltaForge can time any command from the outside. This stage teaches FlashIndex to describe the work it performed from inside the process as well.
 
 ## Background
 
-Performance claims need measurements, but a benchmark is only useful when its output can be parsed reliably. JSON provides a small interoperability boundary; monotonic elapsed time avoids wall-clock adjustments. The number is still an observation, not a guarantee—warm caches, schedulers, and machine differences all introduce noise, which DeltaForge's benchmark history is designed to contextualize.
+Suppose two indexing runs finish in different amounts of time. Before comparing them, we need to know whether they performed the same work.
+
+A run over two source files and a run over twenty thousand files are not competing measurements. Elapsed time without workload context can be technically correct and still misleading.
+
+FlashIndex will therefore report two facts together:
+
+```json
+{"files": 37, "runtime_ms": 4}
+```
+
+`files` describes the selected Stage 02 corpus. `runtime_ms` describes how long this scan took inside the process.
+
+The output is JSON because another program can parse it without relying on decoration intended for a person. That creates a strict stdout boundary: a helpful sentence before the object would make the stream invalid JSON.
+
+Elapsed duration should come from a monotonic clock. A wall clock tells us the time of day and can jump when the system clock is corrected. A monotonic clock is designed to measure an interval that only moves forward.
+
+One number is still only one observation. Filesystem caches, other processes, power settings, and storage devices all affect timing. This command makes measurement possible; it does not turn one run into a universal performance claim.
 
 ## Requirements
 
-Expose `flashindex bench <path>`. Scan the Stage 02 corpus and print exactly one valid JSON object followed by `\n`, with integer fields `files` and `runtime_ms`. `files` is the number of source-like files; `runtime_ms` is a non-negative elapsed duration measured with a monotonic clock. Do not emit prose on stdout. Invalid roots exit non-zero without a success-shaped JSON object.
+Add:
+
+```console
+flashindex bench <path>
+```
+
+Scan the Stage 02 corpus and print exactly one valid JSON object followed by `\n`. The object must contain two non-negative integer fields:
+
+```json
+{"files": <N>, "runtime_ms": <N>}
+```
+
+`files` is the number of selected source-like files. `runtime_ms` is the elapsed scan duration measured with a monotonic clock. Do not print prose on stdout. An invalid or unreadable root must exit non-zero without printing a success-shaped object.
 
 ## Example
 
-```json
-{"files":2,"runtime_ms":1}
+```console
+$ flashindex bench project
+{"files":3,"runtime_ms":0}
 ```
+
+Zero milliseconds is valid for a very small or very fast workload; it does not mean that no work occurred.
 
 ## Edge cases
 
-- The output parses as one JSON value, not JSON mixed with labels.
-- Non-source assets and ignored directories do not contribute to `files`.
-- `runtime_ms` is an integer greater than or equal to zero.
-- An empty corpus reports `files: 0` successfully.
+- Non-source assets do not contribute to `files`.
+- An empty corpus reports `files` as zero.
+- `runtime_ms` is always a non-negative integer.
+- Stdout contains one JSON object and no surrounding explanation.
+- An unreadable root fails instead of reporting zero files.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and repeated invocations retain the same schema even though timing values may vary.
-
-### Reflection
-
-Explain the difference between a stable measurement schema and stable measurement values. Which claims can one `runtime_ms` observation support, and which require repeated controlled comparisons?
+All `deltaforge test` cases pass and the complete stdout stream parses as the required JSON object.
 
 ## Non-goals
 
-- Microbenchmark precision or a promised runtime threshold.
-- Saving history inside FlashIndex; DeltaForge owns that concern.
-- Reporting per-file timings, memory, or CPU utilization.
+- Replacing DeltaForge's repeated benchmark measurements.
+- Claiming that one observed duration is stable across machines.
+- Reporting CPU time, memory, or per-file timings.
+- Optimizing the scanner merely to reduce this number.

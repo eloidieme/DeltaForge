@@ -1,26 +1,14 @@
-# Stage 03 — Recovery
+# Stage 04 — Recover the latest value
 
 ## Goal
 
-Recover the current value of a key from an append-only log, proving that durable history can be replayed into useful state after the original writer has exited.
+Read a valid append-only log and return the latest value recorded for one key.
+
+The log has preserved history across processes. This stage turns that history back into current state.
 
 ## Background
 
-Log replay is a foundational recovery technique. A database starts from a known point and applies records in order; later operations supersede earlier ones, so a crash does not require the in-memory map to survive. The same pattern appears in database redo logs and replicated state machines. Correctness depends on chronology: the last valid operation for a key is authoritative.
-
-## Requirements
-
-Expose:
-
-```bash
-minikv get <log-path> <key>
-```
-
-Read the UTF-8 log from beginning to end. A valid record has the form `SET <key> <value>`, where the value is the remainder after the second separator and may contain spaces. Print the latest value for the requested key followed by `\n`. If the key never appears, exit 0 with empty stdout. A non-empty malformed record is an error and must exit non-zero with a useful message on stderr.
-
-## Example
-
-Given:
+Consider:
 
 ```text
 SET colour blue
@@ -28,30 +16,59 @@ SET size large
 SET colour green
 ```
 
+The file contains two records for `colour`. They are not two current values. They describe a change over time.
+
+Replaying the log means reading records in chronological order and applying each operation to the state reconstructed so far:
+
+```text
+after line 1: colour = blue
+after line 2: colour = blue, size = large
+after line 3: colour = green, size = large
+```
+
+The latest operation for a key wins. This rule is the central recovery invariant MiniKV will preserve through deletion, statistics, and compaction.
+
+The value is the remainder of the record after `SET` and the key. In `SET title hello world`, the value is `hello world`, not only `hello`. The writer preserved the argument, so the reader must preserve it too.
+
+A key absent from a valid log is an ordinary lookup result. It should produce no value and still succeed. Damaged or ambiguous history is a different problem, addressed explicitly in the next stage.
+
+## Requirements
+
+Add:
+
+```console
+minikv get <log-path> <key>
+```
+
+Read valid UTF-8 `SET <key> <value>` records from beginning to end. Print the latest value for the requested key followed by `\n`. Values may contain spaces after the key separator.
+
+If the key never appears, exit 0 with empty stdout. Records belonging to other keys must not affect the result.
+
+## Example
+
+For the log above:
+
 ```console
 $ minikv get store.log colour
 green
 ```
 
+The earlier value remains in the file but no longer determines the current state.
+
 ## Edge cases
 
-- Later `SET` records override earlier values for the same key.
-- Another key's records do not affect the requested key.
+- A later `SET` replaces an earlier value for the same key.
+- Records for other keys do not affect the requested key.
+- A value containing spaces is recovered in full.
 - A missing key produces empty stdout and status 0.
-- A non-empty malformed log line causes a non-zero exit.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and replay produces the same answer every time for unchanged log bytes.
-
-### Reflection
-
-1. Express recovery as a fold over records: what is the state, and what does one `SET` do to it?
-2. Why is reading the file backward attractive for one lookup, and which later stages would still need a complete state model?
-3. What information is lost if malformed lines are silently skipped?
+All `deltaforge test` cases for this stage pass and replaying unchanged valid bytes always produces the same current value.
 
 ## Non-goals
 
-- Repairing or silently skipping malformed records.
-- Deletes or tombstones; they arrive in Stage 05.
-- An index file, random-access lookup, or partial replay.
+- Deciding how to handle malformed records; the next stage defines failure.
+- Deletion records.
+- Random-access indexes or partial replay.
+- Modifying the log during a read.

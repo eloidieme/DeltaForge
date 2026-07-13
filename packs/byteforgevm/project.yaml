@@ -1,7 +1,7 @@
 schema_version: 1
 id: byteforgevm
 name: ByteForgeVM
-version: 0.3.1
+version: 1.0.0
 description: Tiny stack-based bytecode virtual machine
 topics:
   - interpreters
@@ -23,18 +23,33 @@ stages:
   - id: 01_disassemble
     title: Disassemble bytecode
     path: stages/01_disassemble
+  - id: 01_loader_errors
+    title: Reject malformed programs
+    path: stages/01_loader_errors
   - id: 02_stack_arithmetic
-    title: Stack arithmetic
+    title: Execute a basic stack program
     path: stages/02_stack_arithmetic
+  - id: 02_more_arithmetic
+    title: Add signed arithmetic
+    path: stages/02_more_arithmetic
   - id: 03_control_flow
-    title: Control flow
+    title: Jump to an instruction
     path: stages/03_control_flow
+  - id: 03_conditional_jumps
+    title: Choose a path from the stack
+    path: stages/03_conditional_jumps
   - id: 04_errors
     title: Runtime errors
     path: stages/04_errors
+  - id: 04_operand_errors
+    title: Validate operands and targets
+    path: stages/04_operand_errors
   - id: 05_call_return
     title: Call and return
     path: stages/05_call_return
+  - id: 05_nested_calls
+    title: Support nested calls
+    path: stages/05_nested_calls
   - id: 06_trace_mode
     title: Trace mode
     path: stages/06_trace_mode

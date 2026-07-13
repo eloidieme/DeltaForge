@@ -1,11 +1,11 @@
 # Hint 1
 
-Corpus selection is a predicate over the already discovered relative paths; keep it separate from recursion.
+Keep the Stage 01 traversal intact and think of corpus selection as one yes-or-no question applied to each discovered regular file.
 
 # Hint 2
 
-Check the exceptional exact filename first, then compare the optional extension against the fixed allow-list.
+The policy is an allow-list. A file is admitted only when its final extension exactly matches one of the listed lowercase strings; readable contents do not override the name.
 
 # Hint 3
 
-`Path::file_name` and `Path::extension().and_then(OsStr::to_str)` let a small `matches!` expression describe the rules.
+`Path::extension` returns an optional operating-system string. Convert it carefully, compare the exact allowed values, and remember that `CMakeLists.txt` already has the extension `txt`.

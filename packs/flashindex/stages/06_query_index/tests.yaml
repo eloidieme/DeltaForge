@@ -1,0 +1,38 @@
+tests:
+  - name: query reads persisted index
+    fixture: persisted_query
+    command: ["query", "{fixture_path}/index.fi", "durable_token"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/main.rs
+
+  - name: missing persisted token is empty success
+    fixture: persisted_query
+    command: ["query", "{fixture_path}/index.fi", "absent_token"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""
+
+  - name: query returns sorted deduplicated paths
+    fixture: persisted_query
+    command: ["query", "{fixture_path}/index.fi", "shared_token"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/a.rs
+        src/b.rs
+
+  - name: unreadable index is an error
+    fixture: persisted_query
+    command: ["query", "{fixture_path}/missing.fi", "shared_token"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+
+  - name: query matching is exact and case sensitive
+    fixture: persisted_query
+    command: ["query", "{fixture_path}/index.fi", "DURABLE"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""

@@ -1,23 +1,53 @@
-# Stage 01 — Parse an HTTP request line
+# Stage 01 — Read a request line
 
 ## Goal
 
-Read one HTTP request and expose its method, request target, and protocol version as three deterministic lines. This is the narrow front door of TinyHTTP: turn protocol text into structured facts without attempting to serve a network connection.
+Read one valid HTTP request and print the three parts of its first line: method, request target, and protocol version.
+
+TinyHTTP will not open a network socket yet. Beginning with protocol text lets us understand what a server receives before connection handling obscures it.
 
 ## Background
 
-HTTP began as a remarkably small text protocol at CERN; HTTP/0.9 requests were essentially a method and path. HTTP/1.x added a version and headers but kept the start line human-readable. Parsing that line is still security-sensitive: accepting ambiguous shapes can make two components disagree about where a request begins or ends. This stage therefore defines a strict three-field boundary.
+A browser asking for a page may begin its request with:
+
+```http
+GET /index.html HTTP/1.1
+```
+
+The line contains three fields.
+
+`GET` is the **method**. It describes the kind of action the client requests.
+
+`/index.html` is the **request target**. In this project it will later identify a file beneath a public directory.
+
+`HTTP/1.1` is the **version**. The version matters because later connection rules differ between HTTP/1.0 and HTTP/1.1.
+
+This first line is commonly called the request line or start line. Headers may follow it, then a blank line, then an optional body. This stage reads only the first line and reports its fields. The additional bytes remain present but do not change the three facts being requested.
+
+HTTP began with an even smaller request format, but HTTP/1.x retained human-readable lines. That readability is helpful for learning and debugging. It should not tempt a parser to be vague: each field still needs an exact boundary.
+
+The command accepts stdin for ordinary use and a file for deterministic benchmarking. Both forms represent the same request bytes and must produce the same parsed result.
 
 ## Requirements
 
-Support both forms:
+Add both forms:
 
-```bash
+```console
 tinyhttp parse
 tinyhttp parse <request-file>
 ```
 
-With no file, read the request from stdin. With a file, read its UTF-8 bytes; this form exists so `deltaforge bench` can measure a committed fixture without a shell. The first line must contain exactly three whitespace-separated fields. Print `method: <METHOD>`, `path: <TARGET>`, and `version: <VERSION>`, in that order, each followed by `\n`. Additional headers and body bytes do not change this output. A missing or malformed request line exits non-zero.
+With no file argument, read the request from stdin. With a file, read its UTF-8 contents.
+
+For a valid three-field first line, print exactly:
+
+```text
+method: <METHOD>
+path: <TARGET>
+version: <VERSION>
+```
+
+Each line ends with `\n`. Headers and body bytes after the first line do not affect this output.
 
 ## Example
 
@@ -28,32 +58,31 @@ path: /index.html
 version: HTTP/1.1
 ```
 
+The command describes the request. It does not serve the file yet.
+
 ## Edge cases
 
-- Methods and versions are reported exactly as received rather than rewritten.
-- Header lines after the request line do not become request-line fields.
-- An empty input is invalid.
-- A first line with fewer or more than three fields is invalid.
+- `GET` and `POST` are preserved as received rather than normalized.
+- HTTP/1.0 and HTTP/1.1 version text is printed unchanged.
+- A request read from a file is parsed by the same rules as stdin.
+- Additional headers do not change the three output lines.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, stdin and file forms agree for equal bytes, and `deltaforge bench` completes against the large request fixture.
+All `deltaforge test` cases pass and the request-file benchmark completes with the same parsing behavior.
 
-### Benchmark interpretation worksheet
+### Reading the benchmark
 
-After `deltaforge bench`, record request bytes, median, and p95, then answer:
+Record request bytes, header count, median, and p95. Then ask:
 
-1. The command reports only the first line; why does the fixture still contain headers and a body?
-2. Is the measurement dominated by request parsing, file reading, process startup, or output formatting at this size?
-3. What larger or repeated-input experiment would isolate parsing throughput more clearly?
-4. Why should the file and stdin forms be checked for semantic equivalence before their performance is compared?
-
-### Reflection
-
-What ambiguity would arise if the parser accepted both three-field and four-field request lines? State the boundary in terms of observable accepted input, not parser structure.
+1. How much of a tiny parse is process startup and file I/O?
+2. Does the command read only the first line or the complete fixture before parsing it?
+3. Which larger fixture would still measure the same contract?
+4. Which exact output check must remain unchanged after optimization?
 
 ## Non-goals
 
-- Validating the complete HTTP method or URI grammar.
-- Parsing headers, bodies, chunked framing, or TCP streams.
-- Running a listening server.
+- Rejecting every malformed request-line shape; the next stage tightens that boundary.
+- Validating the method, target, or version vocabulary.
+- Parsing headers or the body.
+- Opening a network listener.

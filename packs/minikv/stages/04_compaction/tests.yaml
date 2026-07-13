@@ -1,33 +1,5 @@
 tests:
-  - name: writes compacted log
-    fixture: stale_store
-    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
-    expect:
-      exit_code: 0
-      file_exists:
-        - "{temp_dir}/compact.log"
-      file_contains:
-        - path: "{temp_dir}/compact.log"
-          contains: "SET alpha three"
-
-  - name: keeps live beta value
-    fixture: stale_store
-    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
-    expect:
-      exit_code: 0
-      file_contains:
-        - path: "{temp_dir}/compact.log"
-          contains: "SET beta two"
-
-  - name: reports compacted marker
-    fixture: stale_store
-    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
-    expect:
-      exit_code: 0
-      stdout_contains:
-        - "compacted"
-
-  - name: writes one latest record per key in sorted order
+  - name: writes latest value for each key
     fixture: stale_store
     command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
     expect:
@@ -38,19 +10,27 @@ tests:
             SET alpha three
             SET beta two
 
-  - name: creates nested output parents
+  - name: removes superseded values
     fixture: stale_store
-    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/nested/data/compact.log"]
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
     expect:
       exit_code: 0
-      file_exists:
-        - "{temp_dir}/nested/data/compact.log"
+      file_not_contains:
+        - path: "{temp_dir}/compact.log"
+          contains: "SET alpha one"
 
-  - name: replaces stale output contents
-    fixture: stale_output
-    command: ["compact", "{fixture_path}/store.log", "{fixture_path}/compact.log"]
+  - name: reports compacted marker
+    fixture: stale_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
     expect:
       exit_code: 0
-      file_contains:
-        - path: "{temp_dir}/fixture/compact.log"
-          contains: "SET alpha final"
+      stdout_contains:
+        - "compacted"
+
+  - name: malformed input produces no compacted state
+    fixture: malformed_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    expect:
+      exit_code: 1
+      file_not_exists:
+        - "{temp_dir}/compact.log"

@@ -1,51 +1,89 @@
-# Stage 05 — Build an inverted index
+# Stage 05 — Group files by token
 
 ## Goal
 
-Invert the token stream into a deterministic map from each distinct token to the source files that contain it.
+Reorganize the token occurrences so that each distinct token points to the files that contain it.
+
+Exact search currently begins with the corpus and examines its occurrences. This stage prepares the relationship in the direction a search query needs.
 
 ## Background
 
-A book's index maps a subject to pages; an inverted index applies the same reversal to a document collection, mapping terms to documents. This structure powered early information-retrieval systems and remains central to modern search engines because lookup no longer requires rescanning every file. At this stage presence matters, not frequency: repeating a token within one document must not repeat the document identifier.
+Imagine that tokenization produced this simplified record:
+
+```text
+src/main.rs     → open, file, error
+src/storage.rs  → file, write, error
+src/network.rs  → open, connection, error
+```
+
+This view begins with a file and tells us what the file contains. To answer “which files contain `open`?”, the program still has to examine each file's tokens.
+
+We can turn the relationship around:
+
+```text
+connection → src/network.rs
+error      → src/main.rs, src/network.rs, src/storage.rs
+file       → src/main.rs, src/storage.rs
+open       → src/main.rs, src/network.rs
+write      → src/storage.rs
+```
+
+This is an **inverted index**. The word “inverted” refers to the reversal: documents once pointed to tokens; tokens now point to documents.
+
+A back-of-the-book index makes the same kind of trade. Someone does the organizing work in advance so that a later reader can begin with a subject and go directly to the relevant pages.
+
+At this stage, the important change is the shape of the information. Every distinct token receives a posting containing its file paths. We will tighten duplicate removal and canonical ordering in the next stage, after the basic grouping is visible.
 
 ## Requirements
 
-Expose `flashindex index <path>`. Build from Stage 03 token occurrences and print one line per token as `token path1 path2 ...`. Sort tokens by bytewise ascending text. For each token, include every containing relative `/` path exactly once, sorted ascending. Print no blank or summary lines; an empty corpus succeeds with empty stdout.
+Add:
+
+```console
+flashindex index <path>
+```
+
+Build from Stage 03 token occurrences. Print one line for each distinct token using this shape:
+
+```text
+token path1 path2 ...
+```
+
+Every line must begin with the complete case-sensitive token and contain the root-relative `/` paths in which it appears. Do not print headings, blank separator lines, or a summary.
 
 ## Example
 
+For two files containing:
+
 ```text
-alpha src/a.rs src/b.rs
-beta src/a.rs
-gamma src/b.rs
+src/main.rs     → open, file
+src/storage.rs  → file, write
 ```
+
+the index contains:
+
+```console
+$ flashindex index project
+file src/main.rs src/storage.rs
+open src/main.rs
+write src/storage.rs
+```
+
+The command now begins each record with the value a future lookup will know: the token.
 
 ## Edge cases
 
-- Repeated occurrences in one file list that path once.
-- A token shared by several files lists every path once in ascending order.
-- Token lines are in ascending token order and remain byte-stable across runs.
-- An empty corpus produces empty stdout.
+- A token that appears in several files lists every containing file.
+- A token appearing in only one file still receives an index record.
+- Complete token text is preserved, including case and underscores.
+- Index records contain only token and path data, so another command can search their line-oriented shape.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, output is deterministic, and the index benchmark runs successfully.
-
-### Benchmark interpretation worksheet
-
-After `deltaforge bench`, record corpus bytes, distinct tokens, printed postings, median, and p95, then answer:
-
-1. Would a corpus with the same bytes but a much larger vocabulary stress the same operations?
-2. How does repeating one token within one file affect tokenization work versus final posting count?
-3. Which costs belong to index construction and which belong only to deterministic serialization?
-4. What measurement would help identify whether ordering or allocation dominates?
-
-### Reflection
-
-Describe the information discarded when occurrences become file-only postings. Why is that loss acceptable for this stage but not for Stage 04 output?
+All `deltaforge test` cases for this stage pass and every token/file relationship in the output can be traced back to Stage 03 occurrences.
 
 ## Non-goals
 
-- Recording positions or term frequencies in the printed index.
-- Persistence, compression, ranking, or incremental updates.
-- Parallel construction, introduced later.
+- Guaranteeing final token and path ordering; the next stage makes it canonical.
+- Recording occurrence counts or line and column positions.
+- Saving the index to disk for another process.
+- Ranking documents.

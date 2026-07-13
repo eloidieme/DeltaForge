@@ -1,11 +1,11 @@
 # Hint 1
 
-A tombstone is state: while replaying, “deleted” must overwrite “present” just as a newer value would.
+Deletion is another chronological operation. The recovered state for a key must represent either a live value or an explicit absence.
 
 # Hint 2
 
-Represent each key's latest state so it can express either a live value or deletion, and let every log operation replace that state.
+Reuse the append path for `DEL`, then extend the replay operation type. A later record still replaces the earlier state, regardless of whether it is `SET` or `DEL`.
 
 # Hint 3
 
-`Option<String>` inside the recovery map is enough: `Some(value)` for `SET`, `None` for `DEL`; compaction serializes only `Some` entries.
+An `Option<String>` per key expresses the two states: `Some(value)` after `SET`, `None` after `DEL`. Store it in the recovery map rather than removing all evidence of the key immediately.

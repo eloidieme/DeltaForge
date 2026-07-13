@@ -2,22 +2,60 @@
 
 ## Goal
 
-Teach FlashIndex to look through a project and list its files. This is the smallest useful piece of a search tool: before it can search words, it needs to know which files exist.
+Teach FlashIndex to discover the files inside a project.
+
+At the end of this stage, a command such as:
+
+```console
+$ flashindex scan project
+```
+
+will print a stable list of the files beneath `project`.
+
+This does not search their contents yet. It gives every later stage a dependable answer to a more basic question: which files exist?
 
 ## Background
 
-Think of a project as a tree. The project folder is the trunk, its folders are branches, and files are the leaves. A **directory scan** walks that tree and collects the leaves.
+Consider this small project:
 
-The operating system does not promise to hand directory entries to a program in the same order every time. Windows also writes paths with `\`, while Unix-like systems use `/`. FlashIndex therefore sorts the finished list and displays every path with `/`. That makes its output predictable for people, tests, and scripts on any supported system.
+```text
+project/
+├── README.md
+├── src/
+│   ├── main.rs
+│   └── storage.rs
+└── target/
+    └── debug/
+        └── flashindex
+```
 
-Real projects contain folders that are not part of the code a person wrote. For this course, FlashIndex skips four names:
+A person looking at this tree can quickly distinguish the project's files from its build output. `README.md`, `main.rs`, and `storage.rs` belong to the material we may eventually want to search. The executable inside `target` was produced by the compiler.
 
-- `.git` stores version-control history and internal data.
-- `target` is the usual Rust build-output folder.
-- `build` is a common build-output folder in C and C++ projects.
-- `node_modules` contains downloaded JavaScript packages and can hold thousands of files.
+FlashIndex does not understand that distinction automatically. It initially sees only files and directories.
 
-This is a deliberately small **project policy**, not a universal law. A production search tool would usually let people change the ignore list. Here, a fixed list lets us learn traversal without also building a configuration system.
+Its first task is to walk through the tree. When it encounters a directory such as `src`, it must look inside and continue. This is called recursive directory traversal: visiting a directory may reveal more directories that also need to be visited.
+
+Simply finding the files is not enough. The paths must also be useful outside the machine on which they were discovered.
+
+An absolute path might look like this:
+
+```text
+/Users/maya/projects/flashindex/src/main.rs
+```
+
+That path includes information about one person's computer. Another learner will have the project somewhere else. FlashIndex therefore reports paths relative to the directory it was asked to scan:
+
+```text
+src/main.rs
+```
+
+Operating systems also write paths differently. Unix-like systems use `/`, while Windows normally displays `\`. FlashIndex will use `/` in its public output on every platform so that the same project produces the same visible paths.
+
+There is one more source of variation. A filesystem does not promise to return directory entries in alphabetical order. Even if two runs discover the same files, they may discover them in a different sequence. FlashIndex sorts the finished list before printing it.
+
+Finally, the scanner skips four directory names: `.git`, `target`, `build`, and `node_modules`. These commonly contain version-control data, compiler output, or downloaded dependencies rather than files authored as part of the project.
+
+This is a small policy chosen for the course. It is not a complete or universal ignore list. Keeping it fixed lets this stage focus on traversal; configurable ignore rules can remain a separate problem.
 
 ## Requirements
 
@@ -33,26 +71,16 @@ Do not print directories. Do not enter a directory named `.git`, `target`, `buil
 
 ## Example
 
-Suppose `project` looks like this:
-
-```text
-project/
-├── README.md
-├── src/
-│   └── main.rs
-└── target/
-    └── debug/app
-```
-
-Then the command prints only the two project files:
+For the project shown above, the result is:
 
 ```console
 $ flashindex scan project
 README.md
 src/main.rs
+src/storage.rs
 ```
 
-The `target` file is absent because the whole directory was ignored.
+The paths are relative to `project`, they use `/`, and they appear in sorted order. Nothing inside `target` is printed.
 
 ## Edge cases
 
@@ -60,7 +88,6 @@ The `target` file is absent because the whole directory was ignored.
 - An ignored directory is skipped wherever it appears, not only at the root.
 - An empty directory succeeds and prints nothing.
 - Filesystem discovery order must not change the final sorted output.
-- Symbolic links and special files are not regular files and are not followed.
 
 ## Success criteria
 

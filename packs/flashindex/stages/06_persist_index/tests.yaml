@@ -4,6 +4,8 @@ tests:
     command: ["index", "{fixture_path}", "--out", "{temp_dir}/index.fi"]
     expect:
       exit_code: 0
+      stdout_contains:
+        - "wrote"
       file_exists:
         - "{temp_dir}/index.fi"
 
@@ -12,18 +14,9 @@ tests:
     command: ["index", "{fixture_path}", "--out", "{temp_dir}/index.fi"]
     expect:
       exit_code: 0
-      file_exists:
-        - "{temp_dir}/index.fi"
-      stdout_contains:
-        - "wrote"
-
-  - name: query reads persisted index
-    fixture: persisted_query
-    command: ["query", "{fixture_path}/index.fi", "durable_token"]
-    expect:
-      exit_code: 0
-      stdout_contains:
-        - "src/main.rs"
+      file_contains:
+        - path: "{temp_dir}/index.fi"
+          contains: "durable_token"
 
   - name: creates nested output parents
     fixture: persist_project
@@ -33,22 +26,6 @@ tests:
       file_exists:
         - "{temp_dir}/cache/nested/index.fi"
 
-  - name: missing persisted token is empty success
-    fixture: persisted_query
-    command: ["query", "{fixture_path}/index.fi", "absent_token"]
-    expect:
-      exit_code: 0
-      stdout_exact: ""
-
-  - name: query returns sorted deduplicated paths
-    fixture: persisted_query
-    command: ["query", "{fixture_path}/index.fi", "shared_token"]
-    expect:
-      exit_code: 0
-      stdout_exact: |
-        src/a.rs
-        src/b.rs
-
   - name: rebuilding replaces a stale index artifact
     fixture: stale_index
     command: ["index", "{fixture_path}/project", "--out", "{fixture_path}/index.fi"]
@@ -57,3 +34,14 @@ tests:
       file_contains:
         - path: "{temp_dir}/fixture/index.fi"
           contains: "fresh_token"
+      file_not_contains:
+        - path: "{temp_dir}/fixture/index.fi"
+          contains: "stale_token"
+
+  - name: empty corpus still creates an artifact
+    fixture: empty_project
+    command: ["index", "{fixture_path}", "--out", "{temp_dir}/empty.fi"]
+    expect:
+      exit_code: 0
+      file_exists:
+        - "{temp_dir}/empty.fi"

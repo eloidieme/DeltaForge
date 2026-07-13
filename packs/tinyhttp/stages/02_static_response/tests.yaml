@@ -1,5 +1,5 @@
 tests:
-  - name: returns 200 for existing file
+  - name: returns framed 200 for existing file
     fixture: site
     command: ["serve-file", "{fixture_path}/public", "/index.html"]
     expect:
@@ -9,18 +9,22 @@ tests:
         - "Content-Length: 15"
         - "hello tinyhttp"
 
-  - name: returns 404 for missing file
+  - name: returns empty framed 404 for missing file
     fixture: site
     command: ["serve-file", "{fixture_path}/public", "/missing.html"]
     expect:
       exit_code: 0
       stdout_contains:
         - "HTTP/1.1 404 Not Found"
-
-  - name: does not expose parent paths
-    fixture: site
-    command: ["serve-file", "{fixture_path}/public", "/../secret.txt"]
-    expect:
-      exit_code: 1
+        - "Content-Length: 0"
       stdout_not_contains:
-        - "secret"
+        - "hello tinyhttp"
+
+  - name: content length counts utf8 bytes
+    fixture: site
+    command: ["serve-file", "{fixture_path}/public", "/unicode.txt"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Content-Length: 6"
+        - "café"

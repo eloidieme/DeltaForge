@@ -1,11 +1,11 @@
 # Hint 1
 
-Tracing should observe one interpreter, not create a second one whose semantics can drift from `run`.
+Tracing should observe the existing interpreter, not copy it. Add an execution mode or optional observer around the same dispatch loop.
 
 # Hint 2
 
-Add an execution-mode flag and emit the snapshot at the top of the dispatch cycle, before matching the opcode.
+Emit the snapshot at the very top of the loop, after fetching the current instruction but before matching and mutating state.
 
 # Hint 3
 
-Format stack values with `iter().map(i64::to_string).collect::<Vec<_>>().join(", ")`; keep errors on stderr through the existing `Result` path.
+Join stack values with `, ` and surround them with brackets. Leave the existing error return path on standard error.

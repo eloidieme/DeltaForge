@@ -1,11 +1,11 @@
 # Hint 1
 
-Treat the document root as a security boundary: decide whether a request path is safe before joining or opening anything.
+Build the response from four visible parts: status line, length header, empty line, and body. Write down the exact missing-file response too.
 
 # Hint 2
 
-Separate path validation, file lookup, and response formatting so the 404 path cannot accidentally reuse body data.
+Separate “find and read the file” from “format the response.” The formatter should receive the bytes whose length it announces.
 
 # Hint 3
 
-Inspect `std::path::Component` for parent/root/prefix components, then use the body byte slice's length when writing `Content-Length`.
+Read the file as bytes and use the byte vector's length for `Content-Length`. A missing file selects status 404 and an empty body.

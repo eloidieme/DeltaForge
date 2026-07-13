@@ -1,0 +1,3 @@
+JMP 2
+PUSH 99
+HALT

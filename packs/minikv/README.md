@@ -2,65 +2,133 @@
 
 ## What you are building
 
-MiniKV is a tiny persistent key-value store. You begin with the command boundary for one key/value pair, then make updates durable in an append-only log, recover current state after restart, compact obsolete history, represent deletion with tombstones, and report the difference between physical records and live data.
+Consider a program that needs to remember three small facts:
+
+```text
+language → Rust
+theme    → dark
+timeout  → 30
+```
+
+While the program is running, it can keep these pairs in memory. The problem appears when the process exits. Its memory is released, and the next process begins without the values.
+
+MiniKV will become a small persistent key-value store: keys name values, writes survive a restart, and later commands can recover the current state.
+
+Before it can do that, it needs to answer several questions.
+
+First: what should a durable write look like?
+
+MiniKV will record each change as a line in a file:
+
+```text
+SET language Rust
+SET theme dark
+SET timeout 30
+```
+
+Instead of finding an old record and editing it, every write is added to the end. This creates an append-only log: a chronological history of operations.
+
+Second: what happens when a key changes?
+
+```text
+SET theme dark
+SET theme light
+```
+
+Both events remain in the file, but only the latest one determines the current value. Recovery reads the history in order and reconstructs the state a previous process left behind.
+
+Third: what should happen to history that can no longer affect a read?
+
+As updates accumulate, the log grows. MiniKV will compact it into one current record per live key. Compaction must preserve the result of replay, not merely make the file shorter.
+
+Deletion adds another difficulty. Removing a key from memory is not durable because an earlier `SET` remains in the log. MiniKV records a `DEL` tombstone so recovery knows that the old value is no longer live. Compaction must respect that marker or a deleted key can reappear.
+
+Finally, MiniKV will count both sides of the storage model: physical records in the file and logical keys still alive. The difference makes the cost of retained history visible.
 
 ## Why this is useful
 
-Key-value stores are the foundation of caches, databases, metadata services, queues, and embedded storage engines. This pack introduces their core storage ideas without hiding them behind a framework. Its small text format keeps the evidence visible: you can open the log and see exactly which history recovery must interpret.
+The log is plain text and the commands are small, but the questions are the same ones larger storage engines must answer.
+
+What evidence survives a process restart? Which operation wins when several records mention one key? When is old history safe to remove? How should damaged history fail? What does deletion mean when old copies still exist?
+
+These ideas appear in database recovery logs, event-sourced applications, message systems, filesystems, and log-structured stores. Production systems add checksums, record framing, synchronization, atomic replacement, and concurrency control. MiniKV keeps those mechanisms out of the way long enough for the state model they protect to remain visible.
+
+The project also teaches the difference between layout and guarantee. Appending is a useful storage layout, but it does not automatically promise survival after a power failure. Replacing an output file is different from making that replacement crash-atomic. The text names only the guarantees the tested program actually provides.
 
 ## Big picture
 
-1. Establish an exact command and output contract.
-2. Append durable `SET` history without rewriting older bytes.
-3. Replay that history so the latest operation wins.
-4. Compact obsolete history into an equivalent live set.
-5. Add `DEL` tombstones without resurrecting older values.
-6. Compare physical log records with logical live state.
+```text
+Accept one key and one value
+    ↓
+Write the first durable SET record
+    ↓
+Append later records without destroying history
+    ↓
+Replay valid history so the latest operation wins
+    ↓
+Reject history that cannot be interpreted safely
+    ↓
+Compact stale values into an equivalent live state
+    ↓
+Replace the compacted artifact completely
+    ↓
+Record and recover DEL tombstones
+    ↓
+Compact without resurrecting deleted keys
+    ↓
+Compare physical history with logical live state
+```
+
+Each stage adds one new claim about the log. Later stages must preserve all earlier claims.
 
 ## Concept map
 
-| Stage | New idea | Invariant to protect |
+| Stages | New idea | Promise to preserve |
 |---|---|---|
-| 01 | Key/value command boundary | Successful output represents exactly the supplied pair. |
-| 02 | Append-only persistence | A new record never destroys an earlier record. |
-| 03 | Recovery by replay | The latest valid operation determines a key's state. |
-| 04 | Compaction | Replaying input and output yields equivalent live state. |
-| 05 | Tombstones | A deleted key stays absent until a later `SET`. |
-| 06 | Operational statistics | Physical record counts and logical key counts are not confused. |
+| 01 | Key/value command boundary | Output represents exactly the supplied pair. |
+| 02–03 | Durable append history | A new record does not destroy an earlier one. |
+| 04–05 | Recovery and validation | The latest valid operation determines state; malformed history is not guessed around. |
+| 06–07 | Semantic and filesystem compaction | Input and output recover equivalent state, and stale destination bytes disappear. |
+| 08–09 | Tombstones | A deleted key stays absent until a later `SET`. |
+| 10 | Operational counts | Physical records are not confused with logical live keys. |
 
-## Storage glossary
+## Storage terms, when you need them
 
-- **Append-only log:** a sequence extended at the end rather than edited in place.
-- **Replay:** applying records in chronological order to reconstruct current state.
-- **Live value:** the value selected by the latest operation for a key.
-- **Stale record:** an older operation that no longer affects current state.
-- **Tombstone:** a durable deletion marker that supersedes an older value.
+- **Key:** the name used to retrieve a value.
+- **Record:** one complete operation stored in the log.
+- **Append-only log:** a history extended at the end rather than edited in place.
+- **Replay:** applying records in chronological order to rebuild current state.
+- **Stale record:** an older operation that no longer changes the recovered result.
 - **Compaction:** producing a smaller representation with the same logical state.
-- **Crash consistency:** the property that interruption leaves storage in a recoverable state.
-- **Durability:** the promise that acknowledged data survives the failures included in the system's model.
+- **Tombstone:** a durable deletion marker that supersedes an older value.
+- **Durability:** the promise that acknowledged data survives the failures named by the system's model.
 
-### A durability ladder
+## A note about durable writes
 
-“The write call succeeded” is not the strongest possible durability claim. Data may have reached a language buffer, the operating-system page cache, the device cache, or stable media. MiniKV deliberately stops before specifying flush and `fsync` behavior, but the distinction matters: append-only layout simplifies recovery; it does not make every completed call power-loss durable by itself.
+When a file-writing function succeeds, the bytes may have reached the language runtime, the operating-system page cache, the storage device's cache, or stable media. Those are not identical guarantees.
 
-## Historical field note
+MiniKV deliberately does not require `fsync` or define recovery after power loss. Its append-only history makes the logic of recovery easier to inspect, but it should not be described as stronger durability than the contract tests.
 
-Database write-ahead logs, event-sourced applications, and log-structured stores all exploit sequential history. Bitcask is a particularly approachable relative of MiniKV: it uses an append-only data file and an in-memory key directory, then merges old files to reclaim space. Production systems add record framing, checksums, synchronization, locking, and careful replacement protocols; this pack isolates the semantic core those mechanisms protect.
+## When something goes wrong
 
-## Failure-analysis lab
+Before changing code, identify which promise failed:
 
-For each observation, name the violated invariant before imagining a code change:
+1. `SET colour blue` followed by `SET colour green` recovers `blue`. Was the error in append order or replay order?
+2. A compacted file contains both values. Is the live state wrong, or did compaction fail to remove stale history?
+3. `SET session active`, then `DEL session`, then compaction produces `SET session active`. Which operation was forgotten?
+4. Five records for one key are reported as five live keys. Which physical and logical quantities were confused?
+5. A shorter compacted result is followed by lines from yesterday's output. Did state selection fail, or did destination replacement fail?
 
-1. After `SET colour blue` and `SET colour green`, `get colour` prints `blue`. Is the defect in append order or replay order?
-2. A compacted file contains both values for `colour`. Is the state wrong, or only the purpose of compaction unmet?
-3. `SET session live`, `DEL session`, then compaction produces `SET session live`. Which record was incorrectly forgotten?
-4. A log with five records for one key reports five live keys. Which physical and logical quantities were confused?
-5. An output log ends with correct records followed by bytes from an older, longer output. What replacement property failed?
+Naming the broken promise usually narrows the problem more effectively than starting from a suspected function.
 
 ## What good looks like
 
-Good solutions make file writes explicit, reject malformed history instead of guessing, keep output stable, and treat recovery as a first-class behavior rather than a side effect. The strongest explanations state the replay invariant first and use it to justify reads, deletes, statistics, and compaction.
+A good MiniKV solution has one shared interpretation of log records. Writes create complete operations, recovery applies them in order, statistics count the same operations, and compaction serializes the same final state.
 
-## Optional extensions
+Malformed history fails visibly instead of being repaired by guesswork. Output remains deterministic. Claims about durability and safe replacement stop at the guarantees the program actually tests.
 
-After completing the required stages, useful thought experiments include length-prefixed records, checksums, atomic output replacement, snapshots, batch writes, and single-writer locking. Each extension should begin by naming the new failure it addresses; complexity without a failure model is merely decoration.
+## Optional directions
+
+After the required stages, useful experiments include length-prefixed records, checksums, crash-atomic replacement through a temporary sibling, snapshots, batch writes, and single-writer locking.
+
+Begin any extension by naming the failure it addresses. A checksum helps detect corrupted records; it does not make a write atomic. A lock coordinates writers; it does not make buffered bytes survive power loss. Keeping those distinctions clear is part of storage design.

@@ -1,21 +1,41 @@
-# Stage 01 — Disassemble bytecode
+# Stage 01 — Give every instruction an address
 
 ## Goal
 
-Read ByteForgeVM's textual bytecode and render a stable, addressed listing. The result should let a human point to an instruction unambiguously before the virtual machine is capable of executing anything.
+Add `byteforgevm disasm <program-file>`, which prints a clean, numbered listing of a bytecode program without executing it.
 
 ## Background
 
-A disassembler translates a machine-oriented instruction stream into a readable listing. From early mainframe monitors to tools such as `objdump`, addresses have been essential: branches refer to locations, debuggers stop at them, and error reports name them. ByteForgeVM uses text rather than packed binary, but the same separation matters—loading and describing a program is distinct from running it.
+Before a virtual machine can run a program, it has to decide what the program contains. ByteForgeVM's source format is simple: one instruction per non-empty line. Loading those lines into a sequence gives each instruction a stable address.
+
+Addresses let people and instructions refer to the same place. A debugger can say “instruction 3 failed,” and a later jump can say “continue at instruction 3.” This first stage concentrates on that shared map before the machine has any execution state.
+
+A readable instruction listing is called a disassembly. Tools such as `objdump` disassemble packed machine code; yours starts from text, but the purpose is the same.
 
 ## Requirements
 
-Expose `byteforgevm disasm <program-file>`. Treat each non-empty UTF-8 line as one instruction and number instructions from zero after blank lines are omitted. Print each as a four-digit, zero-padded address, one space, then the opcode and its optional integer argument normalized with single spaces: `0000 OP ARG`. Preserve opcode spelling. A missing file or invalid integer argument exits non-zero.
+Read the UTF-8 program file. Ignore empty lines. For every remaining line:
+
+1. separate the opcode from its optional integer operand;
+2. normalize spacing between them to one space;
+3. print its zero-based address as four digits, followed by the instruction.
+
+The required shape is `0000 OP` or `0000 OP ARG`. Preserve the opcode's spelling. This stage describes instructions; it does not yet decide whether an opcode can execute.
 
 ## Example
 
-```console
-$ byteforgevm disasm add.bvm
+Given:
+
+```text
+PUSH 2
+PUSH 5
+ADD
+HALT
+```
+
+the command prints:
+
+```text
 0000 PUSH 2
 0001 PUSH 5
 0002 ADD
@@ -24,17 +44,22 @@ $ byteforgevm disasm add.bvm
 
 ## Edge cases
 
-- The first instruction is address `0000` and numbering advances by instruction, not source byte.
-- An instruction without an operand, including `HALT`, prints no trailing operand.
-- Blank lines do not create gaps in addresses.
-- A missing program file exits non-zero.
+- The first instruction has address `0000`.
+- An instruction without an operand, such as `HALT`, has no trailing operand.
+- Blank lines do not consume addresses or leave gaps in the listing.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and the same program always produces the same addressed listing.
+All tests pass, and the same source program always receives the same addressed listing.
+
+### Reflection
+
+1. Why is an address based on instruction position rather than source byte position here?
+2. What does the disassembler know about `ADD`, and what does it deliberately not know yet?
+3. Why is it useful to finish loading before rendering the listing?
 
 ## Non-goals
 
-- Executing instructions or validating whether an opcode is supported.
-- Labels, symbols, comments, or packed binary bytecode.
-- Control-flow analysis.
+- Executing or validating opcodes.
+- Labels, comments, symbols, or packed binary bytecode.
+- Following control flow.

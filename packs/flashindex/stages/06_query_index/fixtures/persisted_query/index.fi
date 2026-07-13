@@ -1,0 +1,2 @@
+durable_token	src/main.rs
+shared_token	src/a.rs	src/b.rs

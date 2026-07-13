@@ -1,11 +1,11 @@
 # Hint 1
 
-Design the file as a contract between two separate invocations: every distinction the reader needs must survive serialization.
+Write down what a future reader must recover: every token boundary and every path boundary. Your file format needs an unambiguous representation for both.
 
 # Hint 2
 
-Build the full deterministic index first, serialize it completely, and only then replace the destination; let `query` parse the same record boundaries.
+Treat a rebuild as replacement, not append. Also decide what a valid artifact for an empty index looks like before handling the non-empty case.
 
 # Hint 3
 
-A line per token with tab-separated paths is sufficient; `create_dir_all` and `fs::write` handle a new nested destination and truncate stale contents.
+`fs::create_dir_all` can prepare the destination parent, and `fs::write` replaces an existing file rather than leaving stale trailing bytes. Escaping or record framing still belongs to your chosen UTF-8 format.

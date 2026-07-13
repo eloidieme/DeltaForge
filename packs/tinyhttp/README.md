@@ -1,91 +1,109 @@
 # TinyHTTP
 
-## What you are building
+Open a web page and, for a moment, ignore everything visual. Underneath the text, images, and buttons, a much plainer exchange is taking place. One program sends a short message asking for something; another program sends back a status, a few facts about the reply, and some bytes.
 
-TinyHTTP is a small HTTP/1.x request and response engine. By the end, you will parse request lines, normalize header fields, generate safe static-file responses, apply version-specific keep-alive defaults, classify common media types, and return correctly framed inclusive byte ranges.
+TinyHTTP is a small laboratory for that exchange. You will not build a production web server or open a network socket. Instead, you will work directly with HTTP-shaped messages and static files. Keeping the project this small makes the important rules visible: where one part of a message ends, how a path can escape its intended directory, why a length is measured in bytes, and how two protocol versions can give the same header different meaning.
 
-## Why this is useful
+## Begin with the shape of a message
 
-HTTP looks simple until you implement it. This project teaches protocol parsing, defensive path handling, response framing, header normalization, version-dependent semantics, and byte-accurate slicing. Those skills transfer directly to servers, proxies, API gateways, and network tooling.
-
-## Big picture
-
-1. Separate the request line into its three protocol fields.
-2. Map a safe request path to a complete static response.
-3. Parse the header section without crossing into the body.
-4. Apply HTTP/1.0 and HTTP/1.1 persistence rules.
-5. Describe representation bytes with a media type.
-6. Return an inclusive byte interval with correct lengths.
-
-## Message anatomy
+Here is a request asking for `/guide.html`:
 
 ```text
-GET /guide HTTP/1.1        ← request line
-Host: example.test         ← header field
-Connection: close          ← header field
-                            ← empty-line delimiter
-optional body bytes        ← message body
+GET /guide.html HTTP/1.1
+Host: example.test
+Connection: close
+
 ```
 
-The regions have different grammars. A colon in the body does not make a header, and whitespace inside a target does not create a fourth request-line field. HTTP convention uses CRLF line endings; DeltaForge's committed file fixtures use LF checkout for cross-platform byte stability, while stdin tests still exercise CRLF requests.
+The first line has exactly three jobs. It names an action (`GET`), a request target (`/guide.html`), and a protocol version (`HTTP/1.1`). The following lines are header fields: small pieces of metadata written as a name, a colon, and a value. An empty line ends the header section. If a body follows, it belongs to a different region of the message.
 
-## Protocol reference
+Those boundaries matter. A line containing `Color: blue` is a header before the empty line and ordinary body text after it. A parser that keeps reading headers into the body has misunderstood the message, even if its output looks plausible on a simple example.
 
-### Keep-alive decision table
+## What the project grows into
+
+The stages follow one request through increasingly precise questions:
+
+1. Read a well-formed request line and print its three fields.
+2. Reject request lines that do not have exactly three fields.
+3. Turn a file into a complete `200` response, or a missing file into `404`.
+4. Keep request paths inside a chosen document root.
+5. Read and normalize header fields.
+6. Stop header parsing at the right boundaries and reject malformed fields.
+7. Decide whether HTTP/1.0 and HTTP/1.1 connections stay open.
+8. Label common file formats with a media type.
+9. Return one valid inclusive range of file bytes.
+10. Reject invalid ranges before producing a partial response.
+
+Each step adds one idea. Later stages still rely on earlier behavior, but they no longer ask you to learn parsing, security, framing, and range arithmetic all at once.
+
+## From a path to a response
+
+Suppose the document root is a directory named `public`, and it contains `public/guide.html`. A request for `/guide.html` may safely refer to that file. A request for `/../private.txt` is different: `..` asks the filesystem to walk upward, outside the directory the server promised to expose.
+
+This is not merely an awkward filename. It is a trust-boundary problem. The safe order is:
+
+1. interpret and validate the request path;
+2. decide which file, if any, is inside the document root;
+3. read its bytes;
+4. describe those bytes in the response.
+
+A successful response has a status line, headers, an empty line, and then its body:
+
+```text
+HTTP/1.1 200 OK
+Content-Length: 5
+
+hello
+```
+
+`Content-Length` is 5 because the body contains five bytes. It is not the number of lines, characters as a reader imagines them, or cells shown by a terminal. Protocol framing works with bytes.
+
+## Small rules with large consequences
+
+HTTP/1.0 and HTTP/1.1 look almost identical in a request line, but they begin with opposite assumptions about connection reuse:
 
 | Version | No `Connection` field | `Connection: close` | `Connection: keep-alive` |
-|---|---|---|---|
-| HTTP/1.1 | keep alive | close | keep alive |
-| HTTP/1.0 | close | close | keep alive |
+|---|---:|---:|---:|
+| HTTP/1.1 | keep open | close | keep open |
+| HTTP/1.0 | close | close | keep open |
 
-### Representation types
+Media types are another kind of interpretation. This project deliberately supports only a small table:
 
-| Suffix | Media type |
+| Filename ending | Media type |
 |---|---|
 | `.html` | `text/html` |
 | `.txt` | `text/plain` |
 | `.json` | `application/json` |
-| other or absent | `application/octet-stream` |
+| anything else | `application/octet-stream` |
 
-### Inclusive byte ranges
+The fallback does not pretend to know more than the filename tells us. `application/octet-stream` simply means “these are arbitrary bytes.”
 
-For a valid interval `start..=end`:
+Finally, byte ranges allow a client to ask for part of a file. Their end position is inclusive. In the ten bytes `abcdefghij`, the range `2-5` is `cdef`, four bytes rather than three:
 
 ```text
-selected length = end - start + 1
-valid bounds    = 0 <= start <= end < complete length
+length = end - start + 1
 ```
 
-`Content-Range` describes both the selected interval and complete representation; `Content-Length` describes only the returned body.
+That extra `+ 1` is a small piece of arithmetic, but getting it wrong means the response headers and body disagree.
 
-## HTTP glossary
+## A little history
 
-- **Request target:** the path/query portion following the method in the request line.
-- **Field name:** the case-insensitive name before a header colon.
-- **Message framing:** the rules that determine where a message or body ends.
-- **Document root:** the directory boundary from which static content may be served.
-- **Media type:** a label describing how representation bytes should be interpreted.
-- **Persistent connection:** a connection eligible to carry another request/response exchange.
-- **Partial content:** a response containing only a selected byte interval.
+The earliest HTTP exchanges were intentionally tiny. As the web grew, HTTP/1.0 added richer metadata and HTTP/1.1 standardized persistent connections and stricter message framing. Media types came from MIME, a system first developed so Internet email could describe attachments that were not plain text.
 
-## Historical field note
+HTTP remains unusually readable for a network protocol. That readability is useful, but it can also make loose parsing feel safe. Many real security bugs have begun when two programs disagreed about a message boundary, a length, or the meaning of a path. TinyHTTP treats these details as the main subject rather than as cleanup around the edges.
 
-The earliest web protocol at CERN was intentionally tiny. HTTP/1.0 accumulated metadata fields and optional persistent connections; HTTP/1.1 made persistence the default and formalized stronger framing rules. MIME media types came from Internet mail and were reused to describe web representations. The protocol's readable text is friendly to humans, but ambiguous parsing between components has also produced an enduring class of security failures.
+## Words you will meet
 
-## Failure-analysis lab
+- **Request target:** the path-like part after the method in a request line.
+- **Header field:** a name and value carrying metadata about a message.
+- **Message framing:** the rules that say where headers and bodies begin and end.
+- **Document root:** the directory a static-file server has agreed to expose.
+- **Media type:** a label describing how the response bytes should be interpreted.
+- **Persistent connection:** a connection that may carry another request and response.
+- **Partial content:** a response containing only a selected interval of a larger file.
 
-Diagnose the broken contract in each observation:
+## What a strong solution looks like
 
-1. The parser accepts `GET / HTTP/1.1 EXTRA`. What ambiguity has entered the request-line grammar?
-2. A body line `Role: admin` appears in header output. Which message boundary was crossed?
-3. HTTP/1.0 without a `Connection` field reports `keep-alive: true`. Which version default was borrowed incorrectly?
-4. Serving `/../secret.txt` returns the secret. Which trust boundary failed before file access?
-5. Range `4 4` returns two bytes. Which inclusive-range equation is wrong?
+A strong solution keeps each boundary explicit. It rejects malformed input instead of guessing, validates a path before opening a file, formats status and header lines exactly, and calculates lengths from the bytes that will actually be written. Its parts are small enough that you can explain why each rule exists.
 
-## What good looks like
-
-Good solutions reject malformed requests, validate paths before opening them, keep response formatting exact, count bytes rather than displayed characters, and treat protocol defaults explicitly. A robust explanation distinguishes syntax, security boundaries, and response semantics instead of calling every failure “parsing.”
-
-## Optional extensions
-
-Natural next questions include `HEAD`, `416 Range Not Satisfiable`, conditional requests with ETags, open-ended ranges, duplicate-field rules, and a minimal TCP listener. Each adds protocol surface, so consult the relevant HTTP specification before treating intuition as a contract.
+Once the core project is complete, natural extensions include `HEAD`, `416 Range Not Satisfiable`, open-ended ranges, ETags, and a minimal TCP listener. They are useful next steps, but each introduces new protocol rules. The aim here is first to make the small foundation trustworthy.

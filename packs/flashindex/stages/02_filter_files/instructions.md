@@ -2,70 +2,80 @@
 
 ## Goal
 
-Narrow the file list so FlashIndex keeps likely source code and project notes, while leaving out images, generated data, and other files that would add noise to a text search.
+Teach `flashindex scan` to keep files that are likely to contain source code or project notes and leave unrelated assets out of the search corpus.
+
+Stage 01 answered “which files exist?” This stage answers the narrower question that a search engine actually needs: “which of those files should we read as text?”
 
 ## Background
 
-Stage 01 treated every regular file equally. That was useful for learning to walk a directory tree, but a search index needs a **corpus**: the chosen collection of documents it will search.
+Consider this project:
 
-For example, a PNG image is a perfectly valid file, but feeding its bytes to a text tokenizer would produce nonsense. We could inspect every file's contents, guess its format, and handle text encodings. That is valuable work, but it would make this early stage much larger. FlashIndex starts with a simpler rule: keep files whose extensions are on a small allow-list.
+```text
+project/
+├── README.md
+├── assets/
+│   └── logo.png
+├── cmake/
+│   └── toolchain.cmake
+├── data/
+│   └── records.bin
+└── src/
+    └── main.rs
+```
 
-The exact list below is a teaching choice. It represents a modest Rust/C/C++/Python project with Markdown notes and CMake configuration; it is not a claim that these are the only useful file types. `.glsl`, for example, is valid source code for graphics shaders, but it is too specialized to include without introducing that context. A real tool would normally make this list configurable.
+Stage 01 reports all five files. That is an accurate description of the directory, but it is not yet a useful search corpus.
 
-There is no special rule for `CMakeLists.txt`. Its extension is `.txt`, so the ordinary `.txt` rule already includes it. By contrast, a file such as `toolchain.cmake` demonstrates why `.cmake` appears separately.
+`main.rs`, `README.md`, and `toolchain.cmake` contain text a programmer may want to search. `logo.png` and `records.bin` contain other kinds of data. Attempting to treat arbitrary binary bytes as source text can produce decoding errors or meaningless tokens.
+
+FlashIndex therefore needs a selection rule.
+
+One possibility would be to open every file and guess its format from its contents. That can be useful, but it introduces encoding detection and file-signature rules before we have built the search engine itself. For this project, FlashIndex uses a smaller policy: it accepts a fixed list of filename extensions.
+
+The selected collection is called the **corpus**. A corpus is simply the body of documents a search system has agreed to search.
+
+The extension list is a teaching choice. It represents a modest project containing Rust, C, C++, Python, Markdown, plain text, and CMake files. It is not a list of every language worth searching. A production tool would usually let its user change the policy.
+
+There is no special case for `CMakeLists.txt`. Its extension is `.txt`, so the ordinary text-file rule already admits it. A file named `toolchain.cmake`, on the other hand, needs the separate `.cmake` rule.
 
 ## Requirements
 
-Keep the `flashindex scan <path>` command and all Stage 01 behavior: recursive scanning, ignored directories, root-relative `/` paths, errors, and sorted output.
+Keep the `flashindex scan <path>` command and all Stage 01 behavior: recursive traversal, ignored directories, root-relative `/` paths, errors, and sorted output.
 
-Only print regular files with one of these extensions:
+Only print regular files with one of these case-sensitive extensions:
 
 ```text
 .c  .cpp  .h  .hpp  .rs  .py  .md  .txt  .cmake
 ```
 
-Exclude every other extension. This includes `.bin`, `.dat`, `.csv`, and common image formats, even if a particular file happens to contain readable characters.
+Exclude every other extension. This includes `.bin`, `.dat`, `.csv`, and common image formats even when an individual file happens to contain readable characters.
 
 ## Example
 
-Given this small project:
-
-```text
-mixed/
-├── CMakeLists.txt
-├── assets/logo.png
-├── cmake/toolchain.cmake
-├── include/search.hpp
-└── src/main.rs
-```
-
-FlashIndex prints:
+For the project above:
 
 ```console
-$ flashindex scan mixed
-CMakeLists.txt
+$ flashindex scan project
+README.md
 cmake/toolchain.cmake
-include/search.hpp
 src/main.rs
 ```
 
-`logo.png` is a real file, but it is outside the corpus we chose.
+The PNG and binary-data files still exist. They are absent only because they do not belong to the corpus FlashIndex will tokenize.
 
 ## Edge cases
 
-- `CMakeLists.txt` is included through the normal `.txt` rule, not a filename exception.
-- `.cmake`, `.md`, and `.txt` files are included just like programming-language files.
-- A readable file with a disallowed extension is still excluded; this stage checks names, not contents.
-- A source file inside `.git`, `target`, `build`, or `node_modules` remains excluded because Stage 01 prunes that directory first.
-- Matching is case-sensitive: `NOTES.TXT` is outside this deliberately simple policy.
+- `CMakeLists.txt` is accepted through its ordinary `.txt` extension.
+- `.cmake`, `.md`, and `.txt` files are accepted alongside programming-language files.
+- A readable file with a disallowed extension remains excluded because this stage examines names, not contents.
+- A source file inside `.git`, `target`, `build`, or `node_modules` remains excluded because the scanner never enters that directory.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, including the `.cmake` example, and `scan` produces a stable corpus that every later stage can reuse.
+All `deltaforge test` cases pass and repeated scans of the same tree produce the same selected corpus.
 
 ## Non-goals
 
-- Detecting file types by reading their contents.
+- Detecting file types from their contents.
 - Supporting every programming language or configuration format.
 - User-configurable include and exclude patterns.
-- Tokenizing or interpreting the files we selected.
+- Reading or tokenizing the selected files.

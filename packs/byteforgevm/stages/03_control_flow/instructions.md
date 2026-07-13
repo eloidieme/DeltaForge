@@ -1,54 +1,53 @@
-# Stage 03 — Control flow
+# Stage 05 — Jump to another instruction
 
 ## Goal
 
-Let bytecode choose its next instruction with unconditional and zero-tested jumps, turning the straight-line evaluator into a genuine interpreter for branches and loops.
+Add `JMP <address>`, an instruction that chooses the next instruction directly.
 
 ## Background
 
-Control flow is the point where an instruction pointer becomes visible state. Physical CPUs branch by replacing their program counter; stack VMs do the same with instruction addresses. `JZ` also demonstrates a common stack-machine pattern: a condition is data until the branch consumes it. Small off-by-one errors here can skip targets or execute both paths.
+Until now, the instruction pointer followed a simple rhythm: after instruction 0 came 1, then 2, then 3. `HALT` could stop that rhythm, but nothing could continue somewhere else.
+
+`JMP` makes the instruction pointer visible as state. When the VM executes `JMP 4`, the next instruction is exactly address 4. It is not 5, and the VM must not first advance past the jump and then add the target. Physical processors and other interpreters face the same distinction between “fall through to the next instruction” and “replace the program counter.”
+
+Start with an unconditional jump so there is only one new question: where does execution continue?
 
 ## Requirements
 
-Extend `run` with `JMP <addr>` and `JZ <addr>`, where addresses are zero-based instruction indices from Stage 01. `JMP` sets the next instruction directly to its target. `JZ` pops one value: if it is zero, jump to the target; otherwise continue with the following instruction. The condition is consumed in both cases. All prior opcodes retain their behavior.
+Extend `run` with `JMP <address>`. Addresses are the zero-based instruction positions shown by `disasm`.
+
+When `JMP` executes, set the instruction pointer to its target. Do not also perform the ordinary one-instruction advance. Keep every earlier opcode unchanged.
 
 ## Example
 
 ```text
-PUSH 0
-JZ 4
+JMP 2
 PUSH 99
-PRINT
-PUSH 1
+PUSH 9
 PRINT
 HALT
 ```
 
-prints:
-
-```text
-1
-```
+prints `9`. Instruction 1 is never executed.
 
 ## Edge cases
 
-- An unconditional jump skips intervening instructions.
-- `JZ` takes the branch for exactly zero.
-- A non-zero `JZ` condition falls through and is still removed from the stack.
-- A jump target is executed directly rather than incremented past.
+- A jump skips every instruction between itself and its target.
+- The target instruction itself executes; the pointer is not advanced past it.
+- A jump may land directly on `HALT`, producing no later output.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and both branch paths produce the specified output without double-advancing the instruction pointer.
+All tests pass, and a jump has exactly one clearly defined next address.
 
 ### Reflection
 
-1. Describe “the next instruction” without assuming that it is `ip + 1`.
-2. Why must `JZ` have the same stack effect whether or not its branch is taken?
-3. Which observable symptom would distinguish a bad target from an accidental second increment?
+1. What is the instruction-pointer sequence in the example?
+2. Why is a shared unconditional `ip += 1` at the end of the loop risky now?
+3. How is `HALT` different from a jump beyond the program?
 
 ## Non-goals
 
-- Named labels or assembly-time target resolution.
-- Comparison opcodes, structured loops, or functions.
-- Defining invalid-target errors before Stage 04.
+- Conditional jumps or loops based on stack values.
+- Defining invalid-target diagnostics; Stage 08 does that.
+- Labels or symbolic addresses.

@@ -1,11 +1,11 @@
 # Hint 1
 
-Write down the two version defaults first: 1.1 is opt-out, while 1.0 is opt-in.
+Start with the four-row table in the instructions. If your condition cannot be checked against that table easily, it is probably doing too much at once.
 
 # Hint 2
 
-Parse the version and scan headers for one case-insensitive field, then apply the version's default only after the scan.
+Represent the `Connection` value as optional. “No header” is meaningful and should remain distinguishable from an explicit token.
 
 # Hint 3
 
-`eq_ignore_ascii_case` handles both `Connection` and its token; an `Option` can distinguish an absent field from an explicit value.
+Use `eq_ignore_ascii_case` for both the field name and its value. Apply the version default after the header scan, not before it.

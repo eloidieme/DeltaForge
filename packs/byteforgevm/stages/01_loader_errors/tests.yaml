@@ -1,0 +1,14 @@
+tests:
+  - name: missing file fails
+    fixture: programs
+    command: ["disasm", "{fixture_path}/missing.bvm"]
+    expect:
+      exit_code: 1
+
+  - name: malformed integer fails
+    fixture: programs
+    command: ["disasm", "{fixture_path}/bad_operand.bvm"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid argument"

@@ -1,22 +1,54 @@
-# Stage 02 — Append-only log
+# Stage 02 — Write the first log record
 
 ## Goal
 
-Make a write durable by appending a `SET` record to a log file. Repeated commands must extend the history rather than replacing it, giving later stages enough information to reconstruct the store after a restart.
+Make one key/value pair survive after MiniKV exits by writing a `SET` record to a log file.
+
+This stage handles a new or empty log. Preserving records already in the file will be the next step.
 
 ## Background
 
-Append-only storage turns a mutation into a sequential write. Database systems call closely related structures write-ahead logs; filesystems and event-sourced applications use the same principle because appending is simple, inspectable, and less vulnerable to half-rewritten state than editing records in place. The trade-off is deliberate duplication: old values remain until compaction reclaims them.
+Stage 01 loses its pair as soon as the process ends. To recover information later, the program must leave evidence outside its own memory.
+
+For the pair:
+
+```text
+language → Rust
+```
+
+MiniKV will write:
+
+```text
+SET language Rust
+```
+
+This line is a **record**. `SET` identifies the operation, `language` is the key, and the rest of the line is the value.
+
+The file is called a **log** because it records operations in the order they occurred. Logs are used by databases, filesystems, and event-processing systems because a sequence of explicit events can later be replayed.
+
+For now there is only one event. The important change is that a second process can open the file after the writer has gone away and still see what happened.
+
+The requested path may include parent directories that do not exist yet. If a user asks for `data/store.log`, MiniKV should prepare `data` rather than requiring it to be created by hand.
+
+Printing a short success marker gives the caller evidence that the command completed, while the real durable representation remains in the file.
 
 ## Requirements
 
-Expose:
+Add:
 
-```bash
+```console
 minikv write-log <path> <key> <value>
 ```
 
-Append exactly one UTF-8 line, `SET <key> <value>`, followed by `\n`, to `<path>`. Preserve all existing bytes in the log. Create the file and any missing parent directories. A successful command exits 0 and prints a line containing `wrote`; invalid arity exits non-zero.
+For a missing or empty destination, write exactly one UTF-8 record:
+
+```text
+SET <key> <value>\n
+```
+
+Create the file and any missing parent directories. Preserve spaces inside the value argument. On success, exit 0 and print a line containing `wrote`. Invalid arity must exit non-zero.
+
+The next stage extends the same command to non-empty logs.
 
 ## Example
 
@@ -25,7 +57,7 @@ $ minikv write-log data/store.log language Rust
 wrote language
 ```
 
-The log then ends with:
+`data/store.log` now contains:
 
 ```text
 SET language Rust
@@ -35,28 +67,16 @@ SET language Rust
 
 - A missing log file is created.
 - Missing parent directories are created.
-- Existing records remain before the newly appended record.
-- Spaces inside a value argument are preserved after the key separator.
+- A value containing spaces remains intact after the key separator.
+- Success output contains `wrote` only after the record has been written.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, repeated writes form a readable history, and `deltaforge bench` can measure append cost against the supplied log fixture.
-
-### Benchmark interpretation worksheet
-
-After `deltaforge bench`, note the median, p95, fixture size, and output destination, then answer:
-
-1. Is the fixture large enough for sequential I/O to dominate process startup and file-open cost?
-2. What would you expect to happen as the existing log grows if the command truly appends?
-3. Would a faster result prove stronger durability? Why are latency and durability separate claims?
-4. Which environmental factors—filesystem cache, storage device, background I/O—make two machines difficult to compare?
-
-### Reflection
-
-Explain why retaining old records is simultaneously the feature that enables recovery and the cost that later requires compaction.
+All `deltaforge test` cases pass and a later process can read the complete record from the requested path.
 
 ## Non-goals
 
-- Reading values back or deduplicating older records.
-- Crash-recovery guarantees such as `fsync`.
-- File locking, transactions, or concurrent writers.
+- Preserving existing records in a non-empty log; that is the next stage.
+- Reading values back.
+- Flush or `fsync` guarantees after power loss.
+- Locking and concurrent writers.

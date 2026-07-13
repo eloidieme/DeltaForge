@@ -1,0 +1,32 @@
+tests:
+  - name: rejects reversed range
+    fixture: range_site
+    command: ["range", "{fixture_path}/public", "/letters.txt", "7", "2"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid range"
+
+  - name: rejects out of bounds range
+    fixture: range_site
+    command: ["range", "{fixture_path}/public", "/letters.txt", "0", "99"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid range"
+
+  - name: rejects non numeric offsets
+    fixture: range_site
+    command: ["range", "{fixture_path}/public", "/letters.txt", "first", "4"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "invalid range"
+
+  - name: rejects range path traversal
+    fixture: range_site
+    command: ["range", "{fixture_path}/public", "/../secret.txt", "0", "1"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "unsafe path"

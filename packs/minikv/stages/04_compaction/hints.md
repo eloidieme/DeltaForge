@@ -1,11 +1,11 @@
 # Hint 1
 
-Compaction preserves logical state, not history: first determine what a full replay means at the end of the input.
+State the equivalence first: replaying the input and replaying the output must produce the same key/value map.
 
 # Hint 2
 
-Separate the replay phase from serialization, and choose a traversal order that cannot vary between runs.
+Recover the complete latest-value map before deciding which records to write. Compaction operates on logical state, not adjacent duplicate lines.
 
 # Hint 3
 
-A `BTreeMap` naturally retains only the latest inserted value per key and iterates keys in ascending order; `create_dir_all` handles a nested output path.
+An ordered map such as `BTreeMap<String, String>` can represent latest values and provide ascending key iteration for the compacted records.

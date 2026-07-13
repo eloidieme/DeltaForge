@@ -4,28 +4,22 @@ tests:
     command: ["parse"]
     expect:
       exit_code: 0
-      stdout_contains:
-        - "method: GET"
-        - "path: /index.html"
-        - "version: HTTP/1.1"
+      stdout_exact: |
+        method: GET
+        path: /index.html
+        version: HTTP/1.1
 
   - name: parses post request line
     stdin: "POST /submit HTTP/1.0\r\n\r\n"
     command: ["parse"]
     expect:
       exit_code: 0
-      stdout_contains:
-        - "method: POST"
-        - "path: /submit"
-        - "version: HTTP/1.0"
+      stdout_exact: |
+        method: POST
+        path: /submit
+        version: HTTP/1.0
 
-  - name: rejects malformed request line
-    stdin: "BROKEN\r\n\r\n"
-    command: ["parse"]
-    expect:
-      exit_code: 1
-
-  - name: parses the benchmarkable request file form
+  - name: parses request file form
     fixture: request_files
     command: ["parse", "{fixture_path}/request.http"]
     expect:
@@ -34,19 +28,3 @@ tests:
         method: GET
         path: /from-file
         version: HTTP/1.1
-
-  - name: rejects empty input
-    stdin: ""
-    command: ["parse"]
-    expect:
-      exit_code: 1
-      stderr_contains:
-        - "missing request line"
-
-  - name: rejects extra request line fields
-    stdin: "GET / HTTP/1.1 EXTRA\r\n\r\n"
-    command: ["parse"]
-    expect:
-      exit_code: 1
-      stderr_contains:
-        - "malformed request line"

@@ -1,0 +1,14 @@
+tests:
+  - name: zero jump is taken
+    fixture: control
+    command: ["run", "{fixture_path}/jz_taken.bvm"]
+    expect:
+      exit_code: 0
+      stdout_exact: "1\n"
+
+  - name: zero jump not taken
+    fixture: control
+    command: ["run", "{fixture_path}/jz_not_taken.bvm"]
+    expect:
+      exit_code: 0
+      stdout_exact: "2\n"

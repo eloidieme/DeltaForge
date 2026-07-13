@@ -1,51 +1,81 @@
-# Stage 02 — Static responses
+# Stage 03 — Form a static-file response
 
 ## Goal
 
-Translate a safe request path into either a complete `200 OK` response containing a file or a complete `404 Not Found` response, while keeping every lookup confined beneath a configured document root.
+Turn an existing public text file into a complete `200 OK` response and a missing file into a complete empty `404 Not Found` response.
+
+This stage concentrates on response framing. The next stage establishes the security boundary around client-controlled paths.
 
 ## Background
 
-The earliest web servers mainly mapped URL paths to files. That simple mapping introduced a lasting security boundary: a client-controlled path must not escape the directory an operator chose to publish. Parent segments such as `..` powered classic directory-traversal bugs. Status lines and `Content-Length` also matter because HTTP peers use framing, not terminal display, to know where a response ends.
+Suppose a public directory contains:
+
+```text
+public/
+└── index.html
+```
+
+If the client asks for `/index.html`, TinyHTTP needs to send more than the file text. The recipient must know whether the request succeeded and how many body bytes belong to this response.
+
+A minimal successful response looks like:
+
+```http
+HTTP/1.1 200 OK
+Content-Length: 15
+
+hello tinyhttp
+```
+
+The first line is the status line. `200 OK` says the representation was found.
+
+`Content-Length` describes the body in bytes. HTTP messages may travel over a connection that carries more than one response, so a recipient needs framing rather than relying on the connection closing at the right moment.
+
+The blank line is part of that framing. It separates response metadata from body bytes.
+
+A missing path is not a process failure in this project. The server understood the request and has an HTTP answer: `404 Not Found`. Its body is empty, so its content length is zero.
+
+TinyHTTP reads text files in this stage. Later MIME and range stages will add other representation details.
 
 ## Requirements
 
-Expose:
+Add:
 
-```bash
+```console
 tinyhttp serve-file <root> <request-path>
 ```
 
-For a regular file beneath `<root>`, print an HTTP/1.1 response with status `200 OK`, a `Content-Length` equal to the UTF-8 body's byte length, a blank line, and the exact file body. For a missing path, exit 0 with `404 Not Found`, `Content-Length: 0`, and an empty body. Reject any request path containing a parent, absolute-root, or platform-prefix component; exit non-zero and never reveal the outside file's contents.
+For a regular UTF-8 file beneath `<root>`, print an HTTP/1.1 response containing `200 OK`, `Content-Length` equal to the body byte length, a blank line, and the exact file body.
+
+For a missing path, exit 0 and print `404 Not Found`, `Content-Length: 0`, a blank line, and an empty body.
+
+This stage's fixtures use safe request paths. Path traversal rejection is added next.
 
 ## Example
 
-```text
+```console
+$ tinyhttp serve-file public /index.html
 HTTP/1.1 200 OK
-Content-Length: 5
+Content-Length: 15
 
-hello
+hello tinyhttp
 ```
+
+The visible blank line separates the header section from the file body.
 
 ## Edge cases
 
-- An existing file returns `200` and its body.
-- A missing file returns a well-formed empty `404` rather than a process error.
-- A path containing `..` is rejected even if the target exists outside the root.
-- `Content-Length` counts bytes, not characters or lines.
+- An existing regular file returns status 200 and its exact body.
+- `Content-Length` counts UTF-8 body bytes, not displayed characters or lines.
+- A missing file returns status 404 with an empty body.
+- Both responses contain the blank line required before the body.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, response framing matches the body bytes, and no tested traversal exposes data outside the root.
-
-### Reflection
-
-1. Separate the three decisions in this stage: path safety, resource existence, and response formatting.
-2. Why is a missing file an HTTP result while an unsafe path is a command failure in this contract?
-3. Which assertion would catch a character-count implementation of `Content-Length`?
+All `deltaforge test` cases pass and each response's framing agrees with the body bytes that follow it.
 
 ## Non-goals
 
-- Directory listings, redirects, index-file discovery, or URL decoding.
-- MIME classification, introduced in Stage 05.
-- Sockets, concurrency, caching, or streaming large files.
+- Defending against parent-directory traversal; the next stage adds that boundary.
+- MIME types.
+- Binary response bodies.
+- Network sockets, concurrency, or streaming.

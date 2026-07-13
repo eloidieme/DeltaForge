@@ -1,0 +1,25 @@
+tests:
+  - name: unknown log operation fails clearly
+    fixture: malformed_store
+    command: ["get", "{fixture_path}/store.log", "alpha"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+      stderr_contains:
+        - "malformed"
+
+  - name: set without a value fails clearly
+    fixture: missing_value
+    command: ["get", "{fixture_path}/store.log", "alpha"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+      stderr_contains:
+        - "malformed"
+
+  - name: blank lines are ignored
+    fixture: blank_lines
+    command: ["get", "{fixture_path}/store.log", "alpha"]
+    expect:
+      exit_code: 0
+      stdout_exact: "one\n"

@@ -1,11 +1,11 @@
 # Hint 1
 
-Replay means applying records in chronological order so that newer facts naturally replace older facts.
+Read the log as a sequence of state changes. When the requested key appears again, its later value replaces the earlier candidate.
 
 # Hint 2
 
-Parse each non-empty line into an operation, key, and value remainder, updating an in-memory mapping as you go.
+Split a `SET` record only far enough to isolate the operation and key. The remainder belongs to the value and may contain spaces.
 
 # Hint 3
 
-An ordered or hash map both work for lookup; `strip_prefix("SET ")` plus `split_once(' ')` distinguishes the key from a value that may contain spaces.
+Walking `source.lines()` from beginning to end with an `Option<String>` for the requested value is enough for this stage. Print only the final option after replay completes.

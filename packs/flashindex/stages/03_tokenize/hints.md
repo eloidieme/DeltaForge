@@ -1,11 +1,11 @@
 # Hint 1
 
-Tokenization is a state transition between “outside a token” and “inside a token”; positions are easiest to capture at the transition in.
+On paper, mark each transition from “outside a token” to “inside a token.” The byte position of that transition is the column you eventually print.
 
 # Hint 2
 
-Scan each line in byte-index order, flush a token on a separator, and treat leading digits as separators until a legal starting character appears.
+Use two character questions: can this byte begin a token, and can it continue one? A digit answers no to the first and yes to the second.
 
 # Hint 3
 
-`char_indices` supplies byte columns; `is_ascii_alphabetic`, `is_ascii_digit`, and an optional start index are enough for this grammar.
+Processing one source line at a time makes one-based line numbers natural. Byte indices from `str::char_indices` can become one-based columns, while a remembered start index lets you slice the completed ASCII token.

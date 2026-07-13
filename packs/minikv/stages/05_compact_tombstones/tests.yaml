@@ -1,0 +1,30 @@
+tests:
+  - name: compact omits deleted keys
+    fixture: deleted_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/compact.log"
+          contains: "SET beta two"
+      file_not_contains:
+        - path: "{temp_dir}/compact.log"
+          contains: "alpha"
+
+  - name: repeated tombstones remain absent after compaction
+    fixture: repeated_delete
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    expect:
+      exit_code: 0
+      file_not_contains:
+        - path: "{temp_dir}/compact.log"
+          contains: "alpha"
+
+  - name: later set is retained by compaction
+    fixture: restored_store
+    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/compact.log"
+          contains: "SET alpha restored"

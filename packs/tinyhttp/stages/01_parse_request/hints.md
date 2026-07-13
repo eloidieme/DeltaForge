@@ -1,11 +1,11 @@
 # Hint 1
 
-The request line is the first protocol record; solve its boundary and three fields before thinking about the rest of the message.
+Ignore headers for now. The only input you need is the first line, and a valid example gives you three pieces in order.
 
 # Hint 2
 
-Make stdin and file input produce the same string, then pass that string through one request-line parser and one formatter.
+Make file input and standard input produce the same string. From that point onward, both forms can use one parser and one formatter.
 
 # Hint 3
 
-`Read::read_to_string`, `fs::read_to_string`, `lines().next()`, and `split_whitespace` are sufficient; accept only a slice matching exactly three parts.
+Read the first line, split it on whitespace, and bind the three resulting fields to method, path, and version.

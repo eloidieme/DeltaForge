@@ -13,17 +13,16 @@ tests:
       exit_code: 0
       stdout_exact: "two\n"
 
+  - name: preserves spaces in recovered value
+    fixture: recovered_store
+    command: ["get", "{fixture_path}/store.log", "title"]
+    expect:
+      exit_code: 0
+      stdout_exact: "hello world\n"
+
   - name: missing key is empty success
     fixture: recovered_store
     command: ["get", "{fixture_path}/store.log", "missing"]
     expect:
       exit_code: 0
       stdout_exact: ""
-
-  - name: malformed log fails clearly
-    fixture: malformed_store
-    command: ["get", "{fixture_path}/store.log", "alpha"]
-    expect:
-      exit_code: 1
-      stderr_contains:
-        - "malformed"

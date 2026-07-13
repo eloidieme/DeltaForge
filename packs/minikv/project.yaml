@@ -1,7 +1,7 @@
 schema_version: 1
 id: minikv
 name: MiniKV
-version: 0.3.1
+version: 1.0.0
 description: Persistent command-line key-value store
 topics:
   - storage
@@ -25,17 +25,29 @@ stages:
     title: In-memory commands
     path: stages/01_memory_commands
   - id: 02_append_log
-    title: Append-only log
+    title: Write the first log record
     path: stages/02_append_log
+  - id: 02_preserve_history
+    title: Preserve log history
+    path: stages/02_preserve_history
   - id: 03_recovery
     title: Recover values
     path: stages/03_recovery
+  - id: 03_reject_malformed_log
+    title: Reject malformed history
+    path: stages/03_reject_malformed_log
   - id: 04_compaction
-    title: Compact stale entries
+    title: Compact stale history
     path: stages/04_compaction
+  - id: 04_safe_compaction
+    title: Replace compacted output safely
+    path: stages/04_safe_compaction
   - id: 05_delete_tombstones
-    title: Delete tombstones
+    title: Record deletion tombstones
     path: stages/05_delete_tombstones
+  - id: 05_compact_tombstones
+    title: Compact deleted keys
+    path: stages/05_compact_tombstones
   - id: 06_log_statistics
     title: Log statistics
     path: stages/06_log_statistics

@@ -41,3 +41,10 @@ tests:
       exit_code: 0
       regex_match:
         - '^\{"files":0,"runtime_ms":[0-9]+\}\n$'
+
+  - name: unreadable root fails
+    fixture: bench_project
+    command: ["bench", "{fixture_path}/missing"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""

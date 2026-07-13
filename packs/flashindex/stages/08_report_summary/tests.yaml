@@ -44,3 +44,13 @@ tests:
         files: 0
         tokens: 0
         unique_tokens: 0
+
+  - name: unique token counting is case sensitive
+    fixture: case_summary
+    command: ["summary", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        files: 1
+        tokens: 2
+        unique_tokens: 2

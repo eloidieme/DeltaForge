@@ -1,11 +1,11 @@
 # Hint 1
 
-The instruction pointer is the answer to “what executes next”; a jump replaces that answer instead of merely modifying the stack.
+Stop thinking of `ip + 1` as an automatic end-of-loop action. Each opcode should decide its own next instruction.
 
 # Hint 2
 
-Let each opcode choose either a target or the following address, so the loop does not apply a second unconditional increment.
+For ordinary instructions, set or advance the pointer to the following address. For `JMP`, replace it with the target and do nothing else.
 
 # Hint 3
 
-Store the instruction pointer as a `usize`; for `JZ`, pop once, assign the target when the value is zero, otherwise add one.
+Use the operand as the zero-based index into the parsed program. Target validation can be centralized when Stage 08 introduces its error contract.

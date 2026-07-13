@@ -43,3 +43,11 @@ tests:
         entries: 0
         live_keys: 0
         tombstones: 0
+
+  - name: malformed history is not counted silently
+    fixture: malformed_store
+    command: ["stats", "{fixture_path}/store.log"]
+    expect:
+      exit_code: 1
+      stderr_contains:
+        - "malformed"

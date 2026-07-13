@@ -23,6 +23,8 @@ tests:
     command: ["trace", "{fixture_path}/bad.bvm"]
     expect:
       exit_code: 1
+      stdout_contains:
+        - "ip=0 op=NOPE stack=[]"
       stderr_contains:
         - "unknown opcode"
 

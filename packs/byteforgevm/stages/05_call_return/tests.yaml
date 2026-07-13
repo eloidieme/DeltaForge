@@ -6,32 +6,9 @@ tests:
       exit_code: 0
       stdout_exact: "12\n"
 
-  - name: supports nested calls
+  - name: call preserves guest values
     fixture: calls
-    command: ["run", "{fixture_path}/nested.bvm"]
+    command: ["run", "{fixture_path}/preserve_value.bvm"]
     expect:
       exit_code: 0
-      stdout_exact: "21\n"
-
-  - name: empty return stack fails clearly
-    fixture: calls
-    command: ["run", "{fixture_path}/bad_ret.bvm"]
-    expect:
-      exit_code: 1
-      stderr_contains:
-        - "call stack underflow"
-
-  - name: invalid call target fails clearly
-    fixture: calls
-    command: ["run", "{fixture_path}/bad_call.bvm"]
-    expect:
-      exit_code: 1
-      stderr_contains:
-        - "invalid jump"
-
-  - name: halt inside a call stops the program
-    fixture: calls
-    command: ["run", "{fixture_path}/halt_in_call.bvm"]
-    expect:
-      exit_code: 0
-      stdout_exact: "7\n"
+      stdout_exact: "12\n"

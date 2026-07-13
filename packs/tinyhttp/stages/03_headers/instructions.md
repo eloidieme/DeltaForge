@@ -1,42 +1,74 @@
-# Stage 03 — Header fields
+# Stage 05 — Read HTTP headers
 
 ## Goal
 
-Parse the header section of one HTTP request and print normalized field names with trimmed values, stopping exactly at the blank line that terminates the section.
+Read valid HTTP header fields, normalize their names, trim surrounding value whitespace, and print them in their original order.
+
+The request line describes the main action. Headers carry the additional facts later stages need to make decisions.
 
 ## Background
 
-HTTP header names are case-insensitive, a legacy of the protocol's email-like syntax, while values usually retain their case. Normalizing names gives later logic one spelling to compare. The empty line is not decoration: it is the delimiter between metadata and an optional body. Confusing body text for headers is both a correctness bug and a recurring source of request-smuggling vulnerabilities.
+Consider:
+
+```http
+GET / HTTP/1.1
+Host: example.test
+User-Agent: DeltaForge
+Accept:   text/plain
+```
+
+Each header line has a field name, a colon, and a value.
+
+Header names are case-insensitive in HTTP. `Host`, `host`, and `HOST` name the same field. TinyHTTP normalizes names to ASCII lowercase so later code has one spelling to compare.
+
+Values are different. Their case may be meaningful to the application, so TinyHTTP preserves it. It removes only whitespace surrounding the value:
+
+```text
+Accept:   text/plain   → accept: text/plain
+X-Mode: KeepThisCase   → x-mode: KeepThisCase
+```
+
+The output keeps input order. At this point the command is describing the request, not collecting repeated names into a map or applying field-specific semantics.
+
+This stage assumes valid header lines and focuses on the transformation. The next stage defines where the header section ends and what happens to malformed lines.
 
 ## Requirements
 
-Expose `tinyhttp headers`. Read one request from stdin, skip its request line, then process each non-empty header line up to the first blank line. Each header must contain a colon. Print the field name in ASCII lowercase, followed by `: ` and the value with surrounding whitespace removed. Preserve input order and value case. Malformed header lines exit non-zero.
+Add `tinyhttp headers` and read one request from stdin.
+
+Skip the first request line. For each valid header line, split at its first colon, print the field name in ASCII lowercase, then `: `, then the value with surrounding whitespace removed. Preserve value case and header input order.
 
 ## Example
 
-```console
-$ printf 'GET / HTTP/1.1\r\nHost: Example.test\r\n\r\n' | tinyhttp headers
-host: Example.test
+Input:
+
+```http
+GET / HTTP/1.1
+Host: example.test
+X-Mode: KeepThisCase
+```
+
+Output:
+
+```text
+host: example.test
+x-mode: KeepThisCase
 ```
 
 ## Edge cases
 
-- Header names with mixed case are normalized to lowercase.
-- Optional whitespace around a value is trimmed.
-- The request line is never printed as a header.
-- Parsing stops at the first blank line; body text containing a colon is ignored.
-- A non-empty header line without `:` is invalid.
+- Header-name comparison is represented by ASCII lowercase output.
+- Surrounding value whitespace is removed.
+- Value case is preserved.
+- Several valid headers retain their input order.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and the printed header stream is stable enough for Stage 04 to consume conceptually.
-
-### Reflection
-
-Explain why lowercasing the entire header line would be wrong even though field names are case-insensitive. Which blank line determines when normalization must stop?
+All `deltaforge test` cases pass and each printed line represents exactly one valid input header.
 
 ## Non-goals
 
-- Combining duplicate fields or parsing comma-separated field grammars.
-- Obsolete folded headers, trailers, or body framing.
-- Enforcing a registry of known header names.
+- Defining the blank-line/body boundary; that is the next stage.
+- Combining duplicate header fields.
+- Interpreting specific values such as `Connection`.
+- Full RFC field-value grammar or obsolete line folding.

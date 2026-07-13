@@ -16,20 +16,17 @@ tests:
       file_exists:
         - "{temp_dir}/data/store.log"
 
+  - name: preserves spaces in first value
+    command: ["write-log", "{temp_dir}/store.log", "title", "hello world"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/store.log"
+          contains: "SET title hello world"
+
   - name: prints written marker
     command: ["write-log", "{temp_dir}/store.log", "gamma", "three"]
     expect:
       exit_code: 0
       stdout_contains:
         - "wrote"
-
-  - name: appends after existing records and preserves spaces
-    fixture: existing_store
-    command: ["write-log", "{fixture_path}/store.log", "title", "hello world"]
-    expect:
-      exit_code: 0
-      file_contains:
-        - path: "{temp_dir}/fixture/store.log"
-          contains: |
-            SET alpha one
-            SET title hello world

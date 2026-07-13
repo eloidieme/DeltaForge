@@ -1,43 +1,23 @@
 tests:
-  - name: prints host header
+  - name: prints normalized headers in input order
     stdin: "GET / HTTP/1.1\r\nHost: example.test\r\nUser-Agent: DeltaForge\r\n\r\n"
     command: ["headers"]
     expect:
       exit_code: 0
-      stdout_contains:
-        - "host: example.test"
-        - "user-agent: DeltaForge"
+      stdout_exact: |
+        host: example.test
+        user-agent: DeltaForge
 
   - name: trims header whitespace
     stdin: "GET / HTTP/1.1\r\nAccept:   text/plain  \r\n\r\n"
     command: ["headers"]
     expect:
       exit_code: 0
-      stdout_contains:
-        - "accept: text/plain"
+      stdout_exact: "accept: text/plain\n"
 
-  - name: ignores request line
-    stdin: "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n"
+  - name: preserves header value case
+    stdin: "GET / HTTP/1.1\r\nX-Mode: KeepThisCase\r\n\r\n"
     command: ["headers"]
     expect:
       exit_code: 0
-      stdout_not_contains:
-        - "GET /"
-
-  - name: stops at blank line before body
-    stdin: "POST / HTTP/1.1\r\nHost: example.test\r\n\r\nBody-Key: not-a-header\r\n"
-    command: ["headers"]
-    expect:
-      exit_code: 0
-      stdout_contains:
-        - "host: example.test"
-      stdout_not_contains:
-        - "body-key"
-
-  - name: rejects malformed header line
-    stdin: "GET / HTTP/1.1\r\nBroken Header\r\n\r\n"
-    command: ["headers"]
-    expect:
-      exit_code: 1
-      stderr_contains:
-        - "malformed header"
+      stdout_exact: "x-mode: KeepThisCase\n"

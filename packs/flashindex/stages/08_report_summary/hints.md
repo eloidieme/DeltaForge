@@ -1,11 +1,11 @@
 # Hint 1
 
-The three figures are projections of data you already produce; avoid creating a second definition of “source file” or “token.”
+Derive all three counters from the same corpus and occurrence definitions used by earlier commands; a summary should not invent a second scanner or tokenizer.
 
 # Hint 2
 
-Count selected paths, count occurrence records, and insert each occurrence's token text into a set for the vocabulary size.
+The token counter grows for every occurrence. The unique-token counter grows only when a spelling has not been seen before.
 
 # Hint 3
 
-A `BTreeSet<String>` or `HashSet<String>` gives `unique_tokens`; print labels in the specified order with one `println!` per field.
+An ordered or hash set of token strings can compute vocabulary size. Keep counting separate from formatting so the final three lines remain exact.

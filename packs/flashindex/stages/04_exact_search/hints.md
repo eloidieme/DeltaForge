@@ -1,11 +1,11 @@
 # Hint 1
 
-Exact search is a filter over token occurrences, not another pass with different boundary rules.
+Search should consume the same token occurrences as `tokenize`. A second character-scanning rule is an opportunity for the two commands to disagree.
 
 # Hint 2
 
-Reuse one tokenizer result and retain occurrences whose token equals the query before invoking the existing formatter.
+Filter occurrences by complete token equality only after their boundaries and positions have been established.
 
 # Hint 3
 
-A direct `occurrence.token == query` comparison preserves case sensitivity and prevents substring matches such as `main_index`.
+If your tokenizer already returns a structured occurrence containing path, line, column, and token, `search` can retain matching records and reuse the same formatter.

@@ -1,0 +1,27 @@
+tests:
+  - name: rejects one field request line
+    stdin: "BROKEN\r\n\r\n"
+    command: ["parse"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+      stderr_contains:
+        - "malformed request line"
+
+  - name: rejects empty input
+    stdin: ""
+    command: ["parse"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+      stderr_contains:
+        - "missing request line"
+
+  - name: rejects extra request line fields
+    stdin: "GET / HTTP/1.1 EXTRA\r\n\r\n"
+    command: ["parse"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+      stderr_contains:
+        - "malformed request line"

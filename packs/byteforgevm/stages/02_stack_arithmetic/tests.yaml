@@ -6,29 +6,6 @@ tests:
       exit_code: 0
       stdout_exact: "7\n"
 
-  - name: runs multiplication
-    fixture: arithmetic
-    command: ["run", "{fixture_path}/mul.bvm"]
-    expect:
-      exit_code: 0
-      stdout_exact: "42\n"
-
-  - name: handles subtraction order
-    fixture: arithmetic
-    command: ["run", "{fixture_path}/sub.bvm"]
-    expect:
-      exit_code: 0
-      stdout_exact: "6\n"
-
-  - name: supports negative integers and multiple prints
-    fixture: arithmetic
-    command: ["run", "{fixture_path}/negative_multi.bvm"]
-    expect:
-      exit_code: 0
-      stdout_exact: |
-        -3
-        8
-
   - name: halt skips later instructions
     fixture: arithmetic
     command: ["run", "{fixture_path}/halt_early.bvm"]

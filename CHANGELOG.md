@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Gentler curricula and full content rewrite (all bundled packs 1.0.0)
+
+- Split the four bundled projects from 28 broad stages into 45 smaller stages: FlashIndex now has 14, MiniKV 10, TinyHTTP 10, and ByteForgeVM 11. Original stage IDs remain available, with follow-up IDs inserted beside the concepts they separate.
+- Rewrote every overview, stage guide, and hint set in the new editorial baseline: begin with a concrete situation, make the problem clear before naming the solution, introduce terminology only when it becomes useful, explain arbitrary teaching policies honestly, and keep exactly three progressive hints per stage.
+- Divided tests, benchmarks, and design prompts along the new learning boundaries. Added black-box coverage for stale artifact removal, exact persisted queries, unreadable benchmark roots, case-sensitive summaries and ranking, malformed compaction input, UTF-8 byte lengths, VM loader/operand/call boundaries, and pre-error tracing.
+- Added `file_not_contains` to the test format and pack-authoring MCP schema so stages can prove that stale records and deleted keys are absent from generated artifacts.
+- Added `docs/content-style.md` as the pack-writing standard and `docs/curriculum-map.md` as the canonical new sequence and migration guide.
+- Existing learner projects must run `deltaforge sync-pack`. Because tests and fixtures moved or changed, behavioral proofs for affected completed stages intentionally require revalidation. Original IDs remain loadable, but a fresh project is recommended to experience every inserted stage in order.
+
 ### Browser learning surface and approachable FlashIndex opening (FlashIndex 0.4.0)
 
 - Changed interactive `overview` and `instructions` from a long terminal document to a self-contained local learning page. It opens in the system browser with stage navigation, progress state, task/example/rationale/reference tabs, neighboring-stage previews, copyable examples, responsive layout, and accessible keyboard-friendly controls. No pack content or external asset leaves the machine.

@@ -1,16 +1,28 @@
-# Stage 06 — Trace mode
+# Stage 11 — Watch the machine execute
 
 ## Goal
 
-Expose a deterministic execution trace that shows the instruction pointer, opcode, and value stack immediately before every executed instruction.
+Add `byteforgevm trace <program-file>`, which shows the instruction pointer, opcode, and value stack immediately before every executed instruction.
 
 ## Background
 
-Tracing is one of computing's oldest debugging techniques: record the changing machine state, then reconstruct why control reached a surprising point. Unlike an interactive debugger, a trace is reproducible and easy to attach to a bug report. Its timing matters—a pre-execution snapshot explains the inputs to an instruction, while a post-execution snapshot answers a different question.
+Final output tells you what a program produced, but often not how it got there. A trace turns execution into a sequence you can inspect. Long before interactive graphical debuggers, programmers used printed traces and machine logs to reconstruct a fault one state change at a time.
+
+The word “before” is important. On the line for `ADD`, the trace should show the two operands that `ADD` is about to consume. A post-instruction snapshot would show the result instead. Both views can be useful, but mixing their timing makes a trace difficult to read.
+
+Trace mode should observe the interpreter you already built. If it implements a second execution loop, the debugger and the normal runner can quietly disagree about the language.
 
 ## Requirements
 
-Expose `byteforgevm trace <program-file>`. Execute with exactly the same semantics and errors as `run`, but before each instruction print `ip=<address> op=<OPCODE> stack=[<values>]`. Use decimal addresses, opcode spelling from the program, comma-and-space separation from bottom to top, and `[]` for empty. Jumps and calls appear only when actually executed. `PRINT` program output follows its trace line on stdout; runtime diagnostics remain on stderr.
+Execute with exactly the same behavior and errors as `run`. Immediately before dispatching each instruction, print:
+
+```text
+ip=<address> op=<OPCODE> stack=[<values>]
+```
+
+Use decimal addresses. Show stack values from bottom to top, separated by a comma and one space; show an empty stack as `[]`. Preserve opcode spelling from the program.
+
+Only executed instructions receive lines. A taken jump or call makes the next trace line show its target. `HALT` receives a line, but instructions after it do not. If `PRINT` executes, its ordinary output follows that instruction's trace line on standard output. Errors remain on standard error.
 
 ## Example
 
@@ -25,30 +37,31 @@ ip=4 op=HALT stack=[]
 
 ## Edge cases
 
-- The snapshot is emitted before the instruction mutates the stack.
-- Taken jumps and calls make the next trace line show their target.
-- `HALT` receives a trace line and no later instruction does.
-- An invalid opcode is traced, then still fails with the Stage 04 diagnostic.
+- Arithmetic snapshots show operands before they are consumed.
+- A taken jump's next line is its target.
+- `HALT` is traced and later instructions are not.
+- An invalid opcode is traced, then fails with the existing runtime error.
+- Calls and returns appear only when their instructions actually execute.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, trace ordering is stable, and `deltaforge bench` can measure the trace workload.
+All tests pass, trace order is deterministic, and `deltaforge bench` can measure the supplied trace workload.
 
 ### Benchmark interpretation worksheet
 
-After running `deltaforge bench`, record the median and p95, then answer:
+After running `deltaforge bench`, record the median and p95, then consider:
 
-1. How much of the measured work is instruction dispatch, and how much is formatting or writing trace lines?
-2. Would a longer arithmetic-only program measure the same bottleneck as a program containing many `PRINT` instructions?
-3. If redirecting stdout changes the result, what does that reveal about the workload rather than the VM semantics?
-4. Which comparison would be fair: trace versus trace after an optimization, or trace versus silent `run`? Explain.
+1. How much work belongs to instruction dispatch, and how much to formatting and writing text?
+2. Would an arithmetic-only program measure the same bottleneck as one containing many `PRINT` instructions?
+3. If redirecting standard output changes the result, what does that reveal about the workload?
+4. Why is trace-after-optimization a fairer comparison than trace versus silent `run`?
 
 ### Reflection
 
-Pick one trace from the tests and reconstruct why each instruction pointer follows the previous one. Which line gives the strongest evidence that tracing observes state before execution?
+Choose one test trace and reconstruct why every instruction pointer follows the previous one. Which line most clearly proves that the snapshot happens before execution?
 
 ## Non-goals
 
-- Breakpoints, watches, stepping, or an interactive debugger.
-- Tracing the call stack, timestamps, or host memory addresses.
+- Breakpoints, stepping, or an interactive debugger.
+- Timestamps, host addresses, or call-stack tracing.
 - A machine-readable trace format.

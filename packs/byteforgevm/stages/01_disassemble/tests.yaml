@@ -17,12 +17,6 @@ tests:
       stdout_contains:
         - "0003 HALT"
 
-  - name: missing file fails
-    fixture: programs
-    command: ["disasm", "{fixture_path}/missing.bvm"]
-    expect:
-      exit_code: 1
-
   - name: blank lines do not consume addresses
     fixture: programs
     command: ["disasm", "{fixture_path}/blank_lines.bvm"]

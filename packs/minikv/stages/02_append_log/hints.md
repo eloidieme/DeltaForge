@@ -1,11 +1,11 @@
 # Hint 1
 
-An append-only log records history: a new write belongs after every byte already present, never in place of them.
+Think of the file as a durable transcript. One successful command contributes one complete line with an operation, key, and value.
 
 # Hint 2
 
-Resolve the parent-directory case first, then open the destination with create-and-append semantics and write one complete record.
+Prepare the parent directory before opening the file. Keep construction of the `SET` record separate from filesystem setup and success output.
 
 # Hint 3
 
-`std::fs::create_dir_all`, `OpenOptions::new().create(true).append(true)`, and `writeln!` provide the needed filesystem operations.
+`Path::parent`, `fs::create_dir_all`, and an `OpenOptions` file opened with creation enabled can establish the first log. `writeln!` supplies the required terminating newline.

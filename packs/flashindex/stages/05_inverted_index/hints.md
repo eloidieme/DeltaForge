@@ -1,11 +1,11 @@
 # Hint 1
 
-The inversion changes the lookup direction: each occurrence contributes its file to the collection owned by its token.
+Read one occurrence as a relationship: this token appears in this file. The index groups many such relationships under the token side.
 
 # Hint 2
 
-Choose ordered collections for both levels so deduplication and canonical output do not require a separate cleanup pass.
+Choose a map whose keys are token strings and whose values can collect file paths. Do not discard the Stage 03 occurrence stream; transform it.
 
 # Hint 3
 
-A `BTreeMap<String, BTreeSet<PathBuf>>` naturally prints tokens and paths in order while collapsing repeated occurrences.
+A `BTreeMap<String, ...>` is a convenient standard-library starting point because its keys already have a stable traversal order, although canonical path handling is tightened in the next stage.

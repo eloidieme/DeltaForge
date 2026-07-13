@@ -1,0 +1,42 @@
+tests:
+  - name: appends after existing records
+    fixture: existing_store
+    command: ["write-log", "{fixture_path}/store.log", "beta", "two"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/fixture/store.log"
+          contains: |
+            SET alpha one
+            SET beta two
+
+  - name: appended values preserve spaces
+    fixture: existing_store
+    command: ["write-log", "{fixture_path}/store.log", "title", "hello world"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/fixture/store.log"
+          contains: |
+            SET alpha one
+            SET title hello world
+
+  - name: repeated keys remain separate records
+    fixture: existing_store
+    command: ["write-log", "{fixture_path}/store.log", "alpha", "new"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/fixture/store.log"
+          contains: |
+            SET alpha one
+            SET alpha new
+
+  - name: missing log still accepts its first record
+    fixture: existing_store
+    command: ["write-log", "{temp_dir}/new/store.log", "first", "value"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/new/store.log"
+          contains: "SET first value"

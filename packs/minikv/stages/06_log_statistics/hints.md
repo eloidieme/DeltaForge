@@ -1,11 +1,11 @@
 # Hint 1
 
-Separate physical facts about records from the logical fact of which keys are live at the end.
+Count physical history while parsing, but compute live keys from the final replay state. They are intentionally different views.
 
 # Hint 2
 
-Count each parsed operation while replaying it into the same latest-state model used by `get` and `compact`.
+Every valid non-empty operation increments `entries`; every `DEL` also increments `tombstones`; only final `Some` values contribute to `live_keys`.
 
 # Hint 3
 
-Maintain `entries` and `tombstones` counters during the scan, then count `Some` values in the recovered map for `live_keys`.
+Return both the recovered ordered map and the physical counters from one validated pass, or share one record parser between passes. Print only after parsing succeeds completely.

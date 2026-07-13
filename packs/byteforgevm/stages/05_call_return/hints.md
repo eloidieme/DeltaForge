@@ -1,11 +1,11 @@
 # Hint 1
 
-Calls create a second last-in, first-out discipline: program values and control return points have different meanings and should not collide.
+A call has two destinations: the callee target and the caller's resume address. Write both down before mutating execution state.
 
 # Hint 2
 
-On `CALL`, determine both destinations—the callee target and the caller's resume address—before mutating interpreter state.
+Keep return addresses in a separate `Vec<usize>`. The value stack remains exclusively available to guest arithmetic and output.
 
 # Hint 3
 
-Use a separate `Vec<usize>`; push `ip + 1` after validating the target, and make `RET` pop or return `call stack underflow`.
+After validating the target, push `ip + 1` onto the call stack and set `ip` to the target. `RET` pops the saved address back into `ip`.

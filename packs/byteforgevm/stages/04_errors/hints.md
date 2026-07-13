@@ -1,11 +1,11 @@
 # Hint 1
 
-Every place that assumes an opcode, operand, stack value, or target exists is a boundary that can return a guest error.
+Every assumed stack value is a guest-controlled boundary. Replace the assumption with a fallible pop that names the current instruction.
 
 # Hint 2
 
-Give parsing, stack pops, and target validation fallible helpers so every execution mode shares the same error behavior.
+Return a `Result` from execution and let one command-level error path print to standard error and choose exit status 1.
 
 # Hint 3
 
-Return a `Result` from the interpreter; use `ok_or_else` for `Vec::pop` and check a signed target before converting it to `usize`.
+`Vec::pop().ok_or_else(...)` handles one required value. A shared two-pop helper can protect all binary arithmetic instructions consistently.

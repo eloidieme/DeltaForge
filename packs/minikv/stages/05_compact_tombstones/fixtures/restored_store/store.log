@@ -1,0 +1,3 @@
+SET alpha one
+DEL alpha
+SET alpha restored

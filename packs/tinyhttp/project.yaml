@@ -1,7 +1,7 @@
 schema_version: 1
 id: tinyhttp
 name: TinyHTTP
-version: 0.3.1
+version: 1.0.0
 description: HTTP parser and static response engine
 topics:
   - networking
@@ -24,12 +24,21 @@ stages:
   - id: 01_parse_request
     title: Parse HTTP requests
     path: stages/01_parse_request
+  - id: 01_strict_request_line
+    title: Reject ambiguous request lines
+    path: stages/01_strict_request_line
   - id: 02_static_response
     title: Serve static responses
     path: stages/02_static_response
+  - id: 02_safe_paths
+    title: Keep paths inside the document root
+    path: stages/02_safe_paths
   - id: 03_headers
     title: Handle headers
     path: stages/03_headers
+  - id: 03_header_boundaries
+    title: Respect the header boundary
+    path: stages/03_header_boundaries
   - id: 04_keep_alive
     title: Keep-alive decisions
     path: stages/04_keep_alive
@@ -37,5 +46,8 @@ stages:
     title: MIME types
     path: stages/05_mime_types
   - id: 06_range_requests
-    title: Range requests
+    title: Serve valid byte ranges
     path: stages/06_range_requests
+  - id: 06_invalid_ranges
+    title: Reject invalid byte ranges
+    path: stages/06_invalid_ranges

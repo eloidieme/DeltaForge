@@ -13,7 +13,7 @@ time — run it by hand, then commit the generated tree:
 
     python3 tools/gen_flashindex_bench_fixture.py
 
-Output goes to packs/flashindex/stages/09_parallel_indexing/fixtures/bench_codebase
+Output goes to packs/flashindex/stages/09_parallel_performance/fixtures/bench_codebase
 and stays under ~2 MiB total.
 """
 
@@ -109,7 +109,7 @@ def main() -> None:
     root = pathlib.Path(__file__).resolve().parents[1]
     out = (
         root
-        / "packs/flashindex/stages/09_parallel_indexing/fixtures/bench_codebase"
+        / "packs/flashindex/stages/09_parallel_performance/fixtures/bench_codebase"
     )
     if out.exists():
         shutil.rmtree(out)

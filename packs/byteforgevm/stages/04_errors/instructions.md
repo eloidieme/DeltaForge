@@ -1,45 +1,50 @@
-# Stage 04 — Runtime errors
+# Stage 07 — Keep guest mistakes inside the VM
 
 ## Goal
 
-Fail malformed or impossible executions predictably, with non-zero status and diagnostic text that identifies the class of virtual-machine error.
+Turn unknown instructions and value-stack underflow into clear runtime errors instead of host-language panics.
 
 ## Background
 
-An interpreter mediates between untrusted program bytes and its host process. A bad opcode or empty stack should become a guest-program error, not a host panic. Mature VMs distinguish verification and runtime failures for exactly this reason. Clear instruction addresses make diagnostics actionable while keeping stdout reserved for successful program output.
+ByteForgeVM is the host program. The `.bvm` file is a guest program running under its rules. A guest can be wrong: it can ask for an opcode the VM has never heard of, or try to add when the stack is empty.
+
+Those mistakes should not tear through the boundary and crash the host. An interpreter's job includes translating impossible guest actions into controlled guest errors. This is one reason virtual machines are useful isolation layers in larger systems.
+
+Standard output also has a specific role: it belongs to values produced by `PRINT`. Diagnostics belong on standard error, so a caller can distinguish program output from a report about why execution stopped.
 
 ## Requirements
 
-Both `run` and later execution modes must reject unknown opcodes with stderr containing `unknown opcode`, insufficient operands with `stack underflow`, and any negative or out-of-program jump with `invalid jump`. Missing required operands and non-integer operands must also exit non-zero. Runtime failures exit status 1, do not panic, and write diagnostics to stderr. Include the current instruction address where it is meaningful.
+If execution encounters an unsupported opcode, exit with status 1 and write text containing `unknown opcode` to standard error.
+
+Before `ADD`, `SUB`, or `MUL`, require two values. Before `PRINT` or `JZ`, require one. If the stack is too small, exit with status 1 and write text containing `stack underflow` to standard error. Do not panic or invent a default value. Include the current instruction address when practical.
 
 ## Example
 
-```console
-$ byteforgevm run broken.bvm
-stack underflow at 0
-$ echo $?
-1
+The one-line program:
+
+```text
+ADD
 ```
+
+cannot supply two operands. Running it fails with a message such as `stack underflow at 0`.
 
 ## Edge cases
 
-- An opcode unknown to the VM fails clearly.
-- Arithmetic and `PRINT` on an undersized stack fail rather than inventing values.
-- Negative and too-large jump targets are invalid.
-- An opcode requiring an operand fails when the operand is missing or malformed.
+- An opcode unknown to the VM fails with `unknown opcode`.
+- Arithmetic on an undersized value stack fails with `stack underflow`.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, no tested invalid program panics, and successful program stdout remains uncontaminated by diagnostics.
+All tests pass, tested guest mistakes never panic, and diagnostics do not appear as successful program output.
 
 ### Reflection
 
-1. Classify each failure as loading, parsing, or execution. Where does your current boundary lie?
-2. Which invalid guest action would still be capable of panicking the host if one check were removed?
-3. Why is stderr part of the VM's observable isolation boundary rather than merely a presentation choice?
+1. Which operations currently remove one value, and which remove two?
+2. What host panic could occur if a stack pop were assumed to succeed?
+3. Why is this boundary part of interpreter correctness rather than merely nicer error handling?
 
 ## Non-goals
 
-- Recovering and continuing after an error.
-- A static verifier or multiple-error report.
-- Source filenames, line mappings, or exception handling inside bytecode.
+- Continuing after a runtime error.
+- Validating instruction operands and targets; that is Stage 08.
+- Static verification of the whole program.

@@ -1,11 +1,11 @@
 # Hint 1
 
-Write each opcode's stack effect on paper; for example, `SUB` transforms `[..., left, right]` into `[..., left-right]`.
+Keep an instruction pointer and a `Vec<i64>` value stack. At the top of each loop, fetch the instruction named by the pointer.
 
 # Hint 2
 
-Keep a program counter and a value stack as separate interpreter state, dispatching one parsed instruction at a time.
+Write the stack effect beside each opcode before implementing dispatch. `ADD` changes `[..., a, b]` into `[..., a+b]`.
 
 # Hint 3
 
-A `Vec<i64>` supplies push/pop behavior; pop `right` before `left`, and break the dispatch loop as soon as `HALT` executes.
+Most instructions finish with the next address, but `HALT` should leave the loop immediately. `PRINT` pops, prints, and then advances.

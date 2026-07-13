@@ -1,26 +1,46 @@
-# Stage 06 — Byte-range responses
+# Stage 09 — Return part of a file
 
 ## Goal
 
-Return one inclusive slice of a file as a correctly framed `206 Partial Content` response, while preserving the document-root security boundary.
+Add a `range` command that returns one valid, inclusive interval of file bytes.
 
 ## Background
 
-Range requests let a client resume downloads and seek through large media without transferring the whole representation. HTTP defines ranges in bytes, and the end offset is inclusive—an easy off-by-one trap. A response must identify both the selected interval and the complete representation length so a client can place the fragment correctly.
+Imagine downloading a large video and losing the connection near the end. Starting again from byte zero would waste most of the earlier transfer. A byte-range request lets a client ask for only the missing part. The same idea makes seeking through media possible.
+
+HTTP writes a range with two endpoints, and both endpoints belong to the result. In the bytes `abcdefghij`, positions 2 through 5 are `cdef`:
+
+```text
+positions: 0 1 2 3 4 5 6 7 8 9
+bytes:     a b c d e f g h i j
+selected:      c d e f
+```
+
+That makes the length `end - start + 1`. The `+ 1` is easy to miss if you are accustomed to programming-language slices whose upper bound is excluded.
 
 ## Requirements
 
-Expose:
+Expose this command:
 
 ```bash
 tinyhttp range <root> <request-path> <start> <end>
 ```
 
-`start` and `end` are decimal byte offsets. For `0 <= start <= end < file_length`, print status `HTTP/1.1 206 Partial Content`, `Content-Range: bytes <start>-<end>/<file_length>`, `Content-Length: <end-start+1>`, a blank line, and exactly those inclusive bytes. Invalid numbers, reversed or out-of-bounds ranges, missing files, and unsafe paths exit non-zero with an explanatory stderr message.
+For this stage, the offsets in the tests are valid decimal byte positions satisfying `0 <= start <= end < file length`. Print:
+
+```text
+HTTP/1.1 206 Partial Content
+Content-Range: bytes <start>-<end>/<full-length>
+Content-Length: <selected-length>
+
+<selected bytes>
+```
+
+Preserve the document-root protection from the earlier static-file stages. Calculate lengths from bytes, not displayed characters.
 
 ## Example
 
-For the 10-byte file `abcdefghij` and range `2 5`:
+For the ten-byte file `abcdefghij` and range `2 5`:
 
 ```text
 HTTP/1.1 206 Partial Content
@@ -32,25 +52,21 @@ cdef
 
 ## Edge cases
 
-- A one-byte range where `start == end` succeeds with length 1.
-- A reversed range is rejected.
-- An end offset equal to or beyond the file length is rejected.
-- Non-numeric offsets are rejected.
-- A parent-directory traversal is rejected before outside bytes are read.
+- A normal multi-byte interval includes both named endpoints.
+- A range whose start and end are equal returns exactly one byte.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, byte counts remain correct with LF fixtures on every CI operating system, and range failures never emit a misleading partial response.
+All tests pass, `Content-Range` describes the whole file correctly, and `Content-Length` agrees with the bytes in the body on every operating system.
 
 ### Reflection
 
-1. For a file of length 11, list the first and last valid one-byte ranges.
-2. Explain why `end == file_length` is invalid even though an exclusive slice often permits that endpoint.
-3. Which validation must happen before any outside path could be opened?
-4. What additional response semantics would be needed if this CLI modeled HTTP's `416` response instead of treating invalid ranges as command errors?
+1. For a file of length 11, what are the first and last valid one-byte ranges?
+2. Why is a range from 2 through 5 four bytes long?
+3. Which response length describes the whole file, and which describes only the returned part?
 
 ## Non-goals
 
-- Parsing an HTTP `Range` header or returning `416 Range Not Satisfiable`.
+- Rejecting every malformed range; that boundary is the next stage.
+- Parsing a real HTTP `Range` header.
 - Suffix, open-ended, conditional, or multipart ranges.
-- Streaming, sockets, caching, or content encoding.

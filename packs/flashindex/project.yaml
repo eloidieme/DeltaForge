@@ -1,7 +1,7 @@
 schema_version: 1
 id: flashindex
 name: FlashIndex
-version: 0.4.0
+version: 1.0.0
 description: Local source-code search engine
 topics:
   - indexing
@@ -38,9 +38,15 @@ stages:
   - id: 05_inverted_index
     title: Build inverted index
     path: stages/05_inverted_index
+  - id: 05_canonical_index
+    title: Make index output canonical
+    path: stages/05_canonical_index
   - id: 06_persist_index
-    title: Persist index
+    title: Write index to disk
     path: stages/06_persist_index
+  - id: 06_query_index
+    title: Query a saved index
+    path: stages/06_query_index
   - id: 07_benchmark_mode
     title: Benchmark mode
     path: stages/07_benchmark_mode
@@ -48,8 +54,14 @@ stages:
     title: Report summary
     path: stages/08_report_summary
   - id: 09_parallel_indexing
-    title: Parallel indexing
+    title: Preserve results in parallel
     path: stages/09_parallel_indexing
+  - id: 09_parallel_performance
+    title: Measure parallel speedup
+    path: stages/09_parallel_performance
   - id: 10_ranked_search
-    title: Ranked search
+    title: Score multi-token matches
     path: stages/10_ranked_search
+  - id: 10_stable_ranking
+    title: Order ranked results
+    path: stages/10_stable_ranking

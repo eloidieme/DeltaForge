@@ -2,74 +2,169 @@
 
 ## What you are building
 
-FlashIndex is a local source-code search engine. By the end, you will scan a project, select a text corpus, tokenize identifier-like terms, find exact occurrences, build and persist an inverted index, measure and summarize indexing, parallelize construction without losing determinism, and rank multi-token results.
+Consider a project containing these three files:
+
+```text
+src/main.rs
+src/network.rs
+src/storage.rs
+```
+
+You want to find every place where the project uses the name `retry`.
+
+One option is to read all three files from beginning to end. If you search for another name afterward, you read them all again. This is perfectly reasonable for three short files. It becomes wasteful when the project contains thousands of files and you perform many searches.
+
+FlashIndex will prepare the project so that those later searches require less repeated work.
+
+Before it can do that, it needs to answer several questions.
+
+First: which files should it read?
+
+A real project directory contains more than source code. It may contain images, compiler output, downloaded packages, and internal version-control files. Reading all of them would waste time, and some of them do not contain meaningful text at all.
+
+FlashIndex will therefore scan the directory and choose a smaller collection of searchable files. That chosen collection is called the **corpus**.
+
+Second: what should count as a searchable word?
+
+Look at this line:
+
+```rust
+let retry_count2 = load_retry_count();
+```
+
+A person can easily see names such as `let`, `retry_count2`, and `load_retry_count`. A computer needs an exact rule for finding their boundaries. FlashIndex will use a deliberately simple rule for recognizing identifier-like tokens across different programming languages.
+
+Third: what should a search result remember?
+
+Printing only `retry_count2` would not tell the user where to find it. FlashIndex will record each occurrence together with its relative file path, line, and column:
+
+```text
+src/network.rs:18:9 retry_count2
+```
+
+Once this information exists, the program can search it directly. But if every search still examines every recorded occurrence, the work will grow with the size of the project.
+
+To avoid that repeated scan, FlashIndex will eventually organize its data by token:
+
+```text
+retry       → src/main.rs, src/network.rs
+retry_count → src/network.rs, src/storage.rs
+timeout     → src/network.rs
+```
+
+This structure is called an **inverted index**. It starts with the word being searched and points toward the files that contain it.
 
 ## Why this is useful
 
-Fast local code search is a realistic systems problem. It touches directory traversal, corpus policy, lexical boundaries, information-retrieval data structures, persistence, CLI design, deterministic concurrency, and performance measurement. These are building blocks behind developer tools, language servers, indexing services, and build systems.
+The pieces of FlashIndex appear in many larger tools. Directory walking is used by build systems and file browsers. Tokenization is used by compilers, editors, and language servers. Inverted indexes support document and web search. Persistence lets prepared data outlive one process, while deterministic merging makes concurrent work trustworthy.
 
-## Big picture
+The project is also an exercise in defining behavior. A search tool cannot be correct until it says which files, tokens, paths, and ordering rules count as correct.
+
+## The choices are policies, not laws of nature
+
+Search tools have to decide what to include. FlashIndex skips `.git`, `target`, `build`, and `node_modules` because those names commonly contain version-control data, generated build output, or downloaded dependencies. Searching them would often duplicate results and slow the exercise down.
+
+Those four names are not universally correct. A project can use a different build directory, and someone may occasionally want to inspect a dependency. They are a fixed policy for this course, chosen so every learner and every test works from the same definition. A production tool would normally make the policy configurable.
+
+The extension list is another such choice. FlashIndex includes a modest group of Rust, C, C++, Python, Markdown, text, and CMake files. It does not claim that other languages are unimportant. It simply avoids turning file-type detection into a project of its own.
+
+There is no special rule for `CMakeLists.txt`. Because that filename already ends in `.txt`, the ordinary text rule accepts it. Files such as `toolchain.cmake` are the reason `.cmake` appears separately. When a rule is arbitrary, the instructions should say so; when one rule already covers a case, the project should not invent a second explanation.
+
+## How the stages build the search tool
+
+The course now takes fourteen smaller steps:
+
+1. Walk a directory and print every regular file in stable order.
+2. Choose which filenames belong to the searchable corpus.
+3. Recognize identifier-like tokens and record their positions.
+4. Find exact token occurrences without substring surprises.
+5. Group each token with the files containing it.
+6. Sort and deduplicate that grouped representation.
+7. Write the canonical index to a disk artifact.
+8. Query the saved artifact in a later process.
+9. Report a scan workload as machine-readable benchmark data.
+10. Summarize files, token occurrences, and unique token spellings.
+11. Build the same index with one or more workers.
+12. Measure whether extra workers actually improve the workload.
+13. Score files that match several query tokens.
+14. Break score ties and limit the final ranked result.
+
+The split matters. “Build an inverted index” and “make its bytes canonical” are related but different problems. So are “use several workers” and “prove that the workers made the program faster.” Treating them separately leaves room to understand each new idea before another one arrives.
+
+## From characters to locations
+
+FlashIndex uses a small token rule:
+
+- a token begins with an ASCII letter or `_`;
+- later characters may also contain ASCII digits;
+- punctuation and whitespace separate tokens;
+- spelling and case are preserved.
+
+With that rule, `retry_count2` is one token, while the leading digits in `123alpha` are skipped and `alpha` begins where the letter `a` appears.
+
+Locations use one-based line and column numbers because those are natural to display to a person. The implementation still has to be precise about what a column counts. In this project, the tested source is ASCII and the column points to the first byte of the printed token. More advanced tools must choose how to handle Unicode code points, grapheme clusters, tabs, and editor display columns.
+
+The same token rule must be reused later. If indexing treats `_cache` as one token but searching treats `_` as punctuation, a correctly built index can still appear broken. Shared definitions matter as much as shared data structures.
+
+## Why the index is “inverted”
+
+A source file naturally gives you tokens in document order:
 
 ```text
-directory tree
-    ↓ scan and filter
-ordered source corpus
-    ↓ tokenize
-positioned occurrences
-    ↓ invert
-token → documents
-    ↓ persist / parallelize / rank
-reusable search results
+src/main.rs → fn, main, retry, retry
 ```
 
-## Concept map
+A search asks the question in the opposite direction:
 
-| Stage | New representation | Invariant to protect |
-|---|---|---|
-| 01–02 | Ordered source paths | Corpus policy is deterministic and portable. |
-| 03 | Positioned token occurrences | Every location points to the printed token's first byte. |
-| 04 | Exact-match occurrence stream | Search and tokenization share boundaries. |
-| 05 | Token-to-document postings | Tokens and paths are sorted and de-duplicated. |
-| 06 | Persistent index artifact | A later process can recover the same postings. |
-| 07–08 | Measurements and summaries | Metrics use the same corpus and token definitions. |
-| 09 | Merged worker-local indexes | Thread count changes time, never bytes. |
-| 10 | Ranked candidate files | Scoring has a deterministic total order. |
+```text
+retry → which files?
+```
 
-## Search glossary
+The index inverts the relationship. Its per-token list of files is often called a **posting list**. A token may occur twenty times in one file, but a file-level posting list should name that file once. Occurrences and postings answer different questions.
 
-- **Corpus:** the collection of documents admitted to indexing.
-- **Token:** a searchable unit produced from source text.
+FlashIndex also sorts token records and paths. Filesystems do not promise to discover directory entries in the same order on every machine, and parallel workers do not promise to finish in a convenient order. Sorting turns many possible construction histories into one canonical result. That gives tests stable bytes and makes saved artifacts easier to compare.
+
+## Saving work for later
+
+An in-memory index disappears when the process exits. Persistence lets one command pay the construction cost and another command query the result later.
+
+The saved file is a contract between a writer and a future reader. The writer must replace old contents completely; otherwise rebuilding a short index over a longer one can leave stale bytes at the end. The reader must preserve exact token matching and return the same sorted, deduplicated paths as the in-memory representation.
+
+Production formats also need version markers, escaping rules, corruption detection, and plans for upgrades. This project keeps the format small, but the underlying question is already real: what must remain true when the producer and consumer do not run at the same time?
+
+## Measuring before optimizing
+
+The benchmark stages distinguish an observation from a claim. Reporting elapsed time is an observation. Claiming that eight threads are faster is a comparison that requires the same workload, the same output, and repeated measurements.
+
+Parallel construction therefore arrives in two steps. First, worker-local results are merged into byte-identical canonical output. Only then does a benchmark matrix compare thread counts and derive speedup from their medians. A fast wrong result is not an optimization.
+
+Extra workers also have costs: dividing work, starting threads, combining partial maps, and contending for memory or shared structures. Small corpora may become slower. That is not a paradox; it is evidence that parallelism has overhead and should be measured on a representative workload.
+
+## Ranking more than one token
+
+An exact query asks whether one token exists. A multi-token query creates degrees of usefulness. FlashIndex's final scoring rule is intentionally understandable:
+
+1. prefer files that cover more distinct query tokens;
+2. then prefer files with more total occurrences of those tokens;
+3. then use the portable relative path to break an exact tie.
+
+The first rule rewards breadth; the second rewards density; the third does not pretend to measure relevance at all. It exists to make the order complete and repeatable. The command prints only the top ten results after that full order is established.
+
+Search systems have explored much richer ranking for decades. Printed concordances already mapped words to locations. Later information-retrieval systems used statistics such as term frequency and document frequency, and modern engines often use descendants of TF-IDF or BM25. FlashIndex keeps the scoring visible enough to calculate by hand before introducing those models.
+
+## Words you will meet
+
+- **Corpus:** the documents a search system has agreed to read.
+- **Token:** one searchable unit produced from source text.
 - **Occurrence:** one token at one path, line, and column.
-- **Posting list:** the documents or positions associated with one token.
-- **Inverted index:** a mapping from tokens to documents, reversing document-to-token input.
-- **Term frequency:** how often a term occurs within a document.
-- **Document frequency:** how many documents contain a term.
-- **Determinism:** identical observable output for identical input, independent of enumeration or thread timing.
-- **Speedup:** baseline runtime divided by parallel runtime for the same work.
+- **Posting list:** the files associated with a token.
+- **Inverted index:** a mapping from tokens to their postings.
+- **Canonical output:** one stable representation chosen from several equivalent construction orders.
+- **Speedup:** baseline runtime divided by runtime after adding parallel resources.
+- **Determinism:** identical observable results for identical input.
 
-## Retrieval field note
+## What a strong solution looks like
 
-Book concordances already inverted words into locations. Twentieth-century systems such as SMART turned that idea into ranked computerized retrieval. Production search engines commonly use TF-IDF descendants such as BM25: term frequency rewards evidence inside a document, while inverse document frequency discounts terms appearing almost everywhere. FlashIndex's final ranking is intentionally smaller—coverage, then occurrence density, then path—so every decision remains visible and testable.
+A strong solution has one corpus policy and one token definition reused everywhere. It prints portable `/`-separated relative paths, does not depend on filesystem or worker completion order, replaces persisted output rather than leaving stale data, and checks that an optimization preserves exact results. Each stage should be understandable from a small example before it is generalized to a large project.
 
-## Persistence field note
-
-An index file is an agreement between a writer and a later reader. Delimiters, ordering, truncation, malformed data, and future format versions all matter. Stage 06 leaves the format open, but a thoughtful design can still answer: how is a record bounded, how is stale output replaced, and how would a future reader recognize an incompatible artifact?
-
-## Failure-analysis lab
-
-Diagnose the violated layer before proposing a fix:
-
-1. `scan` returns correct paths in a different order on Windows. Is traversal wrong, or is canonicalization missing?
-2. `123alpha` is indexed as one token. Which lexical start rule was ignored?
-3. Searching `main` also returns `main_index`. Did corpus selection, tokenization, or matching fail?
-4. A token repeated 20 times in one file lists that path 20 times. Which occurrence/posting distinction was lost?
-5. Four-thread indexing contains the right lines in varying order. Is the computation incomplete, or is the merge non-canonical?
-6. Two tied ranked results swap places across runs. Which final ordering key is missing?
-
-## What good looks like
-
-Good solutions keep output deterministic, separate scanning from tokenization, reuse one definition at every later stage, avoid irrelevant files, preserve portable paths, and use benchmarks to guide optimization rather than guessing. Each optimization should be checked against byte-identical correctness before its speed is celebrated.
-
-## Optional extensions
-
-Natural experiments include Unicode-aware tokenization, ignoring comments and strings, index-format versioning, incremental updates, deleted-file detection, phrase search, prefix search, or BM25-style scoring. Each changes the product contract; write examples and non-goals before choosing data structures.
+Natural extensions include Unicode-aware tokens, configurable ignore rules, comments-and-strings awareness, incremental updates, deleted-file detection, phrase search, prefix search, and BM25-style ranking. Each extension changes the product's definition of correctness. Write that changed definition down before choosing a clever data structure.

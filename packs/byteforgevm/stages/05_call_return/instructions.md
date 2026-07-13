@@ -1,28 +1,39 @@
-# Stage 05 — Call and return
+# Stage 09 — Call a routine and come back
 
 ## Goal
 
-Support reusable bytecode routines with `CALL` and `RET`, including nested calls, without mixing return addresses into the program's value stack.
+Add `CALL <address>` and `RET` for one complete call-and-return journey.
 
 ## Background
 
-Subroutines transformed programming by letting one sequence serve many callers. A call transfers control while remembering where execution should resume; a return restores the most recent address, giving calls their last-in, first-out shape. Real machines often store richer stack frames, but a separate return-address stack exposes the essential mechanism cleanly and prevents arithmetic from corrupting control state.
+A jump knows where it is going but remembers nothing about where it came from. A call has to do both. `CALL 3` transfers execution to instruction 3 while saving the address of the instruction that should run afterward.
+
+Consider this program:
+
+```text
+0  CALL 3
+1  PRINT
+2  HALT
+3  PUSH 12
+4  RET
+```
+
+The call saves address 1, then moves to 3. `RET` restores 1, so `PRINT` receives the value prepared by the routine. This saved location is called a return address.
+
+Return addresses do not belong on the value stack. Program arithmetic should never be able to add, print, or accidentally remove the VM's control information. Give them a separate call stack, even though this stage uses only one saved address.
 
 ## Requirements
 
-Extend `run` with `CALL <addr>` and `RET`. `CALL` validates the zero-based target, records the address immediately after the call, and transfers control to the target. `RET` removes the most recently recorded return address and resumes there. Calls may nest. `HALT` still ends the whole program immediately. Invalid call targets exit non-zero with text containing `invalid jump`; `RET` without a saved address exits non-zero with `call stack underflow`.
+Extend `run` with:
+
+- `CALL <address>`: validate the target, save `ip + 1` on a separate call stack, then jump to the target;
+- `RET`: remove the latest saved return address and continue there.
+
+Keep every earlier opcode unchanged. A normal call must resume at the instruction immediately after `CALL`.
 
 ## Example
 
-```text
-CALL 3
-PRINT
-HALT
-PUSH 12
-RET
-```
-
-produces:
+The numbered program above prints:
 
 ```text
 12
@@ -30,24 +41,22 @@ produces:
 
 ## Edge cases
 
-- A normal call resumes at the instruction after `CALL`.
-- Nested calls return in last-in, first-out order.
-- `RET` with an empty call stack fails clearly.
-- A negative or out-of-program call target fails before changing call state.
-- `HALT` inside a called routine stops execution instead of returning.
+- A call reaches its target and a matching return resumes immediately after the call.
+- The return address remains separate from values manipulated by the guest program.
+- Guest values already on the value stack survive a call and return.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and value-stack operations cannot consume or forge return addresses.
+All tests pass, and you can trace the example's instruction pointer and both stacks by hand.
 
 ### Reflection
 
-1. State the relationship between a successful `CALL` and the later `RET` that matches it.
-2. What state must remain unchanged when a call target is rejected?
-3. Which additional facts would a real stack frame need for arguments and local variables?
+1. Why is the saved address `ip + 1` rather than `ip`?
+2. What would happen if a return address were pushed onto the value stack?
+3. In what way is a call a jump plus one additional state change?
 
 ## Non-goals
 
-- Arguments, local variables, stack frames, tail calls, or recursion limits.
-- Named functions or a linker.
-- Exceptions or unwinding.
+- Nested calls and call-stack failure cases; those come next.
+- Arguments, local variables, or full stack frames.
+- Named functions or linking.

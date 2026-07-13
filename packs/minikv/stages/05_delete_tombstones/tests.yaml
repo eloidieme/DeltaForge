@@ -3,8 +3,8 @@ tests:
     command: ["delete-log", "{temp_dir}/store.log", "alpha"]
     expect:
       exit_code: 0
-      file_exists:
-        - "{temp_dir}/store.log"
+      stdout_contains:
+        - "deleted"
       file_contains:
         - path: "{temp_dir}/store.log"
           contains: "DEL alpha"
@@ -16,18 +16,7 @@ tests:
       exit_code: 0
       stdout_exact: ""
 
-  - name: compact omits deleted keys
-    fixture: deleted_store
-    command: ["compact", "{fixture_path}/store.log", "{temp_dir}/compact.log"]
-    expect:
-      exit_code: 0
-      file_contains:
-        - path: "{temp_dir}/compact.log"
-          contains: "SET beta two"
-      stdout_contains:
-        - "compacted"
-
-  - name: deleting a missing key is a valid tombstone
+  - name: deleting a missing key is valid
     command: ["delete-log", "{temp_dir}/store.log", "never-set"]
     expect:
       exit_code: 0

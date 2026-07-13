@@ -1,22 +1,55 @@
-# Stage 05 — Delete tombstones
+# Stage 08 — Record deletion tombstones
 
 ## Goal
 
-Represent deletion as another durable log operation, so recovery can distinguish “never seen” from “explicitly removed” and compaction cannot accidentally resurrect an older value.
+Represent deletion as a durable `DEL` record and teach recovery that the latest operation may remove a key rather than assign a value.
+
+This stage makes deletion survive a restart. The effect of tombstones on compaction is handled next.
 
 ## Background
 
-In an append-only store, erasing an earlier record would defeat the storage model. Instead, systems append a tombstone: a marker saying that earlier values are no longer live. Tombstones appear in log-structured databases, distributed stores, and filesystems. They are deceptively important during compaction—dropping a marker before it has cancelled the older value can bring deleted data back.
+Suppose the log contains:
+
+```text
+SET session active
+```
+
+Removing `session` from an in-memory map would make it disappear for the rest of the current process. The durable log would still say that the key is active. After restart, recovery would bring it back.
+
+An append-only store cannot erase the earlier record without abandoning its storage model. Instead, it appends another operation:
+
+```text
+SET session active
+DEL session
+```
+
+`DEL session` is a **tombstone**: durable evidence that earlier values for `session` are no longer live.
+
+Recovery still follows one rule—the latest operation wins—but the reconstructed state now needs to distinguish a live value from an explicit deletion.
+
+A later `SET` can legitimately restore the key:
+
+```text
+SET session active
+DEL session
+SET session renewed
+```
+
+The latest operation is again a value, so `get session` prints `renewed`.
+
+Deleting a key that has never been set is also valid. The tombstone records the requested operation. This becomes important in larger or replicated stores where another part of the system may have older knowledge, even though MiniKV remains a single local log.
 
 ## Requirements
 
-Expose:
+Add:
 
-```bash
+```console
 minikv delete-log <path> <key>
 ```
 
-Append exactly `DEL <key>\n`, creating the file and parent directories as Stage 02 does. Exit 0 and print a line containing `deleted`. Extend replay so the latest `DEL` makes `get` return empty success, while a later `SET` makes the key live again. Extend `compact` so keys whose latest operation is `DEL` are omitted.
+Append exactly `DEL <key>\n`, creating the file and parents under the same rules as `write-log`. Exit 0 and print a line containing `deleted`.
+
+Extend valid recovery grammar to include `DEL <key>`. If the latest operation for the requested key is `DEL`, `get` exits 0 with empty stdout. A later `SET` restores the key and its new value.
 
 ## Example
 
@@ -26,27 +59,21 @@ deleted session
 $ minikv get store.log session
 ```
 
-The second command prints nothing and succeeds.
+The second command succeeds without printing a value.
 
 ## Edge cases
 
-- Deleting a key that has never been set still appends a valid tombstone.
+- Deleting a key that was never set still appends a valid tombstone.
 - Repeated `DEL` records keep the key absent.
-- A `SET` after a `DEL` restores the key with its new value.
-- Compaction omits a key when its latest operation is `DEL` while retaining other live keys.
+- A `SET` after a `DEL` restores the key.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and no replay or compaction path can resurrect a key whose latest operation is deletion.
-
-### Reflection
-
-1. Why is “remove the key from the map” sometimes an insufficient description of deleted state?
-2. Identify the exact record ordering in which a deleted key becomes live again legitimately.
-3. What additional knowledge would a replicated store need before discarding a tombstone everywhere?
+All `deltaforge test` cases pass and restart recovery never returns a value whose latest operation is `DEL`.
 
 ## Non-goals
 
-- Expiring keys automatically or retaining deletion timestamps.
-- Transactions, snapshots, or concurrent writers.
-- Garbage-collection rules for replicated tombstones.
+- Removing tombstones during compaction; that is the next stage.
+- Expiration times or deletion timestamps.
+- Replicated tombstone garbage collection.
+- Transactions or concurrent writers.

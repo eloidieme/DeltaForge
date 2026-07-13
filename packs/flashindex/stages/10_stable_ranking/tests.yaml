@@ -1,0 +1,32 @@
+tests:
+  - name: single token orders by occurrences then path
+    fixture: rank_project
+    command: ["rank", "{fixture_path}", "alpha"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        1. src/two_hi.rs (matched 1/1 tokens, 2 occurrences)
+        2. src/one.rs (matched 1/1 tokens, 1 occurrences)
+        3. src/three.rs (matched 1/1 tokens, 1 occurrences)
+        4. src/two_lo.rs (matched 1/1 tokens, 1 occurrences)
+
+  - name: exact ties break by ascending path
+    fixture: tie_project
+    command: ["rank", "{fixture_path}", "gamma"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        1. src/tie_a.rs (matched 1/1 tokens, 1 occurrences)
+        2. src/tie_b.rs (matched 1/1 tokens, 1 occurrences)
+
+  - name: ranked output is limited to top ten
+    fixture: top_twelve
+    command: ["rank", "{fixture_path}", "token"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - "(?m)^10\\. src/file10\\.rs"
+      stdout_not_contains:
+        - "11."
+        - "file11.rs"
+        - "file12.rs"

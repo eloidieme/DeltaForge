@@ -1,11 +1,11 @@
 # Hint 1
 
-Reason in byte offsets, and remember that both endpoints belong to the requested interval.
+Draw the bytes with their zero-based positions. The selected body contains the byte at `start`, the byte at `end`, and everything between them.
 
 # Hint 2
 
-Validate path and numeric bounds before slicing; compute response length from the validated slice rather than duplicating arithmetic.
+Once you have the selected byte slice, its own length is the safest source for `Content-Length`. The whole byte vector supplies the denominator in `Content-Range`.
 
 # Hint 3
 
-Read with `fs::read`, guard `start <= end && end < bytes.len()`, and slice with the inclusive range `start..=end`.
+Rust's inclusive slice syntax is `start..=end`. Keep using byte-oriented file reading so offsets and lengths refer to the same unit.

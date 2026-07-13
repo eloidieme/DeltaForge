@@ -1,45 +1,65 @@
-# Stage 02 — Stack arithmetic
+# Stage 03 — Run a basic stack program
 
 ## Goal
 
-Execute straight-line bytecode on an operand stack, supporting integer constants, arithmetic, output, and explicit termination.
+Add `byteforgevm run <program-file>` with four instructions: `PUSH`, `ADD`, `PRINT`, and `HALT`.
 
 ## Background
 
-Stack machines encode operations without naming registers: operands are pushed, an arithmetic instruction consumes the top values, and the result returns to the stack. The Burroughs B5000, Forth, Java bytecode, and WebAssembly all reflect this idea in different forms. Compact instructions come with a discipline: operand order and stack depth are part of the semantics.
+The disassembler built a sequence of instructions. Running that sequence requires two new pieces of state: an instruction pointer and a value stack.
+
+The instruction pointer names what happens next. It starts at 0 and normally advances by one. The value stack holds numbers, with new values placed on top. If the stack is written left to right with its top at the right, addition works like this:
+
+```text
+[2, 5] --ADD--> [7]
+```
+
+`ADD` removes 5, removes 2, and places 7 back on the stack. `PRINT` removes the top value and writes it. `HALT` stops immediately. These few rules are enough to create a real fetch-and-execute loop.
 
 ## Requirements
 
-Expose `byteforgevm run <program-file>`. Support `PUSH <signed-i64>`, `ADD`, `SUB`, `MUL`, `PRINT`, and `HALT`. Arithmetic pops the right operand first and the left operand second, then pushes `left op right`. `PRINT` pops and prints one value followed by `\n`. `HALT` stops immediately; reaching the end also succeeds. Output consists only of values printed by executed `PRINT` instructions.
+Support:
+
+- `PUSH <signed-integer>`: put the number on the value stack;
+- `ADD`: remove the top two values and push their sum;
+- `PRINT`: remove and print the top value followed by a newline;
+- `HALT`: end execution immediately.
+
+Reaching the end of the program also succeeds. Standard output contains only values produced by executed `PRINT` instructions.
 
 ## Example
 
-For `PUSH 10`, `PUSH 4`, `SUB`, `PRINT`, `HALT`:
+```text
+PUSH 2
+PUSH 5
+ADD
+PRINT
+HALT
+```
 
-```console
-$ byteforgevm run subtract.bvm
-6
+prints:
+
+```text
+7
 ```
 
 ## Edge cases
 
-- Subtraction uses left-minus-right stack order.
-- Negative integer operands are accepted.
-- More than one `PRINT` produces values in execution order.
+- `ADD` consumes two values and leaves their sum for `PRINT`.
 - Instructions after `HALT` are not executed.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and straight-line programs have deterministic output.
+All tests pass, and the example's stack can be explained instruction by instruction.
 
 ### Reflection
 
-1. Write the stack effect of every opcode you now support. Which instruction is the first whose operand order is observable?
-2. Why does `PRINT` consume its value rather than merely inspect it in this machine model?
-3. What invariant should be true before and after dispatching any successful straight-line instruction?
+1. What are the instruction pointer and stack immediately before `ADD` in the example?
+2. Why does `PRINT` remove its value in this machine rather than only inspect it?
+3. Which instruction changes the usual “advance by one” rule without choosing another address?
 
 ## Non-goals
 
-- Jumps, calls, variables, or heap memory.
-- Division, overflow policy beyond signed 64-bit arithmetic, or floating point.
-- Runtime-error wording, which is specified in Stage 04.
+- Subtraction, multiplication, or jumps.
+- Specifying every runtime error; later stages make failures precise.
+- Variables, registers, or heap memory.

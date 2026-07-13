@@ -225,7 +225,7 @@ fn starter_project_initializes_and_fails_current_stage() {
     assert_success(&overview_json);
     let parsed_overview: serde_json::Value = serde_json::from_slice(&overview_json.stdout).unwrap();
     assert_eq!(parsed_overview["project"], "flashindex");
-    assert_eq!(parsed_overview["roadmap"].as_array().unwrap().len(), 10);
+    assert_eq!(parsed_overview["roadmap"].as_array().unwrap().len(), 14);
 
     let generated_overview = run_deltaforge(["overview", "--no-open"], &project_dir);
     assert_success(&generated_overview);
@@ -236,9 +236,9 @@ fn starter_project_initializes_and_fails_current_stage() {
         .join("learning.html");
     let learning_page = fs::read_to_string(&learning_page_path).unwrap();
     assert!(learning_page.contains("Project overview"));
-    assert!(learning_page.contains("Start with the big idea"));
-    assert!(learning_page.contains("data-tab=\"overview-roadmap\""));
-    assert!(learning_page.contains("Stage 10"));
+    assert!(learning_page.contains("The road ahead"));
+    assert!(learning_page.contains("class=\"roadmap-row"));
+    assert!(learning_page.contains("Stage 14"));
     assert!(!learning_page.contains("https://"));
 
     let generated_instructions = run_deltaforge(
@@ -249,7 +249,7 @@ fn starter_project_initializes_and_fails_current_stage() {
     let learning_page = fs::read_to_string(&learning_page_path).unwrap();
     assert!(learning_page.contains("data-initial-target=\"stage-02_filter_files\""));
     assert!(learning_page.contains("Choose searchable files"));
-    assert!(learning_page.contains("Why?"));
+    assert!(learning_page.contains("In this chapter"));
 
     let status = run_deltaforge(["status"], &project_dir);
     assert_success(&status);
@@ -938,7 +938,7 @@ fn bench_matrix_prints_table_speedup_and_saves_per_point_history() {
 
 #[test]
 fn parallel_indexing_stage_benchmark_matrix_evaluates_gate_per_thread_count() {
-    // The stage 09 benchmark declares a threads:[1,2,4,8] matrix and a speedup
+    // The stage 12 benchmark declares a threads:[1,2,4,8] matrix and a speedup
     // gate. This exercises the machinery end to end against the reference
     // solution: every thread point is measured and saved, and the gate is
     // evaluated and reported. We deliberately do NOT assert the speedup value —
@@ -968,7 +968,7 @@ fn parallel_indexing_stage_benchmark_matrix_evaluates_gate_per_thread_count() {
         [
             "bench",
             "--stage",
-            "09_parallel_indexing",
+            "09_parallel_performance",
             "--iterations",
             "2",
             "--warmup",
@@ -1712,16 +1712,16 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
 }
 
 #[test]
-fn reference_solution_passes_all_flashindex_v1_stages() {
+fn reference_solution_passes_all_flashindex_stages() {
     assert_reference_solution_passes(
         "flashindex",
         "tools/reference_solutions/flashindex_rust/src/main.rs",
-        "Stage 10_ranked_search: Ranked search",
+        "Stage 10_stable_ranking: Order ranked results",
     );
 }
 
 #[test]
-fn reference_solutions_pass_all_deepened_v2_packs() {
+fn reference_solutions_pass_all_bundled_packs() {
     assert_reference_solution_passes(
         "minikv",
         "tools/reference_solutions/minikv_rust/src/main.rs",
@@ -1730,7 +1730,7 @@ fn reference_solutions_pass_all_deepened_v2_packs() {
     assert_reference_solution_passes(
         "tinyhttp",
         "tools/reference_solutions/tinyhttp_rust/src/main.rs",
-        "Stage 06_range_requests: Range requests",
+        "Stage 06_invalid_ranges: Reject invalid byte ranges",
     );
     assert_reference_solution_passes(
         "byteforgevm",

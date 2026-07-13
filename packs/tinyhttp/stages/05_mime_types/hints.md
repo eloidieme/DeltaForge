@@ -1,11 +1,11 @@
 # Hint 1
 
-Media type selection is classification: every successful file must land in exactly one known case or the fallback.
+This is a small classification table. Every successful file belongs to one named extension case or to the generic fallback.
 
 # Hint 2
 
-Determine the type from the validated file path, then pass it into the same response formatter used by Stage 02.
+Choose the media type only after you know the response is successful. A missing path should follow the existing 404 path unchanged.
 
 # Hint 3
 
-`Path::extension().and_then(OsStr::to_str)` plus a small `match` gives a deterministic `&'static str` result.
+`Path::extension().and_then(OsStr::to_str)` and a `match` can return the required static string without changing the response body.

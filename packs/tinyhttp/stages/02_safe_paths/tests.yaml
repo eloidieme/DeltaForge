@@ -1,0 +1,29 @@
+tests:
+  - name: rejects parent path outside document root
+    fixture: site
+    command: ["serve-file", "{fixture_path}/public", "/../secret.txt"]
+    expect:
+      exit_code: 1
+      stdout_not_contains:
+        - "secret"
+      stderr_contains:
+        - "unsafe path"
+
+  - name: rejects nested parent traversal
+    fixture: site
+    command: ["serve-file", "{fixture_path}/public", "/assets/../../secret.txt"]
+    expect:
+      exit_code: 1
+      stdout_not_contains:
+        - "secret"
+      stderr_contains:
+        - "unsafe path"
+
+  - name: safe paths still serve public files
+    fixture: site
+    command: ["serve-file", "{fixture_path}/public", "/index.html"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "HTTP/1.1 200 OK"
+        - "hello tinyhttp"
