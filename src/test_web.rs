@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
@@ -6,7 +7,10 @@ use anyhow::{Context, Result};
 
 use crate::context::ProjectContext;
 use crate::fs_util::atomic_write;
-use crate::runner::{TestDiagnostic, TestResult, TestRunSummary};
+use crate::runner::{
+    FixtureEntry, FixtureEntryKind, FixturePreviewKind, TestDiagnostic, TestInput, TestResult,
+    TestRunSummary,
+};
 
 pub fn generate_test_report(
     context: &ProjectContext,
@@ -138,7 +142,7 @@ fn render_test_report(context: &ProjectContext, summaries: &[TestRunSummary]) ->
 <meta name="color-scheme" content="light dark">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <title>Test report · {pack_name} · DeltaForge</title>
-<style>{css}</style>
+<style>{css}{input_css}</style>
 </head>
 <body class="status-{status}" data-first-failure="{first_failure}">
 <a class="skip-link" href="#results">Skip to results</a>
@@ -178,6 +182,7 @@ fn render_test_report(context: &ProjectContext, summaries: &[TestRunSummary]) ->
         },
         first_failure = escape_attr(&first_failure_attr),
         css = CSS,
+        input_css = INPUT_CSS,
         js = JS,
     )
 }
@@ -198,6 +203,7 @@ fn render_failed_result(stage_id: &str, result: &TestResult, id: &str) -> String
     }
 
     let output = render_streams(result);
+    let input = render_test_input(result.input.as_ref());
     let expectations = render_expectations(&result.expectations);
     let rerun = rerun_command(stage_id, &result.name);
     let duration = duration_label(result.duration_ms);
@@ -208,10 +214,12 @@ fn render_failed_result(stage_id: &str, result: &TestResult, id: &str) -> String
 <div class="tabs" data-tabs>
   <div class="tab-list" role="tablist" aria-label="Test details">
     <button id="{id}-tab-diagnosis" role="tab" aria-selected="true" aria-controls="{id}-panel-diagnosis" data-tab="diagnosis">Diagnosis</button>
+    <button id="{id}-tab-input" role="tab" aria-selected="false" aria-controls="{id}-panel-input" data-tab="input" tabindex="-1">Test input</button>
     <button id="{id}-tab-output" role="tab" aria-selected="false" aria-controls="{id}-panel-output" data-tab="output" tabindex="-1">Program output</button>
     <button id="{id}-tab-contract" role="tab" aria-selected="false" aria-controls="{id}-panel-contract" data-tab="contract" tabindex="-1">Test contract</button>
   </div>
   <section id="{id}-panel-diagnosis" class="tab-panel" role="tabpanel" aria-labelledby="{id}-tab-diagnosis" data-panel="diagnosis">{diagnostics}</section>
+  <section id="{id}-panel-input" class="tab-panel" role="tabpanel" aria-labelledby="{id}-tab-input" data-panel="input" hidden>{input}</section>
   <section id="{id}-panel-output" class="tab-panel" role="tabpanel" aria-labelledby="{id}-tab-output" data-panel="output" hidden>{output}</section>
   <section id="{id}-panel-contract" class="tab-panel" role="tabpanel" aria-labelledby="{id}-tab-contract" data-panel="contract" hidden>{expectations}</section>
 </div>
@@ -227,10 +235,11 @@ fn render_failed_result(stage_id: &str, result: &TestResult, id: &str) -> String
 fn render_passed_result(stage_id: &str, result: &TestResult, id: &str) -> String {
     let rerun = rerun_command(stage_id, &result.name);
     format!(
-        r#"<details class="passed-row" id="{id}"><summary><span class="result-icon" aria-hidden="true">✓</span><span>{name}</span><small>{duration}</small></summary><div class="passed-detail">{expectations}<p><code>{rerun}</code></p></div></details>"#,
+        r#"<details class="passed-row" id="{id}"><summary><span class="result-icon" aria-hidden="true">✓</span><span>{name}</span><small>{duration}</small></summary><div class="passed-detail">{input}<h4>Test contract</h4>{expectations}<p><code>{rerun}</code></p></div></details>"#,
         id = escape_attr(id),
         name = escape_html(&result.name),
         duration = escape_html(&duration_label(result.duration_ms)),
+        input = render_test_input(result.input.as_ref()),
         expectations = render_expectations(&result.expectations),
         rerun = escape_html(&rerun),
     )
@@ -274,6 +283,156 @@ fn render_diagnostic(diagnostic: &TestDiagnostic) -> String {
         title = escape_html(&diagnostic.title),
         summary = escape_html(&diagnostic.summary),
     )
+}
+
+fn render_test_input(input: Option<&TestInput>) -> String {
+    let Some(input) = input else {
+        return r#"<div class="input-empty"><h4>Test setup unavailable</h4><p>The runner stopped before it could capture this test's inputs.</p></div>"#.to_string();
+    };
+    let command = input
+        .command
+        .iter()
+        .map(|argument| shell_word(argument))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let stdin = input.stdin.as_ref().map_or_else(
+        || r#"<div class="empty-input">No standard input</div>"#.to_string(),
+        |value| output_block(value),
+    );
+    let environment = if input.env.is_empty() {
+        r#"<div class="empty-input">No additional environment variables</div>"#.to_string()
+    } else {
+        let rows = input
+            .env
+            .iter()
+            .map(|(key, value)| {
+                format!(
+                    "<tr><th>{}</th><td><code>{}</code></td></tr>",
+                    escape_html(key),
+                    escape_html(value)
+                )
+            })
+            .collect::<String>();
+        format!(r#"<table class="environment"><tbody>{rows}</tbody></table>"#)
+    };
+    let fixture = render_fixture(input);
+
+    format!(
+        r#"<div class="test-input">
+<section class="input-intro"><h4>How this test starts</h4><p>This is the setup DeltaForge prepared before launching your program.</p></section>
+<div class="input-grid">
+  <section class="input-card command-input"><h5>Command</h5><code>{command}</code></section>
+  <section class="input-card"><h5>Run settings</h5><dl><div><dt>Working directory</dt><dd><code>{working_directory}</code></dd></div><div><dt>Timeout</dt><dd>{timeout_ms} ms</dd></div></dl></section>
+</div>
+<section class="input-section"><h5>Standard input</h5>{stdin}</section>
+<section class="input-section"><h5>Test environment</h5>{environment}</section>
+{fixture}
+</div>"#,
+        command = escape_html(&command),
+        working_directory = escape_html(&input.working_directory),
+        timeout_ms = input.timeout_ms,
+    )
+}
+
+fn render_fixture(input: &TestInput) -> String {
+    let Some(snapshot) = &input.fixture else {
+        return r#"<section class="input-section fixture-section"><h5>Starting files</h5><div class="empty-input">No fixture was declared. The test begins with an empty temporary workspace.</div></section>"#.to_string();
+    };
+    let mut root = FixtureTreeNode::default();
+    for entry in &snapshot.entries {
+        root.insert(entry);
+    }
+    let tree = render_fixture_nodes(&root.children, 0);
+    let omitted = if snapshot.omitted_entries == 0 {
+        String::new()
+    } else {
+        format!(
+            r#"<p class="fixture-limit">{} more fixture entries are omitted to keep this report responsive.</p>"#,
+            snapshot.omitted_entries
+        )
+    };
+    let name = input.fixture_name.as_deref().unwrap_or("fixture");
+    format!(
+        r#"<section class="input-section fixture-section"><div class="fixture-heading"><div><h5>Starting files</h5><p><code>{name}</code> is copied into a fresh workspace for this test.</p></div><span>{count} entries shown</span></div><div class="fixture-browser"><ul class="fixture-tree">{tree}</ul></div>{omitted}</section>"#,
+        name = escape_html(name),
+        count = snapshot.entries.len(),
+    )
+}
+
+#[derive(Default)]
+struct FixtureTreeNode<'a> {
+    children: BTreeMap<String, FixtureTreeNode<'a>>,
+    entry: Option<&'a FixtureEntry>,
+}
+
+impl<'a> FixtureTreeNode<'a> {
+    fn insert(&mut self, entry: &'a FixtureEntry) {
+        let mut node = self;
+        for part in entry.path.split('/') {
+            node = node.children.entry(part.to_string()).or_default();
+        }
+        node.entry = Some(entry);
+    }
+}
+
+fn render_fixture_nodes(nodes: &BTreeMap<String, FixtureTreeNode<'_>>, depth: usize) -> String {
+    nodes
+        .iter()
+        .map(|(name, node)| {
+            let is_file = node
+                .entry
+                .is_some_and(|entry| entry.kind == FixtureEntryKind::File);
+            if is_file {
+                render_fixture_file(name, node.entry.expect("file node has an entry"))
+            } else {
+                let children = render_fixture_nodes(&node.children, depth + 1);
+                let open = if depth == 0 { " open" } else { "" };
+                format!(
+                    r#"<li class="fixture-directory"><details{open}><summary><span class="tree-icon" aria-hidden="true">▸</span><span>{name}</span></summary><ul>{children}</ul></details></li>"#,
+                    name = escape_html(name),
+                )
+            }
+        })
+        .collect()
+}
+
+fn render_fixture_file(name: &str, entry: &FixtureEntry) -> String {
+    let size = entry
+        .size_bytes
+        .map_or_else(|| "size unavailable".to_string(), format_file_size);
+    let preview = match (&entry.preview, entry.preview_kind) {
+        (Some(value), Some(kind)) => {
+            let kind_label = if kind == FixturePreviewKind::Binary {
+                "Binary preview (hexadecimal)"
+            } else {
+                "File contents"
+            };
+            let truncation = if entry.preview_truncated {
+                r#"<p class="preview-note">Preview truncated to keep the report responsive.</p>"#
+            } else {
+                ""
+            };
+            format!(
+                r#"<div class="file-preview"><p class="preview-label">{kind_label}</p>{output}{truncation}</div>"#,
+                output = output_block(value),
+            )
+        }
+        _ if entry.preview_truncated => r#"<div class="file-preview"><div class="empty-input">Preview omitted because the report's fixture budget was reached.</div></div>"#.to_string(),
+        _ => r#"<div class="file-preview"><div class="empty-input">This file could not be previewed.</div></div>"#.to_string(),
+    };
+    format!(
+        r#"<li class="fixture-file"><details><summary><span class="tree-icon" aria-hidden="true">·</span><span>{name}</span><small>{size}</small></summary>{preview}</details></li>"#,
+        name = escape_html(name),
+        size = escape_html(&size),
+    )
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else {
+        format!("{:.1} KiB", bytes as f64 / 1024.0)
+    }
 }
 
 fn render_streams(result: &TestResult) -> String {
@@ -430,6 +589,11 @@ const CSS: &str = r#"
 @media print{.topbar,.sidebar,.report-actions,.tab-list,.rerun{display:none!important}.shell{display:block}main{padding:0}.tab-panel[hidden]{display:block}.test-card{break-inside:avoid}}
 "#;
 
+const INPUT_CSS: &str = r#"
+.test-input{display:grid;gap:1.4rem}.input-intro h4{font:600 1.35rem Georgia,serif;margin:0 0 .25rem}.input-intro p,.fixture-heading p{margin:.25rem 0;color:var(--muted)}.input-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(220px,.7fr);gap:1px;background:var(--line);border:1px solid var(--line)}.input-card{background:var(--surface);padding:1rem;min-width:0}.input-card h5,.input-section>h5,.fixture-heading h5,.passed-detail>h4{font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;margin:0 0 .7rem}.command-input code{display:block;background:var(--code);color:var(--code-ink);padding:1rem;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace}.input-card dl{margin:0}.input-card dl div{display:flex;justify-content:space-between;gap:1rem;padding:.35rem 0;border-bottom:1px solid var(--soft)}.input-card dl div:last-child{border-bottom:0}.input-card dt{color:var(--muted)}.input-card dd{margin:0;text-align:right}.input-section{border-top:1px solid var(--line);padding-top:1.2rem}.empty-input,.input-empty{padding:1rem;background:var(--soft);color:var(--muted)}.environment{width:100%;border-collapse:collapse}.environment th,.environment td{text-align:left;padding:.55rem .7rem;border:1px solid var(--line)}.environment th{width:30%;font:600 12px ui-monospace,SFMono-Regular,Consolas,monospace}.fixture-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;margin-bottom:.8rem}.fixture-heading h5{margin-bottom:.2rem}.fixture-heading>span{font-size:.75rem;color:var(--muted)}.fixture-browser{border:1px solid var(--line);background:var(--surface);max-height:520px;overflow:auto;padding:.45rem 0}.fixture-tree,.fixture-tree ul{list-style:none;margin:0;padding:0}.fixture-tree ul{padding-left:1.15rem;border-left:1px solid var(--soft);margin-left:1rem}.fixture-tree details>summary{display:flex;align-items:center;gap:.45rem;min-height:2rem;padding:.25rem .75rem;cursor:pointer}.fixture-tree details>summary:hover{background:var(--soft)}.fixture-tree summary::marker{content:""}.fixture-tree small{margin-left:auto;color:var(--muted);font-size:.72rem}.tree-icon{display:inline-block;width:.75rem;color:var(--muted);font-family:ui-monospace,monospace}.fixture-directory>details[open]>summary .tree-icon{transform:rotate(90deg)}.fixture-file>details[open]>summary{background:var(--soft);font-weight:650}.file-preview{margin:.25rem .75rem 1rem 1.95rem;border:1px solid var(--line)}.file-preview .output{max-height:300px}.preview-label,.preview-note{margin:0;padding:.45rem .7rem;background:var(--soft);color:var(--muted);font-size:.72rem}.preview-note{border-top:1px solid var(--line)}.fixture-limit{color:var(--muted);font-size:.8rem;margin:.6rem 0 0}.passed-detail .test-input{color:var(--ink);margin:1rem 0 1.5rem}.passed-detail>h4{color:var(--ink);margin-top:1.5rem}
+@media(max-width:800px){.input-grid{grid-template-columns:1fr}.fixture-heading{align-items:flex-start;flex-direction:column}.fixture-browser{max-height:420px}.file-preview{margin-left:.75rem}}
+"#;
+
 const JS: &str = r#"
 document.querySelectorAll('[data-tabs]').forEach((tabs)=>{
   const buttons=[...tabs.querySelectorAll('[role="tab"]')];
@@ -505,5 +669,28 @@ mod tests {
             Some(2)
         );
         assert_eq!(first_differing_line("same", "same"), None);
+    }
+
+    #[test]
+    fn input_view_shows_stdin_environment_and_empty_workspace() {
+        let input = TestInput {
+            command: vec!["tinyhttp".to_string(), "serve".to_string()],
+            stdin: Some("GET / HTTP/1.1\r\n\r\n".to_string()),
+            env: BTreeMap::from([("MODE".to_string(), "strict".to_string())]),
+            timeout_ms: 750,
+            working_directory: "{project_root}".to_string(),
+            fixture_name: None,
+            fixture: None,
+        };
+
+        let html = render_test_input(Some(&input));
+
+        assert!(html.contains("tinyhttp serve"));
+        assert!(html.contains("GET / HTTP/1.1"));
+        assert!(html.contains("␍↵"));
+        assert!(html.contains("MODE"));
+        assert!(html.contains("strict"));
+        assert!(html.contains("750 ms"));
+        assert!(html.contains("empty temporary workspace"));
     }
 }

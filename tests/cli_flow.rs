@@ -276,9 +276,15 @@ fn starter_project_initializes_and_fails_current_stage() {
     let test_report = fs::read_to_string(&test_report_path).unwrap();
     assert!(test_report.contains("5 tests need attention"));
     assert!(test_report.contains("Needs attention"));
+    assert!(test_report.contains("data-tab=\"input\""));
     assert!(test_report.contains("data-tab=\"output\""));
     assert!(test_report.contains("event.key==='ArrowRight'"));
     assert!(test_report.contains("Show whitespace"));
+    assert!(test_report.contains("How this test starts"));
+    assert!(test_report.contains("Starting files"));
+    assert!(test_report.contains("basic_project"));
+    assert!(test_report.contains("README.md"));
+    assert!(test_report.contains("copied into a fresh workspace"));
     assert!(test_report.contains("deltaforge test --stage 01_scan_files --filter"));
     assert!(test_report.contains("Read the instructions"));
     assert!(test_report.contains("{fixture_path}"));

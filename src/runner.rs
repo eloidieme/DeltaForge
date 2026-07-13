@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -98,6 +99,47 @@ pub struct TestResult {
     pub report_stdout: Option<String>,
     #[serde(skip)]
     pub report_stderr: Option<String>,
+    #[serde(skip)]
+    pub input: Option<TestInput>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TestInput {
+    pub command: Vec<String>,
+    pub stdin: Option<String>,
+    pub env: BTreeMap<String, String>,
+    pub timeout_ms: u64,
+    pub working_directory: String,
+    pub fixture_name: Option<String>,
+    pub fixture: Option<FixtureSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FixtureSnapshot {
+    pub entries: Vec<FixtureEntry>,
+    pub omitted_entries: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct FixtureEntry {
+    pub path: String,
+    pub kind: FixtureEntryKind,
+    pub size_bytes: Option<u64>,
+    pub preview: Option<String>,
+    pub preview_kind: Option<FixturePreviewKind>,
+    pub preview_truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixtureEntryKind {
+    Directory,
+    File,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixturePreviewKind {
+    Text,
+    Binary,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -200,6 +242,7 @@ pub fn run_stage_tests(
                 stderr: String::new(),
                 report_stdout: None,
                 report_stderr: None,
+                input: None,
             })
             .collect::<Vec<_>>();
         if human_output {
@@ -389,6 +432,7 @@ fn run_test_case(
                 stderr: String::new(),
                 report_stdout: None,
                 report_stderr: None,
+                input: None,
             },
         };
 
@@ -459,14 +503,64 @@ fn run_test_case_in_temp(
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let input = should_capture_test_input(args).then(|| TestInput {
+        command: full_command
+            .iter()
+            .map(|value| sanitize_report_text(value, &fixture_path, temp_dir))
+            .collect(),
+        stdin: stdin
+            .as_ref()
+            .map(|value| sanitize_report_text(value, &fixture_path, temp_dir)),
+        env: env
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    sanitize_report_text(value, &fixture_path, temp_dir),
+                )
+            })
+            .collect(),
+        timeout_ms,
+        working_directory: "{project_root}".to_string(),
+        fixture_name: test.fixture.clone(),
+        fixture: test
+            .fixture
+            .as_ref()
+            .map(|_| capture_fixture_snapshot(&fixture_path)),
+    });
     let started = Instant::now();
-    let output = run_command_with_input_and_env(
+    let output = match run_command_with_input_and_env(
         &full_command,
         &context.root,
         timeout_ms,
         stdin.as_deref(),
         &env,
-    )?;
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            let message = sanitize_report_text(&format!("{error:#}"), &fixture_path, temp_dir);
+            return Ok(TestResult {
+                name: test.name.clone(),
+                passed: false,
+                failures: vec![message.clone()],
+                diagnostics: vec![TestDiagnostic {
+                    kind: "runner",
+                    title: "The test command did not finish".to_string(),
+                    summary: message,
+                    expected: None,
+                    actual: None,
+                }],
+                expectations: describe_expectations(&test.expect),
+                actual_exit_code: None,
+                duration_ms: Some(started.elapsed().as_millis()),
+                stdout: String::new(),
+                stderr: String::new(),
+                report_stdout: None,
+                report_stderr: None,
+                input,
+            });
+        }
+    };
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
@@ -492,7 +586,14 @@ fn run_test_case_in_temp(
         stderr,
         report_stdout: Some(report_stdout),
         report_stderr: Some(report_stderr),
+        input,
     })
+}
+
+fn should_capture_test_input(args: &TestArgs) -> bool {
+    !args.json
+        && !args.terminal
+        && (args.open || std::env::var_os("DELTAFORGE_NO_BROWSER").is_none())
 }
 
 fn sanitize_report_text(value: &str, fixture_path: &Path, temp_dir: &Path) -> String {
@@ -511,6 +612,150 @@ fn replace_report_path(value: &str, path: &Path, replacement: &str) -> String {
     } else {
         value.replace(&portable, replacement)
     }
+}
+
+const FIXTURE_ENTRY_LIMIT: usize = 300;
+const FIXTURE_TOTAL_PREVIEW_LIMIT: usize = 150_000;
+const FIXTURE_FILE_PREVIEW_LIMIT: usize = 20_000;
+const FIXTURE_BINARY_PREVIEW_LIMIT: usize = 256;
+
+fn capture_fixture_snapshot(root: &Path) -> FixtureSnapshot {
+    let mut discovered = Vec::new();
+    collect_fixture_entries(root, root, &mut discovered);
+    discovered.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let omitted_entries = discovered.len().saturating_sub(FIXTURE_ENTRY_LIMIT);
+    discovered.truncate(FIXTURE_ENTRY_LIMIT);
+    let mut preview_budget = FIXTURE_TOTAL_PREVIEW_LIMIT;
+    let entries = discovered
+        .into_iter()
+        .map(|(path, kind)| {
+            let absolute_path = root.join(path.replace('/', std::path::MAIN_SEPARATOR_STR));
+            let size_bytes = if kind == FixtureEntryKind::File {
+                fs::metadata(&absolute_path)
+                    .ok()
+                    .map(|metadata| metadata.len())
+            } else {
+                None
+            };
+            let (preview, preview_kind, preview_truncated) = if kind == FixtureEntryKind::File {
+                fixture_file_preview(&absolute_path, size_bytes, &mut preview_budget)
+            } else {
+                (None, None, false)
+            };
+            FixtureEntry {
+                path,
+                kind,
+                size_bytes,
+                preview,
+                preview_kind,
+                preview_truncated,
+            }
+        })
+        .collect();
+
+    FixtureSnapshot {
+        entries,
+        omitted_entries,
+    }
+}
+
+fn collect_fixture_entries(
+    root: &Path,
+    directory: &Path,
+    entries: &mut Vec<(String, FixtureEntryKind)>,
+) {
+    let Ok(read_dir) = fs::read_dir(directory) else {
+        return;
+    };
+    let mut children = read_dir.filter_map(Result::ok).collect::<Vec<_>>();
+    children.sort_by_key(|entry| entry.file_name());
+    for child in children {
+        let path = child.path();
+        let Ok(file_type) = child.file_type() else {
+            continue;
+        };
+        let relative = portable_relative_path(root, &path);
+        if file_type.is_dir() {
+            entries.push((relative, FixtureEntryKind::Directory));
+            collect_fixture_entries(root, &path, entries);
+        } else if file_type.is_file() {
+            entries.push((relative, FixtureEntryKind::File));
+        }
+    }
+}
+
+fn portable_relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn fixture_file_preview(
+    path: &Path,
+    size_bytes: Option<u64>,
+    preview_budget: &mut usize,
+) -> (Option<String>, Option<FixturePreviewKind>, bool) {
+    if *preview_budget == 0 {
+        return (None, None, true);
+    }
+    let limit = FIXTURE_FILE_PREVIEW_LIMIT.min(*preview_budget);
+    let Ok(file) = fs::File::open(path) else {
+        return (None, None, false);
+    };
+    let mut bytes = Vec::new();
+    if file
+        .take((limit + 1) as u64)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return (None, None, false);
+    }
+    let read_past_limit = bytes.len() > limit;
+    bytes.truncate(limit);
+    *preview_budget = preview_budget.saturating_sub(bytes.len());
+    let truncated = read_past_limit || size_bytes.is_some_and(|size| size > bytes.len() as u64);
+
+    if !bytes.contains(&0) {
+        match std::str::from_utf8(&bytes) {
+            Ok(text) => {
+                return (
+                    Some(text.to_string()),
+                    Some(FixturePreviewKind::Text),
+                    truncated,
+                );
+            }
+            Err(error) if error.error_len().is_none() => {
+                let text = String::from_utf8_lossy(&bytes[..error.valid_up_to()]).to_string();
+                return (Some(text), Some(FixturePreviewKind::Text), true);
+            }
+            Err(_) => {}
+        }
+    }
+
+    let binary = bytes
+        .iter()
+        .take(FIXTURE_BINARY_PREVIEW_LIMIT)
+        .enumerate()
+        .fold(String::new(), |mut output, (index, byte)| {
+            if index > 0 {
+                if index % 16 == 0 {
+                    output.push('\n');
+                } else {
+                    output.push(' ');
+                }
+            }
+            let _ = std::fmt::Write::write_fmt(&mut output, format_args!("{byte:02X}"));
+            output
+        });
+    (
+        Some(binary),
+        Some(FixturePreviewKind::Binary),
+        truncated || bytes.len() > FIXTURE_BINARY_PREVIEW_LIMIT,
+    )
 }
 
 fn compare_expectations(
@@ -990,6 +1235,38 @@ tests:
                 "\n{temp_dir}/log.txt",
             )
         );
+    }
+
+    #[test]
+    fn fixture_snapshot_captures_portable_tree_and_bounded_previews() {
+        let fixture = tempfile_dir_for_test();
+        std::fs::create_dir_all(fixture.join("src").join("empty")).unwrap();
+        std::fs::write(fixture.join("README.md"), "hello\n").unwrap();
+        std::fs::write(fixture.join("src").join("main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(fixture.join("bytes.bin"), [0, 1, 255]).unwrap();
+
+        let snapshot = capture_fixture_snapshot(&fixture);
+        let readme = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.path == "README.md")
+            .unwrap();
+        let binary = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.path == "bytes.bin")
+            .unwrap();
+
+        assert_eq!(snapshot.omitted_entries, 0);
+        assert!(snapshot.entries.iter().any(|entry| {
+            entry.path == "src/empty" && entry.kind == FixtureEntryKind::Directory
+        }));
+        assert_eq!(readme.preview.as_deref(), Some("hello\n"));
+        assert_eq!(readme.preview_kind, Some(FixturePreviewKind::Text));
+        assert_eq!(binary.preview.as_deref(), Some("00 01 FF"));
+        assert_eq!(binary.preview_kind, Some(FixturePreviewKind::Binary));
+
+        std::fs::remove_dir_all(fixture).unwrap();
     }
 
     #[test]
