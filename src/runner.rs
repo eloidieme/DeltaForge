@@ -496,11 +496,19 @@ fn run_test_case_in_temp(
 }
 
 fn sanitize_report_text(value: &str, fixture_path: &Path, temp_dir: &Path) -> String {
-    let fixture_path = fixture_path.to_string_lossy();
-    let temp_dir = temp_dir.to_string_lossy();
-    value
-        .replace(fixture_path.as_ref(), "{fixture_path}")
-        .replace(temp_dir.as_ref(), "{temp_dir}")
+    let value = replace_report_path(value, fixture_path, "{fixture_path}");
+    replace_report_path(&value, temp_dir, "{temp_dir}")
+}
+
+fn replace_report_path(value: &str, path: &Path, replacement: &str) -> String {
+    let native = path.to_string_lossy();
+    let value = value.replace(native.as_ref(), replacement);
+    let portable = native.replace('\\', "/");
+    if portable == native {
+        value
+    } else {
+        value.replace(&portable, replacement)
+    }
 }
 
 fn compare_expectations(
@@ -956,6 +964,21 @@ tests:
         assert_eq!(
             expand_variables("{fixture_path}/src:{temp_dir}", fixture, temp),
             "/tmp/fixture/src:/tmp/run"
+        );
+    }
+
+    #[test]
+    fn sanitizes_portable_windows_paths_in_report_output() {
+        let fixture = Path::new(r"C:\Temp\deltaforge-123\fixture");
+        let temp = Path::new(r"C:\Temp\deltaforge-123");
+
+        assert_eq!(
+            sanitize_report_text(
+                "C:/Temp/deltaforge-123/fixture/src/main.rs\nC:/Temp/deltaforge-123/log.txt",
+                fixture,
+                temp,
+            ),
+            "{fixture_path}/src/main.rs\n{temp_dir}/log.txt"
         );
     }
 
