@@ -4,7 +4,7 @@
 
 Make `flashindex index` produce one byte-stable representation: tokens sorted once, paths sorted once, and no duplicate file within a posting.
 
-Stage 05 established the inverted relationship. This stage makes that relationship dependable enough to save, compare, and reproduce.
+The inverted relationship exists; canonicalization makes it dependable enough to save, compare, and reproduce.
 
 ## Background
 
@@ -30,13 +30,13 @@ open src/storage.rs
 retry src/main.rs src/network.rs
 ```
 
-For a human reader, either may be understandable. For saved artifacts, regression tests, and later parallel construction, “equivalent” is not precise enough. FlashIndex chooses one **canonical** representation: a single agreed form for the same logical data.
+For a human reader, either may be understandable. For a saved artifact that may be built by several workers and compared across machines, “equivalent” is not precise enough. FlashIndex chooses one **canonical** representation: a single agreed form for the same logical data.
 
-Tokens are ordered by their byte text. Paths within each token are also ordered, after duplicates have been removed. The result depends only on the corpus, never on discovery order or the timing of later workers.
+Tokens are ordered by their byte text. Paths within each token are also ordered, after duplicates have been removed. The result depends only on the corpus, never on discovery order or worker timing.
 
 ## Requirements
 
-Keep `flashindex index <path>` and the Stage 05 line format.
+Keep `flashindex index <path>` and its token-first line format.
 
 Tighten its output as follows:
 
@@ -74,7 +74,7 @@ After measuring index construction, record input bytes, token occurrences, disti
 1. Which work belongs to tokenization, grouping, deduplication, and ordering?
 2. How would many repeated tokens affect the relationship between occurrence count and output size?
 3. Which fixture would stress a very large posting list?
-4. Which byte-identical comparison should protect every later optimization?
+4. Which byte-identical comparison should protect an optimized index builder?
 
 ## Non-goals
 

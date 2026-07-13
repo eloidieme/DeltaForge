@@ -2,9 +2,9 @@
 
 ## Goal
 
-Allow the learner to choose a positive number of worker threads while keeping the finished index byte-for-byte identical to the canonical single-threaded result.
+Allow the caller to choose a positive number of worker threads while keeping the finished index byte-for-byte identical to the canonical single-threaded result.
 
-This stage is about parallel correctness. The next stage will ask whether the extra workers are actually faster.
+The first requirement of parallel indexing is correctness: scheduling may change, but the index may not.
 
 ## Background
 
@@ -27,7 +27,7 @@ retry src/main.rs src/network.rs
 
 Workers do not finish in a predictable order. If output depends on whichever worker returns first, paths may change order between runs. If every worker mutates one shared index during tokenization, access must be coordinated, and that coordination can make the program harder to reason about.
 
-A useful way to think about the problem is to separate independent work from combination. Each worker may produce partial evidence. A later merge produces the same sorted, deduplicated structure Stage 06 already defined. The exact design remains yours; the observable requirement is that scheduling never changes the bytes.
+A useful way to think about the problem is to separate independent work from combination. Each worker may produce partial evidence. A later merge produces the same sorted, deduplicated structure as canonical indexing. The exact design remains yours; the observable requirement is that scheduling never changes the bytes.
 
 More threads than files is not an error. Some workers may simply receive no file. Zero threads, however, describes no possible workforce and must be rejected clearly.
 
@@ -69,7 +69,7 @@ All `deltaforge test` cases pass and repeated runs across several valid thread c
 
 ## Non-goals
 
-- Meeting a speed target; measurement comes next.
+- Meeting a speed target.
 - Printing worker logs or timing information in index output.
 - Requiring a particular work queue, locking strategy, or merge algorithm.
 - Changing tokenization or index semantics.

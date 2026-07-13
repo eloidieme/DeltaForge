@@ -10,7 +10,7 @@ Final output tells you what a program produced, but often not how it got there. 
 
 The word “before” is important. On the line for `ADD`, the trace should show the two operands that `ADD` is about to consume. A post-instruction snapshot would show the result instead. Both views can be useful, but mixing their timing makes a trace difficult to read.
 
-Trace mode should observe the interpreter you already built. If it implements a second execution loop, the debugger and the normal runner can quietly disagree about the language.
+Trace mode should observe the same interpreter as `run`. If it implements a second execution loop, the debugger and the normal runner can quietly disagree about the language.
 
 ## Requirements
 

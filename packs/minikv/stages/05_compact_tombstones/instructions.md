@@ -4,7 +4,7 @@
 
 Extend compaction so a key whose latest operation is `DEL` does not reappear in the compacted live state.
 
-Tombstones made deletion durable during replay. This stage protects the same meaning while old history is discarded.
+Tombstones make deletion durable during replay. Compaction must protect the same meaning while old history is discarded.
 
 ## Background
 
@@ -33,7 +33,7 @@ In MiniKV's single-log model, the compacted artifact may omit both the old value
 
 ## Requirements
 
-Keep `minikv compact <input-log> <output-log>` and all Stage 07 file behavior.
+Keep `minikv compact <input-log> <output-log>` with complete destination replacement, parent creation, and an unchanged input file.
 
 Replay both `SET` and `DEL`. Write one sorted `SET` record for every key whose latest operation is `SET`. Omit every key whose latest operation is `DEL`. Preserve other live keys and never write a stale pre-deletion value.
 

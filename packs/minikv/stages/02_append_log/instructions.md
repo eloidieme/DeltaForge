@@ -4,11 +4,11 @@
 
 Make one key/value pair survive after MiniKV exits by writing a `SET` record to a log file.
 
-This stage handles a new or empty log. Preserving records already in the file will be the next step.
+This command handles a new or empty log. Its only durable state is the first complete record.
 
 ## Background
 
-Stage 01 loses its pair as soon as the process ends. To recover information later, the program must leave evidence outside its own memory.
+An in-memory pair disappears as soon as the process ends. To recover information later, the program must leave evidence outside its own memory.
 
 For the pair:
 
@@ -48,8 +48,6 @@ SET <key> <value>\n
 
 Create the file and any missing parent directories. Preserve spaces inside the value argument. On success, exit 0 and print a line containing `wrote`. Invalid arity must exit non-zero.
 
-The next stage extends the same command to non-empty logs.
-
 ## Example
 
 ```console
@@ -76,7 +74,7 @@ All `deltaforge test` cases pass and a later process can read the complete recor
 
 ## Non-goals
 
-- Preserving existing records in a non-empty log; that is the next stage.
+- Preserving existing records in a non-empty log.
 - Reading values back.
 - Flush or `fsync` guarantees after power loss.
 - Locking and concurrent writers.

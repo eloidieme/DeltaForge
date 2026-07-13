@@ -34,7 +34,7 @@ tombstones: 1
 
 `tombstones` counts deletion activity, not currently absent keys. Two `DEL` records for the same key contribute two tombstones even though they describe one absent key.
 
-Putting these numbers together helps a learner see why compaction exists. A large gap between entries and live keys suggests accumulated history. It does not automatically prove that compaction should run now; file size, workload, and operational cost would matter in a production policy.
+Putting these numbers together shows why compaction exists. A large gap between entries and live keys suggests accumulated history. It does not automatically prove that compaction should run; file size, workload, and operational cost also matter.
 
 ## Requirements
 
@@ -75,11 +75,11 @@ tombstones: 1
 
 ## Success criteria
 
-All `deltaforge test` cases pass and each counter agrees with Stage 09 replay semantics for the same bytes.
+All `deltaforge test` cases pass and each counter agrees with normal replay semantics for the same bytes.
 
 ## Non-goals
 
 - Reporting file size, latency, or per-key statistics.
 - JSON or interactive output.
 - Automatically compacting the measured log.
-- Choosing a production compaction threshold.
+- Choosing an automatic compaction threshold.

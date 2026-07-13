@@ -8,7 +8,7 @@ Add `byteforgevm disasm <program-file>`, which prints a clean, numbered listing 
 
 Before a virtual machine can run a program, it has to decide what the program contains. ByteForgeVM's source format is simple: one instruction per non-empty line. Loading those lines into a sequence gives each instruction a stable address.
 
-Addresses let people and instructions refer to the same place. A debugger can say “instruction 3 failed,” and a later jump can say “continue at instruction 3.” This first stage concentrates on that shared map before the machine has any execution state.
+Addresses let people and instructions refer to the same place. A debugger can say “instruction 3 failed,” and a jump can say “continue at instruction 3.” Disassembly establishes that shared map without executing the program.
 
 A readable instruction listing is called a disassembly. Tools such as `objdump` disassemble packed machine code; yours starts from text, but the purpose is the same.
 
@@ -20,7 +20,7 @@ Read the UTF-8 program file. Ignore empty lines. For every remaining line:
 2. normalize spacing between them to one space;
 3. print its zero-based address as four digits, followed by the instruction.
 
-The required shape is `0000 OP` or `0000 OP ARG`. Preserve the opcode's spelling. This stage describes instructions; it does not yet decide whether an opcode can execute.
+The required shape is `0000 OP` or `0000 OP ARG`. Preserve the opcode's spelling. Disassembly describes instructions; it does not decide whether an opcode can execute.
 
 ## Example
 
@@ -55,7 +55,7 @@ All tests pass, and the same source program always receives the same addressed l
 ### Reflection
 
 1. Why is an address based on instruction position rather than source byte position here?
-2. What does the disassembler know about `ADD`, and what does it deliberately not know yet?
+2. What does the disassembler know about `ADD`, and what does execution need to know beyond that?
 3. Why is it useful to finish loading before rendering the listing?
 
 ## Non-goals

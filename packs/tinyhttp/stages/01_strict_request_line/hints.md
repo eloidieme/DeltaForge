@@ -1,6 +1,6 @@
 # Hint 1
 
-Count fields before assigning meanings. Fewer than three and more than three are both malformed for this project.
+Count fields before assigning meanings. Fewer than three and more than three are both malformed under TinyHTTP's request-line grammar.
 
 # Hint 2
 

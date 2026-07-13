@@ -32,7 +32,7 @@ Look at this line:
 let retry_count2 = load_retry_count();
 ```
 
-A person can easily see names such as `let`, `retry_count2`, and `load_retry_count`. A computer needs an exact rule for finding their boundaries. FlashIndex will use a deliberately simple rule for recognizing identifier-like tokens across different programming languages.
+A person can easily see names such as `let`, `retry_count2`, and `load_retry_count`. A computer needs an exact rule for finding their boundaries. FlashIndex uses a compact rule for recognizing identifier-like tokens across different programming languages.
 
 Third: what should a search result remember?
 
@@ -60,19 +60,17 @@ The pieces of FlashIndex appear in many larger tools. Directory walking is used 
 
 The project is also an exercise in defining behavior. A search tool cannot be correct until it says which files, tokens, paths, and ordering rules count as correct.
 
-## The choices are policies, not laws of nature
+## Choosing what belongs in the corpus
 
-Search tools have to decide what to include. FlashIndex skips `.git`, `target`, `build`, and `node_modules` because those names commonly contain version-control data, generated build output, or downloaded dependencies. Searching them would often duplicate results and slow the exercise down.
+Search tools have to decide what to include. FlashIndex skips `.git`, `target`, `build`, and `node_modules` because those names commonly contain version-control data, generated build output, or downloaded dependencies. Searching them would often duplicate results and waste time.
 
-Those four names are not universally correct. A project can use a different build directory, and someone may occasionally want to inspect a dependency. They are a fixed policy for this course, chosen so every learner and every test works from the same definition. A production tool would normally make the policy configurable.
+Those four names form FlashIndex's default boundary; they are not a universal list. A project can use a different build directory, and someone may occasionally want to inspect a dependency. A configurable search tool could expose that decision to its user. FlashIndex keeps one fixed definition so every command agrees about the files it sees.
 
-The extension list is another such choice. FlashIndex includes a modest group of Rust, C, C++, Python, Markdown, text, and CMake files. It does not claim that other languages are unimportant. It simply avoids turning file-type detection into a project of its own.
+The extension list is another practical boundary. FlashIndex includes Rust, C, C++, Python, Markdown, plain-text, and CMake files. Other formats are not considered searchable here. This keeps corpus selection based on names instead of adding content sniffing and encoding detection.
 
-There is no special rule for `CMakeLists.txt`. Because that filename already ends in `.txt`, the ordinary text rule accepts it. Files such as `toolchain.cmake` are the reason `.cmake` appears separately. When a rule is arbitrary, the instructions should say so; when one rule already covers a case, the project should not invent a second explanation.
+## From files to ranked results
 
-## How the stages build the search tool
-
-The course now takes fourteen smaller steps:
+The design becomes easier to reason about as a chain of connected capabilities:
 
 1. Walk a directory and print every regular file in stable order.
 2. Choose which filenames belong to the searchable corpus.
@@ -89,7 +87,7 @@ The course now takes fourteen smaller steps:
 13. Score files that match several query tokens.
 14. Break score ties and limit the final ranked result.
 
-The split matters. “Build an inverted index” and “make its bytes canonical” are related but different problems. So are “use several workers” and “prove that the workers made the program faster.” Treating them separately leaves room to understand each new idea before another one arrives.
+Each capability prepares information needed by the next. File discovery defines the corpus; tokenization turns that corpus into occurrences; canonical indexing makes those occurrences reusable; persistence, parallel construction, and ranking build on the same definitions.
 
 ## From characters to locations
 
@@ -102,7 +100,7 @@ FlashIndex uses a small token rule:
 
 With that rule, `retry_count2` is one token, while the leading digits in `123alpha` are skipped and `alpha` begins where the letter `a` appears.
 
-Locations use one-based line and column numbers because those are natural to display to a person. The implementation still has to be precise about what a column counts. In this project, the tested source is ASCII and the column points to the first byte of the printed token. More advanced tools must choose how to handle Unicode code points, grapheme clusters, tabs, and editor display columns.
+Locations use one-based line and column numbers because those are natural to display to a person. FlashIndex defines a column as the byte position where the printed token begins. Since its tokens contain only ASCII characters, every character inside a token occupies one byte. A Unicode-aware search tool would need a separate decision about code points, grapheme clusters, tabs, and editor display columns.
 
 The same token rule must be reused later. If indexing treats `_cache` as one token but searching treats `_` as punctuation, a correctly built index can still appear broken. Shared definitions matter as much as shared data structures.
 
@@ -122,7 +120,7 @@ retry → which files?
 
 The index inverts the relationship. Its per-token list of files is often called a **posting list**. A token may occur twenty times in one file, but a file-level posting list should name that file once. Occurrences and postings answer different questions.
 
-FlashIndex also sorts token records and paths. Filesystems do not promise to discover directory entries in the same order on every machine, and parallel workers do not promise to finish in a convenient order. Sorting turns many possible construction histories into one canonical result. That gives tests stable bytes and makes saved artifacts easier to compare.
+FlashIndex also sorts token records and paths. Filesystems do not promise to discover directory entries in the same order on every machine, and parallel workers do not promise to finish in a convenient order. Sorting turns many possible construction histories into one canonical result. Saved artifacts are then reproducible and easy to compare byte for byte.
 
 ## Saving work for later
 
@@ -130,19 +128,19 @@ An in-memory index disappears when the process exits. Persistence lets one comma
 
 The saved file is a contract between a writer and a future reader. The writer must replace old contents completely; otherwise rebuilding a short index over a longer one can leave stale bytes at the end. The reader must preserve exact token matching and return the same sorted, deduplicated paths as the in-memory representation.
 
-Production formats also need version markers, escaping rules, corruption detection, and plans for upgrades. This project keeps the format small, but the underlying question is already real: what must remain true when the producer and consumer do not run at the same time?
+Long-lived formats also need version markers, escaping rules, corruption detection, and plans for upgrades. FlashIndex keeps its format small, but the underlying question is already real: what must remain true when the producer and consumer do not run at the same time?
 
 ## Measuring before optimizing
 
-The benchmark stages distinguish an observation from a claim. Reporting elapsed time is an observation. Claiming that eight threads are faster is a comparison that requires the same workload, the same output, and repeated measurements.
+A benchmark distinguishes an observation from a claim. Reporting elapsed time is an observation. Claiming that eight threads are faster is a comparison that requires the same workload, the same output, and repeated measurements.
 
-Parallel construction therefore arrives in two steps. First, worker-local results are merged into byte-identical canonical output. Only then does a benchmark matrix compare thread counts and derive speedup from their medians. A fast wrong result is not an optimization.
+Correctness comes first: worker-local results must merge into byte-identical canonical output. A benchmark matrix can then compare thread counts and derive speedup from their medians. A fast wrong result is not an optimization.
 
 Extra workers also have costs: dividing work, starting threads, combining partial maps, and contending for memory or shared structures. Small corpora may become slower. That is not a paradox; it is evidence that parallelism has overhead and should be measured on a representative workload.
 
 ## Ranking more than one token
 
-An exact query asks whether one token exists. A multi-token query creates degrees of usefulness. FlashIndex's final scoring rule is intentionally understandable:
+An exact query asks whether one token exists. A multi-token query creates degrees of usefulness. FlashIndex uses three scoring rules:
 
 1. prefer files that cover more distinct query tokens;
 2. then prefer files with more total occurrences of those tokens;
@@ -150,7 +148,7 @@ An exact query asks whether one token exists. A multi-token query creates degree
 
 The first rule rewards breadth; the second rewards density; the third does not pretend to measure relevance at all. It exists to make the order complete and repeatable. The command prints only the top ten results after that full order is established.
 
-Search systems have explored much richer ranking for decades. Printed concordances already mapped words to locations. Later information-retrieval systems used statistics such as term frequency and document frequency, and modern engines often use descendants of TF-IDF or BM25. FlashIndex keeps the scoring visible enough to calculate by hand before introducing those models.
+Search systems have explored much richer ranking for decades. Printed concordances already mapped words to locations. Later information-retrieval systems used statistics such as term frequency and document frequency, and modern engines often use descendants of TF-IDF or BM25. FlashIndex keeps its scores visible enough to calculate by hand.
 
 ## Words you will meet
 
@@ -165,6 +163,6 @@ Search systems have explored much richer ranking for decades. Printed concordanc
 
 ## What a strong solution looks like
 
-A strong solution has one corpus policy and one token definition reused everywhere. It prints portable `/`-separated relative paths, does not depend on filesystem or worker completion order, replaces persisted output rather than leaving stale data, and checks that an optimization preserves exact results. Each stage should be understandable from a small example before it is generalized to a large project.
+A strong solution has one corpus policy and one token definition reused everywhere. It prints portable `/`-separated relative paths, does not depend on filesystem or worker completion order, replaces persisted output rather than leaving stale data, and checks that an optimization preserves exact results. Every behavior can be understood from a small example before it is generalized to a large project.
 
 Natural extensions include Unicode-aware tokens, configurable ignore rules, comments-and-strings awareness, incremental updates, deleted-file detection, phrase search, prefix search, and BM25-style ranking. Each extension changes the product's definition of correctness. Write that changed definition down before choosing a clever data structure.

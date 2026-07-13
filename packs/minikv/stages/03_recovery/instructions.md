@@ -4,7 +4,7 @@
 
 Read a valid append-only log and return the latest value recorded for one key.
 
-The log has preserved history across processes. This stage turns that history back into current state.
+The log preserves history across processes. Recovery turns that history back into current state.
 
 ## Background
 
@@ -30,7 +30,7 @@ The latest operation for a key wins. This rule is the central recovery invariant
 
 The value is the remainder of the record after `SET` and the key. In `SET title hello world`, the value is `hello world`, not only `hello`. The writer preserved the argument, so the reader must preserve it too.
 
-A key absent from a valid log is an ordinary lookup result. It should produce no value and still succeed. Damaged or ambiguous history is a different problem, addressed explicitly in the next stage.
+A key absent from a valid log is an ordinary lookup result. It should produce no value and still succeed. Damaged or ambiguous history is an error rather than another form of absence.
 
 ## Requirements
 
@@ -64,11 +64,11 @@ The earlier value remains in the file but no longer determines the current state
 
 ## Success criteria
 
-All `deltaforge test` cases for this stage pass and replaying unchanged valid bytes always produces the same current value.
+All `deltaforge test` cases pass and replaying unchanged valid bytes always produces the same current value.
 
 ## Non-goals
 
-- Deciding how to handle malformed records; the next stage defines failure.
+- Defining the complete malformed-record grammar.
 - Deletion records.
 - Random-access indexes or partial replay.
 - Modifying the log during a read.

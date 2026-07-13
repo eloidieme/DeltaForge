@@ -7,4 +7,4 @@ Before implementing ranges, answer:
 3. In what order should path safety, number parsing, bounds checks, and file reads occur?
 4. What response information lets a client place this fragment in the full representation?
 5. How would suffix or multiple ranges complicate your current response model?
-6. Which parts of Stage 02's security boundary must remain unchanged?
+6. Which parts of the document-root security boundary must remain unchanged?

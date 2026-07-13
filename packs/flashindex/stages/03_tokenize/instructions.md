@@ -2,9 +2,9 @@
 
 ## Goal
 
-Read the corpus chosen in Stage 02 and print every identifier-like token together with the path, line, and column where it begins.
+Read the searchable corpus and print every identifier-like token together with the path, line, and column where it begins.
 
-This is the first stage that looks inside a source file. It turns file contents into searchable occurrences without trying to understand an entire programming language.
+Tokenization is the first operation that looks inside a source file. It turns file contents into searchable occurrences without trying to understand an entire programming language.
 
 ## Background
 
@@ -20,7 +20,7 @@ The act of dividing text into searchable pieces is called **tokenization**. Each
 
 A Rust compiler has rules for comments, strings, lifetimes, numbers, and punctuation. A Python or C++ compiler has a different set of rules. FlashIndex is not compiling these files, so using a complete language grammar would be unnecessary and would make a multi-language corpus difficult to define.
 
-Instead, FlashIndex uses one deliberately small rule. A token begins with an ASCII letter or `_`. After that first character, ASCII letters, digits, and `_` remain part of the same token.
+FlashIndex uses one compact rule. A token begins with an ASCII letter or `_`. After that first character, ASCII letters, digits, and `_` remain part of the same token.
 
 Under this rule:
 
@@ -32,13 +32,13 @@ file-name     → file, name
 
 The `123` in `123alpha` is skipped because a digit cannot begin a token. The `alpha` portion still begins a valid token at its real position.
 
-A token by itself is not yet a useful search result. If FlashIndex prints `retry_count2`, the learner still needs to know where it came from. Each occurrence therefore carries a root-relative path, a one-based line number, and a one-based byte column.
+A token by itself is not a useful search result. If FlashIndex prints `retry_count2`, the user still needs to know where it came from. Each occurrence therefore carries a root-relative path, a one-based line number, and a one-based byte column.
 
 The first character in a file is at line 1, column 1. Columns count bytes rather than displayed glyphs. Tokens are ASCII-only in this project, so every character within a token occupies one byte.
 
 ## Requirements
 
-Add `flashindex tokenize <path>`. Read only the files admitted by Stage 02.
+Add `flashindex tokenize <path>`. Read only files admitted by the corpus policy.
 
 Recognize the longest runs that begin with an ASCII letter or `_` and continue through ASCII letters, digits, or `_`. Skip leading digits until a valid token start appears. Preserve uppercase and lowercase spelling.
 
@@ -48,7 +48,7 @@ Print every occurrence as:
 relative/path:line:column token
 ```
 
-Use one-based line and byte-column positions. Process files in sorted portable-path order, then print occurrences in their source order within each file. Comments and string literals are ordinary searchable text at this stage.
+Use one-based line and byte-column positions. Process files in sorted portable-path order, then print occurrences in their source order within each file. Comments and string literals remain ordinary searchable text.
 
 ## Example
 

@@ -20,7 +20,7 @@ Consider this program:
 
 The call saves address 1, then moves to 3. `RET` restores 1, so `PRINT` receives the value prepared by the routine. This saved location is called a return address.
 
-Return addresses do not belong on the value stack. Program arithmetic should never be able to add, print, or accidentally remove the VM's control information. Give them a separate call stack, even though this stage uses only one saved address.
+Return addresses do not belong on the value stack. Program arithmetic should never be able to add, print, or accidentally remove the VM's control information. A separate call stack gives control state its own meaning, even when only one address is saved.
 
 ## Requirements
 
@@ -29,7 +29,7 @@ Extend `run` with:
 - `CALL <address>`: validate the target, save `ip + 1` on a separate call stack, then jump to the target;
 - `RET`: remove the latest saved return address and continue there.
 
-Keep every earlier opcode unchanged. A normal call must resume at the instruction immediately after `CALL`.
+Preserve every existing opcode. A normal call must resume at the instruction immediately after `CALL`.
 
 ## Example
 
@@ -57,6 +57,6 @@ All tests pass, and you can trace the example's instruction pointer and both sta
 
 ## Non-goals
 
-- Nested calls and call-stack failure cases; those come next.
+- Nested calls and call-stack failure cases.
 - Arguments, local variables, or full stack frames.
 - Named functions or linking.

@@ -5,10 +5,10 @@ tests:
     expect:
       exit_code: 0
       stdout_contains:
-        - "CMakeLists.txt"
         - "README.md"
         - "cmake/toolchain.cmake"
         - "include/search.hpp"
+        - "notes.txt"
         - "scripts/generate.py"
         - "src/main.rs"
         - "src/search.cpp"

@@ -10,11 +10,11 @@ One saved return address could live in a single variable. That stops working as 
 
 A stack has exactly the required order. If routine A calls B and B calls C, C must return to B before B can return to A. The most recently saved return address is the first one restored.
 
-This stage also closes three boundaries. `RET` cannot work when no call is active. `CALL` must not save a return address if its target is invalid. `HALT` ends the entire VM immediately, even if execution is currently inside a routine; it is not an implicit `RET`.
+Nested calls also expose three boundaries. `RET` cannot work when no call is active. `CALL` must not save a return address if its target is invalid. `HALT` ends the entire VM immediately, even if execution is currently inside a routine; it is not an implicit `RET`.
 
 ## Requirements
 
-Allow `CALL` instructions to nest using the separate call stack from Stage 09. `RET` pops the most recent return address.
+Allow `CALL` instructions to nest using the separate return-address stack. `RET` pops the most recent return address.
 
 - `RET` with an empty call stack exits non-zero with `call stack underflow`.
 - A negative or out-of-program `CALL` target exits non-zero with `invalid jump` before call state changes.

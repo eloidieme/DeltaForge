@@ -1,6 +1,6 @@
 # Hint 1
 
-Derive all three counters from the same corpus and occurrence definitions used by earlier commands; a summary should not invent a second scanner or tokenizer.
+Derive all three counters from the shared corpus and occurrence definitions; a summary should not invent a second scanner or tokenizer.
 
 # Hint 2
 

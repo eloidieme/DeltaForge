@@ -6,13 +6,13 @@ Make the disassembler fail clearly when it cannot read the program or when a wri
 
 ## Background
 
-The happy path in Stage 01 assumed the file existed and every operand looked like `5` or `-12`. Those assumptions sit at the boundary between outside text and the machine's internal instruction list.
+A valid disassembly assumes the file exists and every written operand looks like `5` or `-12`. Those assumptions sit at the boundary between outside text and the machine's internal instruction list.
 
-A useful loader does not let an operating-system error or a failed number conversion turn into a panic. It returns the problem to the person running the tool. Notice that this stage checks the *shape* of a numeric operand, not whether a particular opcode needs one. `PUSH many` cannot become an integer at all; deeper instruction rules come later.
+A useful loader does not let an operating-system error or a failed number conversion turn into a panic. It returns the problem to the person running the tool. Loading checks the *shape* of a written numeric operand, not whether a particular opcode requires one. `PUSH many` cannot become an integer at all; a bare `PUSH` is syntactically loadable but incomplete for execution.
 
 ## Requirements
 
-Keep the valid disassembly behavior from Stage 01. If the program file cannot be opened or read, exit non-zero and write an explanation to standard error. If a present operand is not a signed integer, exit non-zero and include `invalid argument` in standard error.
+Keep the valid disassembly behavior. If the program file cannot be opened or read, exit non-zero and write an explanation to standard error. If a present operand is not a signed integer, exit non-zero and include `invalid argument` in standard error.
 
 Do not print a partial disassembly as though loading had succeeded. Parse the complete instruction list before rendering it.
 
@@ -33,7 +33,7 @@ Running `disasm` on it exits with status 1 and reports an invalid argument.
 
 ## Success criteria
 
-All tests pass, invalid input does not panic, and valid programs still produce the Stage 01 listing.
+All tests pass, invalid input does not panic, and valid programs still produce the addressed listing.
 
 ### Reflection
 

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Teach FlashIndex to discover the files inside a project.
+Add a command that discovers the files inside a project.
 
 At the end of this stage, a command such as:
 
@@ -12,7 +12,7 @@ $ flashindex scan project
 
 will print a stable list of the files beneath `project`.
 
-This does not search their contents yet. It gives every later stage a dependable answer to a more basic question: which files exist?
+This does not search their contents. It gives the rest of the search pipeline a dependable answer to a more basic question: which files exist?
 
 ## Background
 
@@ -43,7 +43,7 @@ An absolute path might look like this:
 /Users/maya/projects/flashindex/src/main.rs
 ```
 
-That path includes information about one person's computer. Another learner will have the project somewhere else. FlashIndex therefore reports paths relative to the directory it was asked to scan:
+That path includes information about one person's computer. The same project can live somewhere else on another machine. FlashIndex therefore reports paths relative to the directory it was asked to scan:
 
 ```text
 src/main.rs
@@ -55,7 +55,7 @@ There is one more source of variation. A filesystem does not promise to return d
 
 Finally, the scanner skips four directory names: `.git`, `target`, `build`, and `node_modules`. These commonly contain version-control data, compiler output, or downloaded dependencies rather than files authored as part of the project.
 
-This is a small policy chosen for the course. It is not a complete or universal ignore list. Keeping it fixed lets this stage focus on traversal; configurable ignore rules can remain a separate problem.
+This is FlashIndex's default ignore policy, not a complete or universal list. It covers several common sources of internal, generated, and downloaded files. Configurable ignore rules would be a separate feature.
 
 ## Requirements
 
@@ -104,7 +104,7 @@ After `deltaforge bench`, write down the file count, fixture size, median time, 
 
 ## Non-goals
 
-- Deciding which file extensions are searchable. That comes next.
+- Deciding which file extensions are searchable.
 - Reading or understanding file contents.
 - Watching for later changes or scanning remote storage.
 - Making the ignore list configurable.

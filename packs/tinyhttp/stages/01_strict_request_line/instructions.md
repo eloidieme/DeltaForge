@@ -4,7 +4,7 @@
 
 Make request-line parsing fail when the first line is empty or does not contain exactly three whitespace-separated fields.
 
-Stage 01 described valid input. This stage makes invalid input visible rather than allowing later code to guess what the client meant.
+The valid parser has one defined input shape. Strict parsing makes every other shape visible instead of guessing what the client meant.
 
 ## Background
 
@@ -32,7 +32,7 @@ Keep both `tinyhttp parse` forms.
 
 The first line must contain exactly three non-empty whitespace-separated fields. Reject fewer or more fields with a non-zero exit and stderr containing `malformed request line`. Reject empty input with a non-zero exit and stderr containing `missing request line`.
 
-Do not print a success-shaped `method`, `path`, or `version` report after failure. Valid requests retain all Stage 01 output.
+Do not print a success-shaped `method`, `path`, or `version` report after failure. Valid requests retain the existing three-line output.
 
 ## Example
 

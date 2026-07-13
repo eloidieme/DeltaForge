@@ -1,6 +1,6 @@
 # Design Prompt — Compaction without changing meaning
 
-Before implementing this stage, write a short note answering:
+Before implementing compaction, write a short note answering:
 
 1. What does it mean for the input and output logs to be logically equivalent?
 2. Which historical records can be discarded with certainty?

@@ -1,5 +1,7 @@
 # ByteForgeVM
 
+## What you are building
+
 A computer processor follows a stream of small instructions: move a value, combine two values, jump somewhere else, stop. Programming languages hide most of that machinery, which is usually helpful. ByteForgeVM makes a tiny version visible again.
 
 You will build a virtual machine: a program that reads and executes instructions for an imaginary computer. Its language is written as plain text, so there is no binary encoding to decipher first. A complete program can be as small as this:
@@ -40,7 +42,7 @@ As the project grows, the virtual machine keeps track of three things:
 
 The instruction pointer begins at address 0. Most instructions move it to the following address, but jumps and calls can replace that normal next step. The two stacks are separate because a number such as 12 and a return address such as 12 may look identical while meaning completely different things.
 
-## How the stages build the machine
+## From instruction text to execution trace
 
 1. Load a program and print a numbered instruction listing.
 2. Report files and numeric operands that cannot be loaded.
@@ -54,11 +56,11 @@ The instruction pointer begins at address 0. Most instructions move it to the fo
 10. Support nested calls and protect the call stack's boundaries.
 11. Print a deterministic trace of the machine before each instruction.
 
-The division is deliberate. A jump is easier to understand before it is combined with a condition; a single call is easier to see before several return addresses are stacked together.
+The capabilities depend on one another. Execution needs a loaded instruction sequence; branches need an explicit instruction pointer; calls need validated branch targets and a separate place for return addresses; tracing observes the same state transitions as ordinary execution.
 
 ## Instruction reference
 
-By the final stage, the machine understands these instructions:
+The complete machine understands these instructions:
 
 | Instruction | Meaning | Value-stack effect |
 |---|---|---|
@@ -85,7 +87,7 @@ Calls add another kind of movement. `CALL 8` must remember the address after the
 
 ## A little history
 
-Stack-oriented machines are not just teaching devices. The Burroughs B5000 family used stack-based execution in the early 1960s. Forth made a visible data stack central to its programming model. Smalltalk implementations, the Java Virtual Machine, and WebAssembly all use stack ideas in different forms.
+Stack-oriented machines are not just classroom abstractions. The Burroughs B5000 family used stack-based execution in the early 1960s. Forth made a visible data stack central to its programming model. Smalltalk implementations, the Java Virtual Machine, and WebAssembly all use stack ideas in different forms.
 
 Real runtimes add local variables, stack frames, heaps, garbage collection, verification, and optimized instruction dispatch. ByteForgeVM leaves those out so the essential loop remains readable: fetch the instruction at the current pointer, inspect the required state, perform one rule, and decide what comes next.
 

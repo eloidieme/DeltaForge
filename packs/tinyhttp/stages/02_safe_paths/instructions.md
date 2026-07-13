@@ -4,7 +4,7 @@
 
 Prevent a request path from escaping the configured public directory while preserving normal static-file responses.
 
-Stage 03 mapped a client path to a file. This stage makes the boundary around that mapping explicit.
+Static serving maps a client path to a file. Path validation makes the boundary around that mapping explicit.
 
 ## Background
 
@@ -29,13 +29,13 @@ If TinyHTTP joins that client text to the root without inspecting its components
 
 Checking only the beginning of the string is not enough. Parent components can appear after an ordinary directory, as in `/assets/../../secret.txt`. The security decision belongs to the path's components, not to a search for one convenient substring.
 
-TinyHTTP's project policy rejects parent, platform-prefix, and root-escaping components before the file is read. The precise rule is deliberately conservative. More complete servers also handle URL decoding, symbolic links, canonicalization races, and operating-system-specific namespaces.
+TinyHTTP rejects parent, platform-prefix, and root-escaping components before the file is read. This conservative rule is narrower than a complete URL-to-filesystem policy, which would also address URL decoding, symbolic links, canonicalization races, and operating-system-specific namespaces.
 
 On failure, the outside file's contents must never appear on stdout. A security check that reports an error after reading or printing the secret is too late.
 
 ## Requirements
 
-Keep `tinyhttp serve-file <root> <request-path>` and all Stage 03 response behavior for safe paths.
+Keep `tinyhttp serve-file <root> <request-path>` and the existing `200`/`404` response behavior for safe paths.
 
 Reject any request path whose components attempt to move to a parent, introduce an external filesystem root, or use a platform path prefix. Exit non-zero, include `unsafe path` in stderr, and never reveal bytes from outside `<root>`.
 
@@ -57,11 +57,11 @@ error: unsafe path
 
 ## Success criteria
 
-All `deltaforge test` cases pass and every successfully served file remains beneath the chosen document root under the stage's component policy.
+All `deltaforge test` cases pass and every successfully served file remains beneath the chosen document root under the component policy.
 
 ## Non-goals
 
 - URL percent-decoding.
 - Following or defending against filesystem symlinks in the served tree.
 - Authentication and per-file permissions.
-- A production-grade cross-platform URL-to-path standard.
+- A complete cross-platform URL-to-path standard.

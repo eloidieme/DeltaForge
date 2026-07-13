@@ -9,14 +9,14 @@ tests:
       file_exists:
         - "{temp_dir}/index.fi"
 
-  - name: persisted index contains token data
+  - name: persisted index records token and path fields
     fixture: persist_project
     command: ["index", "{fixture_path}", "--out", "{temp_dir}/index.fi"]
     expect:
       exit_code: 0
       file_contains:
         - path: "{temp_dir}/index.fi"
-          contains: "durable_token"
+          contains: "durable_token\tsrc/main.rs"
 
   - name: creates nested output parents
     fixture: persist_project

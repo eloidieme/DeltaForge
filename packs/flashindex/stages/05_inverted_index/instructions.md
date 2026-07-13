@@ -32,7 +32,7 @@ This is an **inverted index**. The word “inverted” refers to the reversal: d
 
 A back-of-the-book index makes the same kind of trade. Someone does the organizing work in advance so that a later reader can begin with a subject and go directly to the relevant pages.
 
-At this stage, the important change is the shape of the information. Every distinct token receives a posting containing its file paths. We will tighten duplicate removal and canonical ordering in the next stage, after the basic grouping is visible.
+The important change is the shape of the information. Every distinct token receives a posting containing its file paths. This command establishes the token-to-file relationship; canonical ordering is a separate guarantee.
 
 ## Requirements
 
@@ -42,7 +42,7 @@ Add:
 flashindex index <path>
 ```
 
-Build from Stage 03 token occurrences. Print one line for each distinct token using this shape:
+Build from token occurrences. Print one line for each distinct token using this shape:
 
 ```text
 token path1 path2 ...
@@ -79,11 +79,11 @@ The command now begins each record with the value a future lookup will know: the
 
 ## Success criteria
 
-All `deltaforge test` cases for this stage pass and every token/file relationship in the output can be traced back to Stage 03 occurrences.
+All `deltaforge test` cases pass and every token/file relationship in the output can be traced back to a token occurrence.
 
 ## Non-goals
 
-- Guaranteeing final token and path ordering; the next stage makes it canonical.
+- Guaranteeing final token and path ordering.
 - Recording occurrence counts or line and column positions.
 - Saving the index to disk for another process.
 - Ranking documents.

@@ -8,7 +8,7 @@ Reject instructions whose required numeric operand is missing, malformed, negati
 
 An opcode and its operand form one instruction contract. `PUSH` needs a number to place on the stack. `JMP` and `JZ` need an address that identifies a loaded instruction. A bare `PUSH` has no value to push; `JMP -1` and `JMP 99` cannot name valid instructions in a short program.
 
-This stage separates two useful questions. Parsing asks, “Can this written token become an integer?” Target validation asks, “Does that integer identify an instruction in this program?” Keeping those questions distinct makes diagnostics and later `CALL` validation easier to share.
+Operand validation separates two useful questions. Parsing asks, “Can this written token become an integer?” Target validation asks, “Does that integer identify an instruction in this program?” Keeping those questions distinct lets jumps and calls share the same rule.
 
 ## Requirements
 

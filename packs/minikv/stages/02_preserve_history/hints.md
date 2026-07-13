@@ -8,4 +8,4 @@ Do not read and reconstruct the old file merely to add one line. Open the destin
 
 # Hint 3
 
-`OpenOptions::new().create(true).append(true)` expresses the layout directly. Write one complete record per open command and let the next recovery stage interpret chronology.
+`OpenOptions::new().create(true).append(true)` expresses the layout directly. Write one complete record per command so chronological order remains visible to recovery.

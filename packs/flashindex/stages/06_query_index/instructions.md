@@ -2,25 +2,23 @@
 
 ## Goal
 
-Read the artifact written in the previous stage and return the files associated with one exact token without scanning the source tree again.
-
-Writing made the index durable. Querying completes the round trip and proves that another process can understand what was saved.
+Read a saved index and return the files associated with one exact token without scanning the source tree again.
 
 ## Background
 
-Imagine building an index, closing the terminal, and later asking for `retry`. The new process does not have the in-memory maps from the earlier build. It has only the artifact on disk.
+Imagine building an index, closing the terminal, and later asking for `retry`. The new process does not have the maps created during indexing. It has only the file on disk.
 
-If the writer preserved every relationship clearly, the reader can recover the posting for `retry`:
+The tab-separated records preserve the relationship the query needs:
 
 ```text
-retry → src/main.rs, src/network.rs
+retry\tsrc/main.rs\tsrc/network.rs
 ```
 
-The source files are not needed for this lookup. That separation is the practical value of persistence: preparation and use can happen at different times and in different processes.
+The reader can recover the posting for `retry` without opening either source file. Preparation and lookup can happen at different times and in different processes.
 
-The reader must also distinguish two kinds of absence. A well-formed index may simply contain no record for the requested token; that is a successful query with no results. An unreadable artifact is different. In that case, printing nothing would falsely suggest that the search completed normally.
+The command must also distinguish two kinds of absence. A readable index may contain no record for the requested token; that is a successful query with no results. An unreadable file is different. Printing nothing in that case would falsely suggest that lookup completed normally.
 
-Format-specific corruption matters too, but a shared black-box fixture cannot assume one learner's representation when the format is intentionally open. Validation beyond an unreadable file belongs to the format each learner chose.
+This command defines behavior for readable, well-formed index files. Recovery from damaged records belongs to a format-hardening feature with its own error contract.
 
 ## Requirements
 
@@ -30,13 +28,11 @@ Add:
 flashindex query <index-file> <token>
 ```
 
-Read the artifact produced by `index --out`. Print the matching relative `/` paths one per line in ascending order, with no heading or summary.
+Read the tab-separated UTF-8 records produced by `index --out`. Match the complete token field exactly and case-sensitively. Print its relative `/` paths one per line in ascending order, with no heading or summary.
 
-If the token is absent, exit 0 with empty stdout. An unreadable artifact must exit non-zero.
+If the token is absent, exit 0 with empty stdout. An unreadable index file must exit non-zero.
 
 ## Example
-
-After saving an index for a project containing `retry` in two files:
 
 ```console
 $ flashindex query .flashindex/project.idx retry
@@ -44,23 +40,21 @@ src/main.rs
 src/network.rs
 ```
 
-The command reads the index artifact; it does not need the original project path as an argument.
+The command needs the index path and token; it does not need the original project path.
 
 ## Edge cases
 
 - A missing token is an empty successful result.
 - Returned paths are sorted and contain no duplicates.
 - Query matching is exact and case-sensitive.
-- An unreadable artifact exits non-zero.
+- An unreadable index file exits non-zero.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and building in one invocation followed by querying in another reproduces the Stage 06 postings.
+All `deltaforge test` cases pass, and an index written in one invocation can be queried in another with the same postings.
 
 ## Non-goals
 
 - Rebuilding or updating the index during a query.
-- Searching by prefix, substring, or regular expression.
-- Sharing one artifact format between different learner implementations.
-- A shared malformed-artifact grammar; deeper validation depends on the chosen format.
-- Ranking the returned paths.
+- Prefix, substring, regular-expression, or ranked search.
+- Malformed-record recovery or multi-version format negotiation.

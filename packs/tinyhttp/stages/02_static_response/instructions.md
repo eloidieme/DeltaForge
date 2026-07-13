@@ -4,7 +4,7 @@
 
 Turn an existing public text file into a complete `200 OK` response and a missing file into a complete empty `404 Not Found` response.
 
-This stage concentrates on response framing. The next stage establishes the security boundary around client-controlled paths.
+This command concentrates on response framing for normal root-relative paths.
 
 ## Background
 
@@ -34,7 +34,7 @@ The blank line is part of that framing. It separates response metadata from body
 
 A missing path is not a process failure in this project. The server understood the request and has an HTTP answer: `404 Not Found`. Its body is empty, so its content length is zero.
 
-TinyHTTP reads text files in this stage. Later MIME and range stages will add other representation details.
+TinyHTTP initially reads UTF-8 text files. Media types and byte ranges are separate representation details.
 
 ## Requirements
 
@@ -48,7 +48,7 @@ For a regular UTF-8 file beneath `<root>`, print an HTTP/1.1 response containing
 
 For a missing path, exit 0 and print `404 Not Found`, `Content-Length: 0`, a blank line, and an empty body.
 
-This stage's fixtures use safe request paths. Path traversal rejection is added next.
+This contract covers safe request paths. Requests that attempt to escape the document root are outside this command's current guarantees.
 
 ## Example
 
@@ -75,7 +75,7 @@ All `deltaforge test` cases pass and each response's framing agrees with the bod
 
 ## Non-goals
 
-- Defending against parent-directory traversal; the next stage adds that boundary.
+- Defending against parent-directory traversal.
 - MIME types.
 - Binary response bodies.
 - Network sockets, concurrency, or streaming.

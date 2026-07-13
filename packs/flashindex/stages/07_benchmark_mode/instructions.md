@@ -18,7 +18,7 @@ FlashIndex will therefore report two facts together:
 {"files": 37, "runtime_ms": 4}
 ```
 
-`files` describes the selected Stage 02 corpus. `runtime_ms` describes how long this scan took inside the process.
+`files` describes the selected corpus. `runtime_ms` describes how long this scan took inside the process.
 
 The output is JSON because another program can parse it without relying on decoration intended for a person. That creates a strict stdout boundary: a helpful sentence before the object would make the stream invalid JSON.
 
@@ -34,7 +34,7 @@ Add:
 flashindex bench <path>
 ```
 
-Scan the Stage 02 corpus and print exactly one valid JSON object followed by `\n`. The object must contain two non-negative integer fields:
+Scan the searchable corpus and print exactly one valid JSON object followed by `\n`. The object must contain two non-negative integer fields:
 
 ```json
 {"files": <N>, "runtime_ms": <N>}

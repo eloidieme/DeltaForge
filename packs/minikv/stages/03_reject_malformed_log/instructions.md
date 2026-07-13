@@ -4,7 +4,7 @@
 
 Make recovery fail clearly when a non-empty log record cannot be interpreted as a valid operation.
 
-Stage 04 defined what valid history means. This stage prevents damaged history from being mistaken for a successful missing-key lookup.
+Valid recovery depends on understanding every non-empty record. Damaged history must not be mistaken for a successful missing-key lookup.
 
 ## Background
 
@@ -20,7 +20,7 @@ The middle line begins like a `SET` record but has no separated value. MiniKV co
 
 Silent guessing is dangerous in storage software. A malformed line may be a user mistake, a truncated write, a version mismatch, or damaged data. Those causes need different repairs, but all of them deserve a visible failure.
 
-This stage therefore separates three outcomes:
+Recovery therefore separates three outcomes:
 
 ```text
 valid log, key found     → print the value
@@ -28,7 +28,7 @@ valid log, key absent    → print nothing and succeed
 invalid non-empty record → print a diagnostic and fail
 ```
 
-Blank lines are harmless in MiniKV's text format and may be ignored. A non-empty line must be one of the operations the current stage understands.
+Blank lines are harmless in MiniKV's text format and may be ignored. Every non-empty line must be a recognized complete operation.
 
 A useful diagnostic names the problem without printing a successful value. Stderr is the right channel because stdout remains reserved for the result of a valid lookup.
 
@@ -38,7 +38,7 @@ Keep `minikv get <log-path> <key>`.
 
 Reject any non-empty line that is not a valid `SET <key> <value>` record. Reject a `SET` line missing either its key or its value. Exit non-zero and include `malformed` in stderr. Do not print a recovered value after encountering malformed history.
 
-Blank lines may be ignored. Valid logs retain all Stage 04 behavior.
+Blank lines may be ignored. Valid logs retain the established latest-value behavior.
 
 ## Example
 
@@ -74,4 +74,4 @@ All `deltaforge test` cases pass and no damaged non-empty record is reported as 
 - Repairing, truncating, or silently skipping damaged history.
 - Checksums or length-prefixed binary records.
 - Recovering a partial state before the error.
-- Tombstones, which introduce another valid operation later.
+- Any operation other than `SET`.

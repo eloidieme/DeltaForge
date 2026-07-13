@@ -2,9 +2,9 @@
 
 ## Goal
 
-Teach `flashindex scan` to keep files that are likely to contain source code or project notes and leave unrelated assets out of the search corpus.
+Restrict `flashindex scan` to files that belong in the searchable corpus.
 
-Stage 01 answered “which files exist?” This stage answers the narrower question that a search engine actually needs: “which of those files should we read as text?”
+Directory traversal answers “which files exist?” Corpus selection asks the narrower question a search engine needs: “which of those files should we read as text?”
 
 ## Background
 
@@ -23,23 +23,21 @@ project/
     └── main.rs
 ```
 
-Stage 01 reports all five files. That is an accurate description of the directory, but it is not yet a useful search corpus.
+An unrestricted scan reports all five files. That is an accurate description of the directory, but it is not a useful search corpus.
 
 `main.rs`, `README.md`, and `toolchain.cmake` contain text a programmer may want to search. `logo.png` and `records.bin` contain other kinds of data. Attempting to treat arbitrary binary bytes as source text can produce decoding errors or meaningless tokens.
 
 FlashIndex therefore needs a selection rule.
 
-One possibility would be to open every file and guess its format from its contents. That can be useful, but it introduces encoding detection and file-signature rules before we have built the search engine itself. For this project, FlashIndex uses a smaller policy: it accepts a fixed list of filename extensions.
+One possibility would be to open every file and guess its format from its contents. That requires encoding detection and file-signature rules. FlashIndex instead uses a fixed list of filename extensions.
 
 The selected collection is called the **corpus**. A corpus is simply the body of documents a search system has agreed to search.
 
-The extension list is a teaching choice. It represents a modest project containing Rust, C, C++, Python, Markdown, plain text, and CMake files. It is not a list of every language worth searching. A production tool would usually let its user change the policy.
-
-There is no special case for `CMakeLists.txt`. Its extension is `.txt`, so the ordinary text-file rule already admits it. A file named `toolchain.cmake`, on the other hand, needs the separate `.cmake` rule.
+The allow-list covers Rust, C, C++, Python, Markdown, plain-text, and CMake files. It is a product boundary, not a judgment about every other language or format. A configurable search tool could expose the list to its user; FlashIndex keeps it fixed so all commands share one corpus definition.
 
 ## Requirements
 
-Keep the `flashindex scan <path>` command and all Stage 01 behavior: recursive traversal, ignored directories, root-relative `/` paths, errors, and sorted output.
+Keep the `flashindex scan <path>` command with recursive traversal, ignored directories, root-relative `/` paths, errors, and sorted output.
 
 Only print regular files with one of these case-sensitive extensions:
 
@@ -64,7 +62,6 @@ The PNG and binary-data files still exist. They are absent only because they do 
 
 ## Edge cases
 
-- `CMakeLists.txt` is accepted through its ordinary `.txt` extension.
 - `.cmake`, `.md`, and `.txt` files are accepted alongside programming-language files.
 - A readable file with a disallowed extension remains excluded because this stage examines names, not contents.
 - A source file inside `.git`, `target`, `build`, or `node_modules` remains excluded because the scanner never enters that directory.

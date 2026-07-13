@@ -2,9 +2,9 @@
 
 ## Goal
 
-Represent deletion as a durable `DEL` record and teach recovery that the latest operation may remove a key rather than assign a value.
+Represent deletion as a durable `DEL` record and make recovery treat the latest operation as either an assignment or a removal.
 
-This stage makes deletion survive a restart. The effect of tombstones on compaction is handled next.
+The tombstone makes deletion survive a restart without erasing earlier bytes.
 
 ## Background
 
@@ -73,7 +73,7 @@ All `deltaforge test` cases pass and restart recovery never returns a value whos
 
 ## Non-goals
 
-- Removing tombstones during compaction; that is the next stage.
+- Removing tombstones during compaction.
 - Expiration times or deletion timestamps.
 - Replicated tombstone garbage collection.
 - Transactions or concurrent writers.

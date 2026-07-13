@@ -21,7 +21,7 @@ Keeping the stack effect the same on both branches prevents the stack from depen
 
 ## Requirements
 
-Extend `run` with `JZ <address>`. Pop one value from the stack. For zero, set the instruction pointer directly to the target. For any non-zero value, advance to the following instruction. All previous instructions retain their behavior.
+Extend `run` with `JZ <address>`. Pop one value from the stack. For zero, set the instruction pointer directly to the target. For any non-zero value, advance to the following instruction. Every existing instruction retains its behavior.
 
 ## Example
 

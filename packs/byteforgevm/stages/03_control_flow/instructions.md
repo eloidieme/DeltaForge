@@ -6,17 +6,17 @@ Add `JMP <address>`, an instruction that chooses the next instruction directly.
 
 ## Background
 
-Until now, the instruction pointer followed a simple rhythm: after instruction 0 came 1, then 2, then 3. `HALT` could stop that rhythm, but nothing could continue somewhere else.
+In a straight-line program, the instruction pointer follows a simple rhythm: after instruction 0 comes 1, then 2, then 3. `HALT` can stop that rhythm, but another control instruction is needed to continue somewhere else.
 
 `JMP` makes the instruction pointer visible as state. When the VM executes `JMP 4`, the next instruction is exactly address 4. It is not 5, and the VM must not first advance past the jump and then add the target. Physical processors and other interpreters face the same distinction between “fall through to the next instruction” and “replace the program counter.”
 
-Start with an unconditional jump so there is only one new question: where does execution continue?
+An unconditional jump has one question to answer: where does execution continue?
 
 ## Requirements
 
 Extend `run` with `JMP <address>`. Addresses are the zero-based instruction positions shown by `disasm`.
 
-When `JMP` executes, set the instruction pointer to its target. Do not also perform the ordinary one-instruction advance. Keep every earlier opcode unchanged.
+When `JMP` executes, set the instruction pointer to its target. Do not also perform the ordinary one-instruction advance. Preserve the behavior of every existing opcode.
 
 ## Example
 
@@ -49,5 +49,5 @@ All tests pass, and a jump has exactly one clearly defined next address.
 ## Non-goals
 
 - Conditional jumps or loops based on stack values.
-- Defining invalid-target diagnostics; Stage 08 does that.
+- Defining invalid-target diagnostics.
 - Labels or symbolic addresses.

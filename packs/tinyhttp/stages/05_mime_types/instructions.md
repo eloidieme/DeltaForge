@@ -8,7 +8,7 @@ Add a `Content-Type` header to successful static-file responses.
 
 A response body is only a sequence of bytes. The bytes do not announce whether they are a web page, a note, a picture, or something else. HTTP uses a media type to supply that missing context.
 
-TinyHTTP will use the filename ending as a practical clue. This is not proof of a file's contents—a file can be named badly—but it is enough to learn the classification step. The supported list is intentionally small, and anything unknown receives an honest generic label instead of a guess.
+TinyHTTP uses the filename ending as a practical clue. This is not proof of a file's contents—a file can be named badly—but it supplies a predictable classification rule. Anything outside the fixed table receives a generic label instead of a guess.
 
 The name MIME still appears around media types because the vocabulary began in Internet email, where messages needed a way to describe attachments. HTTP reused the same idea for web representations.
 

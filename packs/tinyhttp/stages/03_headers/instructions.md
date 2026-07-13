@@ -4,7 +4,7 @@
 
 Read valid HTTP header fields, normalize their names, trim surrounding value whitespace, and print them in their original order.
 
-The request line describes the main action. Headers carry the additional facts later stages need to make decisions.
+The request line describes the main action. Headers carry additional facts used by response and connection logic.
 
 ## Background
 
@@ -30,7 +30,7 @@ X-Mode: KeepThisCase   → x-mode: KeepThisCase
 
 The output keeps input order. At this point the command is describing the request, not collecting repeated names into a map or applying field-specific semantics.
 
-This stage assumes valid header lines and focuses on the transformation. The next stage defines where the header section ends and what happens to malformed lines.
+The `headers` command begins with valid field lines and focuses on their transformation. Message boundaries and malformed fields are separate parsing concerns.
 
 ## Requirements
 
@@ -68,7 +68,7 @@ All `deltaforge test` cases pass and each printed line represents exactly one va
 
 ## Non-goals
 
-- Defining the blank-line/body boundary; that is the next stage.
+- Defining the blank-line/body boundary.
 - Combining duplicate header fields.
 - Interpreting specific values such as `Connection`.
 - Full RFC field-value grammar or obsolete line folding.

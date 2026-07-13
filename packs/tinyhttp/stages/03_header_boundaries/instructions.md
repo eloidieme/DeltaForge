@@ -4,7 +4,7 @@
 
 Stop header parsing at the first blank line and reject non-empty header lines that contain no colon.
 
-Stage 05 transformed valid fields. This stage makes sure the command transforms only the header section and never guesses around malformed metadata.
+Field normalization applies only inside the header section. Boundary handling keeps body text out and prevents guesses around malformed metadata.
 
 ## Background
 
@@ -37,7 +37,7 @@ Keep `tinyhttp headers`.
 
 Skip the request line, process non-empty header lines in order, and stop at the first empty line after removing a trailing `\r`. Do not inspect or print later body lines.
 
-Every non-empty line before the boundary must contain a colon. Otherwise exit non-zero and include `malformed header` in stderr. Valid fields retain Stage 05 normalization.
+Every non-empty line before the boundary must contain a colon. Otherwise exit non-zero and include `malformed header` in stderr. Valid fields retain lowercase names, trimmed values, preserved value case, and input order.
 
 ## Example
 

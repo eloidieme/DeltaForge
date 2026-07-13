@@ -26,7 +26,7 @@ Expose this command:
 tinyhttp range <root> <request-path> <start> <end>
 ```
 
-For this stage, the offsets in the tests are valid decimal byte positions satisfying `0 <= start <= end < file length`. Print:
+When the offsets are valid decimal byte positions satisfying `0 <= start <= end < file length`, print:
 
 ```text
 HTTP/1.1 206 Partial Content
@@ -36,7 +36,7 @@ Content-Length: <selected-length>
 <selected bytes>
 ```
 
-Preserve the document-root protection from the earlier static-file stages. Calculate lengths from bytes, not displayed characters.
+Preserve the document-root protection used by static-file serving. Calculate lengths from bytes, not displayed characters.
 
 ## Example
 
@@ -67,6 +67,6 @@ All tests pass, `Content-Range` describes the whole file correctly, and `Content
 
 ## Non-goals
 
-- Rejecting every malformed range; that boundary is the next stage.
+- Defining errors for malformed or out-of-bounds ranges.
 - Parsing a real HTTP `Range` header.
 - Suffix, open-ended, conditional, or multipart ranges.

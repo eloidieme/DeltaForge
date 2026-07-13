@@ -1,6 +1,6 @@
 # Hint 1
 
-Count physical history while parsing, but compute live keys from the final replay state. They are intentionally different views.
+Count physical history while parsing, but compute live keys from the final replay state. They answer different questions.
 
 # Hint 2
 

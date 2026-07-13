@@ -4,7 +4,7 @@
 
 Finish ranked search with a deterministic path tie-break and a maximum of ten results.
 
-Stage 13 can compare different scores. This stage defines what happens when the scores are exactly equal and when more matches exist than a concise result page should show.
+Coverage and occurrence counts compare different scores. Stable ranking defines what happens when those scores are exactly equal and when more matches exist than a concise result page should show.
 
 ## Background
 
@@ -27,7 +27,7 @@ Rank numbers are assigned only after the final order is known. They begin at one
 
 ## Requirements
 
-Keep the Stage 13 scoring rules and output format. Complete the ordering as follows:
+Keep the coverage and occurrence scoring rules and output format. Complete the ordering as follows:
 
 1. distinct query-token coverage descending;
 2. total matching occurrences descending; and

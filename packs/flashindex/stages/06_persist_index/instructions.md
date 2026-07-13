@@ -2,21 +2,26 @@
 
 ## Goal
 
-Let `flashindex index` write a reusable index artifact instead of limiting the result to terminal output.
-
-This stage is about the writing half of persistence. Reading and querying the artifact will follow once the file contract exists.
+Let `flashindex index` write a reusable index file instead of limiting its result to terminal output.
 
 ## Background
 
-Until now, the index has lived only for the duration of one command. When the process exits, a later search must scan and tokenize the project again.
+An in-memory index lasts only as long as its process. When the command exits, the maps disappear, and the next search would have to scan and tokenize the project again.
 
-Consider a project that takes several seconds to index. If a developer performs fifty searches, repeating the full build fifty times wastes the preparation work. A saved artifact allows the expensive phase to happen once and the result to survive afterward.
+Saving the index separates preparation from use. A project can be indexed once, then queried later by another process. For that to work, the file needs an exact structure that both writer and reader understand.
 
-Writing an index creates a new agreement. A later reader must be able to distinguish records and recover every token and path. Two learners may choose different valid representations—a line-oriented text format, escaped fields, or another UTF-8 structure—so DeltaForge does not prescribe the internal format. It does prescribe the observable facts that the artifact represents.
+FlashIndex uses UTF-8 text with one token record per line. A record begins with the token and continues with its sorted paths. Fields are separated by tab bytes:
 
-The destination may be inside a directory that does not exist yet. It may also contain bytes from an older, longer index. A successful rebuild must leave one complete current artifact, not a current prefix followed by stale data.
+```text
+retry\tsrc/main.rs\tsrc/network.rs
+timeout\tsrc/network.rs
+```
 
-This is persistence, but not yet crash-safe replacement. Guaranteeing recovery from power loss during the write would require a more detailed failure model than this stage claims.
+Tokens never contain tabs or newlines. The file format is intended for ordinary source paths and does not provide an escape syntax for those two characters in a filename.
+
+The destination may be inside a directory that does not exist yet. It may also contain bytes from an older, longer index. A successful rebuild must leave one complete current file, not a current prefix followed by stale data.
+
+This is persistence, but not a promise of recovery from power loss during the write. That would require a more detailed failure model and a stronger replacement protocol.
 
 ## Requirements
 
@@ -26,9 +31,9 @@ Extend the index command:
 flashindex index <path> --out <index-file>
 ```
 
-Write the complete Stage 06 canonical index to `<index-file>` using a UTF-8 representation that the next stage can read.
+Write the complete canonical index to `<index-file>`. Each line must contain one token followed by its sorted, deduplicated relative `/` paths. Separate every field with one tab byte and terminate every record with `\n`. Token lines retain canonical ascending order.
 
-Create missing parent directories. Replace all stale destination contents. On success, exit 0 and print a line containing `wrote`. The artifact must contain enough information to recover every token's sorted, deduplicated relative `/` paths.
+Create missing parent directories and replace all stale destination contents. On success, exit 0 and print a line containing `wrote`.
 
 ## Example
 
@@ -42,17 +47,17 @@ After the command succeeds, `.flashindex/project.idx` is a regular file containi
 ## Edge cases
 
 - A destination in missing parent directories is created successfully.
-- Rebuilding over an older, longer artifact removes every stale trailing byte.
-- An empty corpus still produces a valid readable artifact.
-- The source directory and output artifact may have different locations; stored project paths remain root-relative.
+- Rebuilding over an older, longer file removes every stale trailing byte.
+- An empty corpus still produces a valid readable file.
+- The source directory and output file may have different locations; stored project paths remain root-relative.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, the output file contains token data for a non-empty corpus, and a rebuild replaces rather than extends the previous artifact.
+All `deltaforge test` cases pass, a non-empty corpus produces token records, and rebuilding replaces rather than extends the previous file.
 
 ## Non-goals
 
-- Querying the artifact; that is the next stage.
-- Requiring one shared on-disk format from every learner.
+- Querying the saved index.
+- Escaping tabs or newlines in tokens and paths.
 - Compression, checksums, version migration, or incremental updates.
 - Crash-safe atomic replacement or concurrent readers and writers.

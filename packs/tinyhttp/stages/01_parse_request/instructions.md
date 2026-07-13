@@ -4,7 +4,7 @@
 
 Read one valid HTTP request and print the three parts of its first line: method, request target, and protocol version.
 
-TinyHTTP will not open a network socket yet. Beginning with protocol text lets us understand what a server receives before connection handling obscures it.
+TinyHTTP does not open a network socket. Working directly with protocol text keeps the received message visible.
 
 ## Background
 
@@ -18,11 +18,11 @@ The line contains three fields.
 
 `GET` is the **method**. It describes the kind of action the client requests.
 
-`/index.html` is the **request target**. In this project it will later identify a file beneath a public directory.
+`/index.html` is the **request target**. TinyHTTP uses it to identify a file beneath a public directory.
 
-`HTTP/1.1` is the **version**. The version matters because later connection rules differ between HTTP/1.0 and HTTP/1.1.
+`HTTP/1.1` is the **version**. The version matters because connection reuse differs between HTTP/1.0 and HTTP/1.1.
 
-This first line is commonly called the request line or start line. Headers may follow it, then a blank line, then an optional body. This stage reads only the first line and reports its fields. The additional bytes remain present but do not change the three facts being requested.
+This first line is commonly called the request line or start line. Headers may follow it, then a blank line, then an optional body. The `parse` command reads only the first line and reports its fields. Additional bytes do not change those three facts.
 
 HTTP began with an even smaller request format, but HTTP/1.x retained human-readable lines. That readability is helpful for learning and debugging. It should not tempt a parser to be vague: each field still needs an exact boundary.
 
@@ -58,7 +58,7 @@ path: /index.html
 version: HTTP/1.1
 ```
 
-The command describes the request. It does not serve the file yet.
+The command describes the request line only; serving files is outside this command's contract.
 
 ## Edge cases
 
@@ -82,7 +82,7 @@ Record request bytes, header count, median, and p95. Then ask:
 
 ## Non-goals
 
-- Rejecting every malformed request-line shape; the next stage tightens that boundary.
+- Rejecting every malformed request-line shape.
 - Validating the method, target, or version vocabulary.
 - Parsing headers or the body.
 - Opening a network listener.

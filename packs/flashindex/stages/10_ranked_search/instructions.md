@@ -28,9 +28,9 @@ FlashIndex first scores **coverage**: the number of distinct query tokens found 
 
 When coverage ties, it scores the total number of matching **occurrences**. That gives repeated evidence a smaller, secondary role.
 
-This is a teaching ranking function, not a universal model of relevance. Production search systems may consider document frequency, field importance, proximity, recency, or learned signals. Our smaller rule keeps every score visible enough to calculate by hand.
+This is a small ranking function, not a universal model of relevance. Larger search systems may consider document frequency, field importance, proximity, recency, or learned signals. FlashIndex keeps every score visible enough to calculate by hand.
 
-The command searches a directory and builds its information in memory. Stage 07 allowed every learner to choose an on-disk format, so black-box tests cannot provide one shared persisted artifact that all implementations must understand.
+The command searches a directory and builds occurrence counts in memory. The saved index records only file membership, so it does not contain the occurrence totals required by the secondary score.
 
 Repeated words in the query count once for coverage. Otherwise `retry retry` would pretend to ask for two distinct ideas when it asks for one.
 
@@ -55,7 +55,7 @@ Order by matched-token count descending, then occurrence count descending. Print
 <rank>. <path> (matched <matched>/<query-total> tokens, <occurrences> occurrences)
 ```
 
-The next stage will finish the ordering contract for exact ties and result limits.
+Files tied on both numeric scores may appear in either order. Result limits and a complete tie-break are outside this command's current contract.
 
 ## Example
 
@@ -79,11 +79,11 @@ Coverage decides the order before occurrence count is considered.
 
 ## Success criteria
 
-All `deltaforge test` cases for this stage pass and each displayed score can be reproduced from Stage 03 occurrences.
+All `deltaforge test` cases pass and each displayed score can be reproduced from token occurrences.
 
 ## Non-goals
 
-- A deterministic order for files tied on both scores; the next stage adds it.
+- A deterministic order for files tied on both scores.
 - Limiting the number of returned files.
 - TF-IDF, BM25, proximity, phrase, or fuzzy scoring.
-- Reading a learner-specific persisted index format.
+- Reading the file-membership-only persisted index.

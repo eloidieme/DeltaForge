@@ -4,7 +4,7 @@
 
 Give MiniKV its first command: accept one key and one value, then print the pair in one exact form.
 
-Nothing is saved yet. This small boundary lets us settle what a key-value operation looks like before files and recovery add more moving parts.
+Nothing is saved. The command's job is simply to give one value a name and return that pair in a stable form.
 
 ## Background
 
@@ -18,7 +18,7 @@ The left side is the **key**. It is the name used to find the information later.
 
 Key-value storage appears in caches, configuration systems, database indexes, and many other tools. The idea is simple: instead of asking for the third row or seventeenth byte, a caller asks for a meaningful name.
 
-MiniKV begins with one pair passed as command-line arguments. The process will immediately print the pair and exit. That does not make a useful database yet, but it establishes three rules we will keep: arguments have boundaries, successful output has a stable shape, and invalid commands fail rather than pretending to store incomplete data.
+MiniKV begins with one pair passed as command-line arguments. The process immediately prints the pair and exits. Three rules already matter: arguments have boundaries, successful output has a stable shape, and invalid commands fail rather than pretending to store incomplete data.
 
 A value containing spaces remains one argument when the caller quotes it in the shell:
 

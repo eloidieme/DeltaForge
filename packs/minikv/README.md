@@ -51,9 +51,9 @@ The log is plain text and the commands are small, but the questions are the same
 
 What evidence survives a process restart? Which operation wins when several records mention one key? When is old history safe to remove? How should damaged history fail? What does deletion mean when old copies still exist?
 
-These ideas appear in database recovery logs, event-sourced applications, message systems, filesystems, and log-structured stores. Production systems add checksums, record framing, synchronization, atomic replacement, and concurrency control. MiniKV keeps those mechanisms out of the way long enough for the state model they protect to remain visible.
+These ideas appear in database recovery logs, event-sourced applications, message systems, filesystems, and log-structured stores. Larger systems add checksums, record framing, synchronization, atomic replacement, and concurrency control. MiniKV keeps the state model visible by leaving those mechanisms outside its boundary.
 
-The project also teaches the difference between layout and guarantee. Appending is a useful storage layout, but it does not automatically promise survival after a power failure. Replacing an output file is different from making that replacement crash-atomic. The text names only the guarantees the tested program actually provides.
+The project also shows the difference between layout and guarantee. Appending is a useful storage layout, but it does not automatically promise survival after a power failure. Replacing an output file is different from making that replacement crash-atomic. MiniKV names only the guarantees it actually provides.
 
 ## Big picture
 
@@ -79,18 +79,7 @@ Compact without resurrecting deleted keys
 Compare physical history with logical live state
 ```
 
-Each stage adds one new claim about the log. Later stages must preserve all earlier claims.
-
-## Concept map
-
-| Stages | New idea | Promise to preserve |
-|---|---|---|
-| 01 | Key/value command boundary | Output represents exactly the supplied pair. |
-| 02–03 | Durable append history | A new record does not destroy an earlier one. |
-| 04–05 | Recovery and validation | The latest valid operation determines state; malformed history is not guessed around. |
-| 06–07 | Semantic and filesystem compaction | Input and output recover equivalent state, and stale destination bytes disappear. |
-| 08–09 | Tombstones | A deleted key stays absent until a later `SET`. |
-| 10 | Operational counts | Physical records are not confused with logical live keys. |
+The arrows are dependencies rather than a list of unrelated commands. Recovery depends on complete append history; compaction depends on recovery semantics; tombstones change both replay and compaction; statistics must interpret the same records as every other command.
 
 ## Storage terms, when you need them
 
@@ -107,7 +96,7 @@ Each stage adds one new claim about the log. Later stages must preserve all earl
 
 When a file-writing function succeeds, the bytes may have reached the language runtime, the operating-system page cache, the storage device's cache, or stable media. Those are not identical guarantees.
 
-MiniKV deliberately does not require `fsync` or define recovery after power loss. Its append-only history makes the logic of recovery easier to inspect, but it should not be described as stronger durability than the contract tests.
+MiniKV does not require `fsync` or define recovery after power loss. Its append-only history makes the logic of recovery easy to inspect, but its durability claim stops when the file-writing operation succeeds.
 
 ## When something goes wrong
 
@@ -125,10 +114,10 @@ Naming the broken promise usually narrows the problem more effectively than star
 
 A good MiniKV solution has one shared interpretation of log records. Writes create complete operations, recovery applies them in order, statistics count the same operations, and compaction serializes the same final state.
 
-Malformed history fails visibly instead of being repaired by guesswork. Output remains deterministic. Claims about durability and safe replacement stop at the guarantees the program actually tests.
+Malformed history fails visibly instead of being repaired by guesswork. Output remains deterministic. Claims about durability and safe replacement stop at the guarantees described in the command contract.
 
 ## Optional directions
 
-After the required stages, useful experiments include length-prefixed records, checksums, crash-atomic replacement through a temporary sibling, snapshots, batch writes, and single-writer locking.
+From this foundation, useful experiments include length-prefixed records, checksums, crash-atomic replacement through a temporary sibling, snapshots, batch writes, and single-writer locking.
 
 Begin any extension by naming the failure it addresses. A checksum helps detect corrupted records; it does not make a write atomic. A lock coordinates writers; it does not make buffered bytes survive power loss. Keeping those distinctions clear is part of storage design.

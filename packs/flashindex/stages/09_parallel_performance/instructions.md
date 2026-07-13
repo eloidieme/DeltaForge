@@ -2,7 +2,7 @@
 
 ## Goal
 
-Measure the same indexing workload at one, two, four, and eight threads and achieve a modest speedup without weakening the byte-identical correctness established in Stage 11.
+Measure the same indexing workload at one, two, four, and eight threads and achieve a useful speedup without weakening byte-identical correctness.
 
 Parallel code is not finished merely because it uses threads. It should demonstrate that the added coordination pays for itself on the supplied workload.
 
@@ -20,13 +20,13 @@ This limit is often described by Amdahl's law: the portion that cannot run in pa
 
 Contention can lower the ceiling further. If every token occurrence waits for one shared lock, the workers spend part of their time taking turns. If the merge repeats most of the original work, parallel tokenization may be lost in serial combination.
 
-DeltaForge measures every declared thread count separately. It compares the median at one thread with the median at eight and applies the pack's performance gate. The gate is intentionally modest: it asks for evidence of useful parallelism, not an unrealistic perfect scaling curve.
+DeltaForge measures every declared thread count separately. It compares the median at one thread with the median at eight and applies the pack's performance gate. The threshold asks for evidence of useful parallelism, not an unrealistic perfect scaling curve.
 
 Correctness remains the first gate. A fast index with missing or reordered postings is not an optimization of the same program.
 
 ## Requirements
 
-Keep the Stage 11 command and byte-identical output for every thread count.
+Keep the threaded `index` command and byte-identical output for every thread count.
 
 Run:
 

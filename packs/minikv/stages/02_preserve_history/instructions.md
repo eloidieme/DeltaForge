@@ -37,9 +37,9 @@ SET size large
 SET colour green
 ```
 
-This creates stale history, but it also creates a complete sequence from which the latest state can be recovered. The trade is deliberate: writes remain simple, and a later compaction stage will reclaim obsolete records.
+This creates stale history, but it also creates a complete sequence from which the latest state can be recovered. Writes remain simple, and compaction can reclaim obsolete records separately.
 
-Append-only describes the layout, not the strongest possible durability guarantee. A successful write may still be buffered by the operating system or storage device. This project does not claim survival after every possible power failure.
+Append-only describes the layout, not the strongest possible durability guarantee. A successful write may still be buffered by the operating system or storage device. MiniKV does not claim survival after every possible power failure.
 
 ## Requirements
 

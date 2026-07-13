@@ -8,4 +8,4 @@ For ordinary instructions, set or advance the pointer to the following address. 
 
 # Hint 3
 
-Use the operand as the zero-based index into the parsed program. Target validation can be centralized when Stage 08 introduces its error contract.
+Use the operand as the zero-based index into the parsed program. Keep target conversion in one place so bounds checks can share the same rule.

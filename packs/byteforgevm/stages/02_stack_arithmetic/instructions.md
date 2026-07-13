@@ -61,5 +61,5 @@ All tests pass, and the example's stack can be explained instruction by instruct
 ## Non-goals
 
 - Subtraction, multiplication, or jumps.
-- Specifying every runtime error; later stages make failures precise.
+- Specifying every runtime error.
 - Variables, registers, or heap memory.

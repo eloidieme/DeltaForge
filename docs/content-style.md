@@ -9,10 +9,11 @@ The baseline voice comes from the FlashIndex overview and Stage 01 guide.
 1. Begin with a concrete project, command, input, or failure the learner can picture.
 2. Let the problem become clear before introducing its customary name or solution.
 3. Define a term next to the first example that needs it. Do not lead with a glossary.
-4. Explain why an observable rule exists. If a list, threshold, format, or policy is a course choice rather than a universal standard, say so plainly.
+4. Explain why an observable rule exists. If a list, threshold, format, or policy is specific to the tool rather than a universal standard, describe the boundary and the tradeoff in the world of the project.
 5. Prefer ordinary sentences and concrete nouns. Avoid slogans, ornamental cleverness, promotional language, and compressed encyclopedia prose.
 6. Use examples to carry the explanation forward. A diagram should clarify the prose rather than stand in for it.
 7. Keep implementation freedom. Explain the behavior and the reasoning behind it without giving a construction recipe.
+8. Write as though the current text were the first edition. Learner-facing prose must not mention rewrites, inserted or split stages, prior wording, test-driven policy choices, or decisions made to answer editorial feedback.
 
 ## Shape of an overview
 
@@ -23,9 +24,9 @@ The overview should help a new learner answer:
 - What will I be able to do when this is finished?
 - Why can the finished behavior not be built in one undifferentiated step?
 - What form does the information take as it moves through the project?
-- Which decisions are simplified teaching policies?
+- Which decisions are project-specific simplifications?
 
-Historical notes, glossaries, extensions, and diagnostic exercises remain useful secondary material. They should not interrupt the opening explanation.
+Historical notes, glossaries, extensions, and diagnostic exercises remain useful secondary material. They should not interrupt the opening explanation. An overview may describe the path from one capability to another, but it should not narrate how the curriculum was assembled or revised.
 
 ## Shape of a stage
 

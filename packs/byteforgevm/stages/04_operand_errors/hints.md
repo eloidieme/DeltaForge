@@ -8,4 +8,4 @@ Validate a signed target before converting it to `usize`, and require the conver
 
 # Hint 3
 
-A `required_arg` helper can produce `missing argument`; a `valid_target` helper can produce `invalid jump`. Reuse both wherever later opcodes need them.
+A `required_arg` helper can produce `missing argument`; a `valid_target` helper can produce `invalid jump`. Reuse the same checks for every instruction with those needs.

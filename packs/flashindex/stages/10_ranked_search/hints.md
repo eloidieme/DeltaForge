@@ -8,4 +8,4 @@ Deduplicate the query before scoring. Coverage is the size of the matched-token 
 
 # Hint 3
 
-A path-keyed map can accumulate one score record per candidate file. Sort primarily by the two descending numeric keys; the next stage adds the complete tie-break and limit.
+A path-keyed map can accumulate one score record per candidate file. Sort by the two descending numeric keys and leave exact numeric ties unspecified.

@@ -2769,13 +2769,9 @@ fn visit(root: &Path, current: &Path, files: &mut Vec<PathBuf>) -> Result<(), St
 }
 
 fn is_source_like(path: &Path) -> bool {
-    if path.file_name().and_then(|name| name.to_str()) == Some("CMakeLists.txt") {
-        return true;
-    }
-
     matches!(
         path.extension().and_then(|extension| extension.to_str()),
-        Some("c" | "cpp" | "h" | "hpp" | "rs" | "py" | "glsl" | "md" | "txt" | "cmake")
+        Some("c" | "cpp" | "h" | "hpp" | "rs" | "py" | "md" | "txt" | "cmake")
     )
 }
 

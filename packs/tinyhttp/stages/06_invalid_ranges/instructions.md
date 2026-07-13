@@ -6,7 +6,7 @@ Make `tinyhttp range` reject malformed, reversed, out-of-bounds, and unsafe requ
 
 ## Background
 
-The previous stage described the happy path. A real boundary also has to say what happens when the requested interval makes no sense.
+A successful range describes existing bytes. The error boundary says what happens when the requested interval makes no sense.
 
 Suppose a file has 11 bytes. Its valid positions are 0 through 10. Position 11 is already one byte past the end. A range `7 2` runs backward, while `0 99` reaches beyond the file. Neither should be “fixed” by silently swapping or shortening its endpoints: that would return different bytes from the ones the caller requested.
 
@@ -14,7 +14,7 @@ There is also an ordering question. A path such as `/../secret.txt` must be reje
 
 ## Requirements
 
-Keep the successful `range` behavior from Stage 09. Before slicing or printing a response:
+Keep the successful inclusive-range response. Before slicing or printing:
 
 1. reject a request path that escapes the document root;
 2. parse both offsets as decimal numbers;

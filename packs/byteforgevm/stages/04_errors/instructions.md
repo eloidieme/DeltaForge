@@ -46,5 +46,5 @@ All tests pass, tested guest mistakes never panic, and diagnostics do not appear
 ## Non-goals
 
 - Continuing after a runtime error.
-- Validating instruction operands and targets; that is Stage 08.
+- Validating instruction operands and targets.
 - Static verification of the whole program.

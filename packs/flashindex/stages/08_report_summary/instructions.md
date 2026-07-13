@@ -4,7 +4,7 @@
 
 Add a human-readable summary showing how many files, token occurrences, and distinct token texts FlashIndex found.
 
-The index now works, but a learner still needs a quick way to check whether it indexed roughly the project they expected.
+A short summary helps a user check whether FlashIndex indexed roughly the project they expected.
 
 ## Background
 
@@ -35,7 +35,7 @@ Add:
 flashindex summary <path>
 ```
 
-Use Stage 02 file selection and Stage 03 tokenization. Print exactly these three labelled lines in this order:
+Use the established corpus and token rules. Print exactly these three labelled lines in this order:
 
 ```text
 files: <N>
@@ -66,7 +66,7 @@ The summary does not list the tokens themselves. It describes the collection tha
 
 ## Success criteria
 
-All `deltaforge test` cases pass and the counts agree with the Stage 02 corpus and Stage 03 occurrence stream for the same input.
+All `deltaforge test` cases pass and the counts agree with the corpus and occurrence stream for the same input.
 
 ## Non-goals
 

@@ -4,7 +4,7 @@
 
 Finish the compaction command's file behavior: create missing destination parents, replace every stale destination byte, and leave the input log unchanged.
 
-Stage 06 established which records belong in the compacted state. This stage establishes where and how that state becomes the complete output artifact.
+The compacted records define logical state. Safe output handling ensures those records become the complete destination rather than only its prefix.
 
 ## Background
 
@@ -32,11 +32,11 @@ SET gamma three
 
 The first record is current, but the trailing records are stale leftovers from a different artifact. A successful replacement must define the entire destination, not only its prefix.
 
-The destination may also be nested beneath directories that do not exist yet. This is an ordinary output request, just as it was for the append log.
+The destination may also be nested beneath directories that do not exist. MiniKV creates those parent directories as part of producing the requested output.
 
 Finally, compaction reads one artifact and writes another. The input is evidence of the original history. This command must not quietly turn an out-of-place compaction into an in-place mutation.
 
-These rules make the filesystem result dependable, but they do not promise survival if power fails midway through writing. Crash-atomic replacement would usually involve writing a temporary sibling, synchronizing it, and renaming it under a stated failure model. That remains outside this course contract.
+These rules make the filesystem result dependable, but they do not promise survival if power fails midway through writing. Crash-atomic replacement would usually involve writing a temporary sibling, synchronizing it, and renaming it under a stated failure model. MiniKV does not make that stronger guarantee.
 
 ## Requirements
 
@@ -46,7 +46,7 @@ Keep:
 minikv compact <input-log> <output-log>
 ```
 
-Preserve every Stage 06 semantic rule. Create missing parent directories for `<output-log>`. Replace the destination's complete previous contents, including any stale trailing bytes. Leave `<input-log>` byte-for-byte unchanged. Print a line containing `compacted` only after successful output.
+Preserve the compacted key/value state and ascending key order. Create missing parent directories for `<output-log>`. Replace the destination's complete previous contents, including any stale trailing bytes. Leave `<input-log>` byte-for-byte unchanged. Print a line containing `compacted` only after successful output.
 
 ## Example
 

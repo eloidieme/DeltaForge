@@ -1,6 +1,6 @@
 # Hint 1
 
-Treat the command line as the entire lifetime of the pair. This stage needs no collection or file; it needs an exact boundary between the key argument and the value argument.
+Treat the command line as the entire lifetime of the pair. No collection or file is needed; the important boundary lies between the key argument and the value argument.
 
 # Hint 2
 

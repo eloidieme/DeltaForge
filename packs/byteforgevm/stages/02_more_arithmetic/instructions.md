@@ -18,7 +18,7 @@ Signed integers also let the stack contain negative values. They do not change t
 
 ## Requirements
 
-Keep all Stage 03 instructions and add:
+Keep `PUSH`, `ADD`, `PRINT`, and `HALT`, and add:
 
 - `SUB`: pop right, pop left, then push `left - right`;
 - `MUL`: pop right, pop left, then push `left * right`.

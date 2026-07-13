@@ -1,5 +1,7 @@
 # TinyHTTP
 
+## What you are building
+
 Open a web page and, for a moment, ignore everything visual. Underneath the text, images, and buttons, a much plainer exchange is taking place. One program sends a short message asking for something; another program sends back a status, a few facts about the reply, and some bytes.
 
 TinyHTTP is a small laboratory for that exchange. You will not build a production web server or open a network socket. Instead, you will work directly with HTTP-shaped messages and static files. Keeping the project this small makes the important rules visible: where one part of a message ends, how a path can escape its intended directory, why a length is measured in bytes, and how two protocol versions can give the same header different meaning.
@@ -19,9 +21,9 @@ The first line has exactly three jobs. It names an action (`GET`), a request tar
 
 Those boundaries matter. A line containing `Color: blue` is a header before the empty line and ordinary body text after it. A parser that keeps reading headers into the body has misunderstood the message, even if its output looks plausible on a simple example.
 
-## What the project grows into
+## The path through one HTTP exchange
 
-The stages follow one request through increasingly precise questions:
+The project follows one request through increasingly precise questions:
 
 1. Read a well-formed request line and print its three fields.
 2. Reject request lines that do not have exactly three fields.
@@ -34,7 +36,7 @@ The stages follow one request through increasingly precise questions:
 9. Return one valid inclusive range of file bytes.
 10. Reject invalid ranges before producing a partial response.
 
-Each step adds one idea. Later stages still rely on earlier behavior, but they no longer ask you to learn parsing, security, framing, and range arithmetic all at once.
+The order follows the message itself: parse its structure, map it to a safe resource, describe the response, then handle connection and range semantics.
 
 ## From a path to a response
 
@@ -67,7 +69,7 @@ HTTP/1.0 and HTTP/1.1 look almost identical in a request line, but they begin wi
 | HTTP/1.1 | keep open | close | keep open |
 | HTTP/1.0 | close | close | keep open |
 
-Media types are another kind of interpretation. This project deliberately supports only a small table:
+Media types are another kind of interpretation. TinyHTTP uses a small fixed table:
 
 | Filename ending | Media type |
 |---|---|
@@ -106,4 +108,4 @@ HTTP remains unusually readable for a network protocol. That readability is usef
 
 A strong solution keeps each boundary explicit. It rejects malformed input instead of guessing, validates a path before opening a file, formats status and header lines exactly, and calculates lengths from the bytes that will actually be written. Its parts are small enough that you can explain why each rule exists.
 
-Once the core project is complete, natural extensions include `HEAD`, `416 Range Not Satisfiable`, open-ended ranges, ETags, and a minimal TCP listener. They are useful next steps, but each introduces new protocol rules. The aim here is first to make the small foundation trustworthy.
+Natural extensions include `HEAD`, `416 Range Not Satisfiable`, open-ended ranges, ETags, and a minimal TCP listener. Each introduces another protocol rule, so the small foundation should be trustworthy before those features are added.

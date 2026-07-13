@@ -8,4 +8,4 @@ Split a `SET` record only far enough to isolate the operation and key. The remai
 
 # Hint 3
 
-Walking `source.lines()` from beginning to end with an `Option<String>` for the requested value is enough for this stage. Print only the final option after replay completes.
+Walking `source.lines()` from beginning to end with an `Option<String>` for the requested value is sufficient. Print only the final option after replay completes.
