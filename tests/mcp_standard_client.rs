@@ -413,6 +413,10 @@ async fn official_client_exercises_every_safe_authoring_tool() -> anyhow::Result
                             "path": "{temp_dir}/created.txt",
                             "contains": "payload"
                         }],
+                        "file_not_contains": [{
+                            "path": "{temp_dir}/created.txt",
+                            "contains": "stale"
+                        }],
                         "regex_match": ["^hello"],
                         "json_equals": {"ok": true, "count": 2},
                         "timeout_ms": 4321

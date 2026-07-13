@@ -813,6 +813,18 @@ fn test_definition_schema() -> Value {
                             }
                         }
                     },
+                    "file_not_contains": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["path", "contains"],
+                            "properties": {
+                                "path": {"type": "string"},
+                                "contains": {"type": "string"}
+                            }
+                        }
+                    },
                     "regex_match": string_array_schema(),
                     "json_equals": {},
                     "timeout_ms": {"type": "integer", "minimum": 1}

@@ -53,6 +53,8 @@ pub struct Expectations {
     #[serde(default)]
     pub file_contains: Vec<FileContainsExpectation>,
     #[serde(default)]
+    pub file_not_contains: Vec<FileContainsExpectation>,
+    #[serde(default)]
     pub regex_match: Vec<String>,
     pub json_equals: Option<Value>,
     pub timeout_ms: Option<u64>,
@@ -498,6 +500,19 @@ fn compare_expectations(
         }
     }
 
+    for unexpected_file in &expect.file_not_contains {
+        let path = resolve_expectation_path(temp_dir, &unexpected_file.path);
+        match fs::read_to_string(&path) {
+            Ok(contents) if !contents.contains(&unexpected_file.contains) => {}
+            Ok(_) => failures.push(format!(
+                "expected file {} not to contain {:?}",
+                path.display(),
+                unexpected_file.contains
+            )),
+            Err(error) => failures.push(format!("failed to read file {}: {error}", path.display())),
+        }
+    }
+
     for pattern in &expect.regex_match {
         match Regex::new(pattern) {
             Ok(regex) if regex.is_match(stdout) => {}
@@ -673,6 +688,10 @@ tests:
             file_exists: vec!["created.txt".to_string()],
             file_not_exists: vec!["absent.txt".to_string()],
             file_contains: Vec::new(),
+            file_not_contains: vec![FileContainsExpectation {
+                path: "created.txt".to_string(),
+                contains: "stale".to_string(),
+            }],
             regex_match: vec![r#""name"\s*:\s*"delta""#.to_string()],
             json_equals: Some(serde_json::json!({"name": "delta"})),
             timeout_ms: None,

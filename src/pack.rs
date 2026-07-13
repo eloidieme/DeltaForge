@@ -1010,6 +1010,7 @@ fn validate_expectations(
         || !expect.file_exists.is_empty()
         || !expect.file_not_exists.is_empty()
         || !expect.file_contains.is_empty()
+        || !expect.file_not_contains.is_empty()
         || !expect.regex_match.is_empty()
         || expect.json_equals.is_some();
     if !has_assertion {
@@ -1029,6 +1030,7 @@ fn validate_expectations(
         .iter()
         .chain(&expect.file_not_exists)
         .chain(expect.file_contains.iter().map(|item| &item.path))
+        .chain(expect.file_not_contains.iter().map(|item| &item.path))
     {
         if !safe_expectation_path(value) {
             problems.push(format!(
