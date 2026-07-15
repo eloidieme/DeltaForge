@@ -18,6 +18,7 @@ pub mod overview;
 pub mod pack;
 pub mod portfolio;
 pub mod report;
+pub mod serve;
 pub mod status;
 pub mod sync_pack;
 pub mod test;
@@ -49,6 +50,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Commit(args) => commit::run(args, &options),
         Command::Doctor(args) => doctor::run(args, &options),
         Command::ExplainFailure(args) => explain_failure::run(args, &options),
+        Command::Serve(args) => serve::run(args, &options),
     }
 }
 

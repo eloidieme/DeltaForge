@@ -8,6 +8,7 @@ use crate::learning_web::{
 use crate::runner;
 use crate::state::LastFailedTest;
 use crate::test_web::generate_test_report;
+use crate::viewer;
 
 pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
     let mut context = ProjectContext::load(options)?;
@@ -68,11 +69,10 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
 
     let tests_failed = summaries.iter().any(|summary| !summary.is_success());
     let browser_disabled = std::env::var_os("DELTAFORGE_NO_BROWSER").is_some();
-    let report_enabled = !args.json
-        && !args.list_tests
-        && !args.terminal
-        && (args.open || (tests_failed && !browser_disabled));
-    if report_enabled {
+    let report_capable = !args.json && !args.list_tests && !args.terminal;
+    if report_capable {
+        // Regenerate on every run, not only failing ones, so a connected
+        // live viewer tab always shows the latest result.
         let initial_stage = summaries
             .iter()
             .find(|summary| summary.failed > 0)
@@ -82,18 +82,34 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
         let overview = super::overview::read_pack_overview(&context.pack);
         generate_learning_page(&context, &overview, InitialView::Stage(initial_stage))?;
         let report = generate_test_report(&context, &summaries)?;
+        let ui_dir = context.root.join(".deltaforge/ui");
         let should_open =
             !browser_disabled && (args.open || (tests_failed && should_use_browser(false)));
         if should_open {
-            match open_learning_page(&report) {
-                Ok(()) => println!("Opened the test report in your browser."),
-                Err(error) => {
-                    eprintln!("warning: {error:#}; open the generated report manually");
-                    println!("Test report: {}", report.display());
+            match viewer::open_live(&ui_dir, "test-report.html") {
+                Ok(viewer::LiveOpen::OpenedTab(url)) => {
+                    println!("Opened the test report in your browser: {url}");
                 }
+                Ok(viewer::LiveOpen::Updated(url)) => {
+                    println!("Live test report updated: {url}");
+                }
+                Err(_) => match open_learning_page(&report) {
+                    Ok(()) => println!("Opened the test report in your browser."),
+                    Err(error) => {
+                        eprintln!("warning: {error:#}; open the generated report manually");
+                        println!("Test report: {}", report.display());
+                    }
+                },
             }
         } else {
-            println!("Test report: {}", report.display());
+            let _ = viewer::bump_version(&ui_dir, Some("test-report.html"));
+            if args.open || (tests_failed && !browser_disabled) {
+                println!("Test report: {}", report.display());
+            } else if let Some(status) = viewer::live_status(&ui_dir)
+                && status.clients > 0
+            {
+                println!("Live test report updated: {}test-report.html", status.url);
+            }
         }
     }
 

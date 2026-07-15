@@ -75,40 +75,46 @@ pub fn open_learning_page(path: &Path) -> Result<()> {
     let canonical = path
         .canonicalize()
         .with_context(|| format!("failed to resolve learning page {}", path.display()))?;
-    let mut command = browser_command(&canonical)?;
+    open_in_browser(canonical.as_os_str())
+}
+
+/// Open a local file path or a `http://127.0.0.1` viewer URL in the system
+/// browser.
+pub fn open_in_browser(target: &std::ffi::OsStr) -> Result<()> {
+    let mut command = browser_command(target)?;
     command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     command
         .spawn()
-        .with_context(|| format!("failed to open learning page {}", canonical.display()))?;
+        .with_context(|| format!("failed to open {} in a browser", target.to_string_lossy()))?;
     Ok(())
 }
 
 #[cfg(target_os = "macos")]
-fn browser_command(path: &Path) -> Result<Command> {
+fn browser_command(target: &std::ffi::OsStr) -> Result<Command> {
     let mut command = Command::new("open");
-    command.arg(path);
+    command.arg(target);
     Ok(command)
 }
 
 #[cfg(target_os = "linux")]
-fn browser_command(path: &Path) -> Result<Command> {
+fn browser_command(target: &std::ffi::OsStr) -> Result<Command> {
     let mut command = Command::new("xdg-open");
-    command.arg(path);
+    command.arg(target);
     Ok(command)
 }
 
 #[cfg(windows)]
-fn browser_command(path: &Path) -> Result<Command> {
+fn browser_command(target: &std::ffi::OsStr) -> Result<Command> {
     let mut command = Command::new("rundll32");
-    command.arg("url.dll,FileProtocolHandler").arg(path);
+    command.arg("url.dll,FileProtocolHandler").arg(target);
     Ok(command)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
-fn browser_command(_path: &Path) -> Result<Command> {
+fn browser_command(_target: &std::ffi::OsStr) -> Result<Command> {
     anyhow::bail!("opening a browser is not supported on this operating system")
 }
 
@@ -172,13 +178,14 @@ fn render_learning_page(
 <meta name="color-scheme" content="light dark">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
 <title>{pack_name} · DeltaForge</title>
-<style>{css}</style>
+<style>{theme_tokens}{css}{theme_unify}</style>
 </head>
 <body data-initial-target="{initial_target}">
 <a class="skip-link" href="#main-content">Skip to content</a>
 <header class="masthead">
   <button id="menu-button" class="menu-button" aria-expanded="false" aria-controls="contents-nav">Contents</button>
   <div class="brand"><span class="mark" aria-hidden="true">Δ</span><span class="brand-text"><span class="brand-name">DeltaForge</span><span class="brand-pack">{pack_name}</span></span></div>
+  <nav class="site-nav" aria-label="DeltaForge pages"><a class="site-link current" aria-current="page" href="learning.html">Learn</a><a class="site-link" href="test-report.html">Test report</a></nav>
   <div class="masthead-meta"><span class="workbench">{project} · {language}</span><div class="progress"><span class="notches" role="img" aria-label="{completed} of {total} stages complete">{notches}</span><span class="progress-count">{completed} of {total} complete</span></div></div>
 </header>
 <div class="layout">
@@ -200,6 +207,8 @@ fn render_learning_page(
         project = escape_html(project),
         language = escape_html(language),
         initial_target = escape_attr(&initial_target),
+        theme_tokens = crate::web_theme::TOKENS,
+        theme_unify = crate::web_theme::UNIFY,
         css = CSS,
         js = JS,
     )
@@ -699,23 +708,7 @@ fn escape_attr(source: &str) -> String {
 }
 
 const CSS: &str = r##"
-:root{
-  color-scheme:light dark;
-  --paper:#f6f1e6;--panel:#fdfaf1;--ink:#282217;--muted:#6e6353;
-  --line:#d6cbb4;--line-soft:#e6ddc9;
-  --ember:#b23c17;
-  --code-bg:#282218;--code-ink:#ede3d0;--code-line:#55492f;
-  --inline-code:#ece3cd;
-  --mono:ui-monospace,"Cascadia Code","SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace;
-  --serif:"Charter","Bitstream Charter","Sitka Text",Cambria,Georgia,serif;
-}
-@media (prefers-color-scheme:dark){:root{
-  --paper:#171410;--panel:#1e1a14;--ink:#e8dfcb;--muted:#a4977f;
-  --line:#3b3425;--line-soft:#2b2519;
-  --ember:#e5723e;
-  --code-bg:#100e0a;--code-ink:#e4dac5;--code-line:#463c27;
-  --inline-code:#2b2519;
-}}
+/* Palette and font tokens come from the shared theme (web_theme::TOKENS). */
 *{box-sizing:border-box}
 html{background:var(--paper);scroll-behavior:smooth}
 body{margin:0;font-family:var(--serif);font-size:1.0625rem;line-height:1.75;color:var(--ink);background:var(--paper)}
@@ -727,6 +720,10 @@ button{font:inherit;color:inherit}
 
 /* Masthead */
 .masthead{display:flex;align-items:center;gap:1.25rem;padding:1rem 2rem;border-bottom:3px double var(--line);background:var(--paper)}
+.site-nav{display:flex;gap:1rem;margin-left:.5rem}
+.site-nav a{color:var(--muted);text-decoration:none;font-size:.78rem;text-transform:uppercase;letter-spacing:.1em;font-weight:700;padding:.25rem 0;border-bottom:2px solid transparent}
+.site-nav a:hover{color:var(--ink)}
+.site-nav a.current{color:var(--ink);border-bottom-color:var(--ink)}
 .menu-button{display:none}
 .brand{display:flex;align-items:center;gap:.8rem}
 .mark{display:grid;place-items:center;width:2.25rem;height:2.25rem;border:2px solid var(--ink);font-family:var(--mono);font-size:1.15rem;font-weight:700}
@@ -796,7 +793,7 @@ button{font:inherit;color:inherit}
 .prose ol{padding-left:1.5rem;margin:.9em 0}
 .prose ol li{margin:.45em 0}
 .prose h3{font-size:1.06rem;margin:1.8em 0 .5em}
-.prose :not(pre)>code,.lede code{font-family:var(--mono);font-size:.85em;background:var(--inline-code);padding:.08em .35em;border-radius:2px}
+.prose :not(pre)>code,.lede :not(pre)>code{font-family:var(--mono);font-size:.85em;background:var(--inline-code);padding:.08em .35em;border-radius:2px}
 
 /* Code */
 .code-block{position:relative;margin:1.5rem 0}

@@ -59,6 +59,35 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Explain the latest failing stage results and suggest next steps.
     ExplainFailure(ExplainFailureArgs),
+    /// Run the live viewer server for the learning and test-report pages.
+    Serve(ServeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ServeArgs {
+    /// Open the viewer in your browser after starting.
+    #[arg(long)]
+    pub open: bool,
+
+    /// Stop the running viewer for this project.
+    #[arg(long, conflicts_with_all = ["open", "restart", "auto"])]
+    pub stop: bool,
+
+    /// Stop the running viewer, then start a fresh one.
+    #[arg(long)]
+    pub restart: bool,
+
+    /// Print only errors.
+    #[arg(long)]
+    pub quiet: bool,
+
+    /// Shut down automatically after thirty idle minutes.
+    #[arg(long, hide = true)]
+    pub auto: bool,
+
+    /// Serve this UI directory instead of discovering the project.
+    #[arg(long, hide = true)]
+    pub ui_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

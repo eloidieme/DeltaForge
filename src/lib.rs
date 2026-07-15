@@ -12,3 +12,5 @@ pub mod runner;
 pub mod state;
 pub mod terminal;
 pub mod test_web;
+pub mod viewer;
+pub mod web_theme;
