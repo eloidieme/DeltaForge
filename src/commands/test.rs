@@ -1,90 +1,119 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
+use crate::application::{self, RunEvent, RunTrigger, TestRunRequest};
 use crate::cli::TestArgs;
 use crate::context::{GlobalOptions, ProjectContext};
 use crate::learning_web::{
     InitialView, generate_learning_page, open_learning_page, should_use_browser,
 };
-use crate::runner;
-use crate::state::LastFailedTest;
 use crate::test_web::generate_test_report;
 use crate::viewer;
 
 pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
-    let mut context = ProjectContext::load(options)?;
-    let stages = if args.all {
-        context.pack.manifest.stages.clone()
-    } else {
-        let stage_id = args
-            .stage
-            .as_deref()
-            .unwrap_or(&context.state.current_stage);
-        vec![
-            context
-                .pack
-                .manifest
-                .stage(stage_id)
-                .with_context(|| format!("pack does not contain stage {stage_id}"))?
-                .clone(),
-        ]
+    let json = args.json;
+    let verbose = args.verbose;
+    let list_tests = args.list_tests;
+    let open = args.open;
+    let terminal = args.terminal;
+    let all = args.all;
+
+    let mut sink = |event: RunEvent| {
+        if json {
+            return;
+        }
+        match event {
+            RunEvent::JobStarted { stage_ids, .. } => {
+                println!("Checking {}", stage_ids.join(", "));
+                println!();
+            }
+            RunEvent::BuildStarted { command } if verbose => {
+                println!("Build: {}", command.join(" "));
+            }
+            RunEvent::BuildOutput { stream, text } if verbose => {
+                println!("{stream}:\n{text}");
+            }
+            RunEvent::TestPassed { result, .. } => {
+                println!("PASS  {}", result.name);
+                if verbose {
+                    print_streams(&result);
+                }
+                if let Some(path) = &result.kept_temp_dir {
+                    println!("Kept temp dir: {}", path.display());
+                }
+            }
+            RunEvent::TestFailed { result, .. } => {
+                println!("FAIL  {}", result.name);
+                for failure in &result.failures {
+                    println!("  {failure}");
+                }
+                if !verbose && !result.stdout.is_empty() {
+                    println!("  actual stdout:");
+                    for line in result.stdout.lines().take(20) {
+                        println!("    {line}");
+                    }
+                }
+                if verbose {
+                    print_streams(&result);
+                }
+                if let Some(path) = &result.kept_temp_dir {
+                    println!("Kept temp dir: {}", path.display());
+                }
+            }
+            RunEvent::RunCompleted {
+                passed_tests,
+                failed_tests,
+                ..
+            } => {
+                println!();
+                println!("{passed_tests} passed, {failed_tests} failed");
+            }
+            _ => {}
+        }
     };
 
-    let mut summaries = Vec::new();
-    let mut newly_completed_current = false;
-    for stage in &stages {
-        let summary = runner::run_stage_tests(&context, stage, &args)?;
-        if !args.list_tests && summary.completion_eligible {
-            let was_completed = context.state.is_completed(&stage.id);
-            context.state.record_completion_proof(
-                &stage.id,
-                context.pack_digest()?,
-                context.stage_behavioral_digest(&stage.id)?,
-                context.project_digest()?,
-                summary.total_defined,
-            )?;
-            newly_completed_current |= !was_completed && stage.id == context.state.current_stage;
+    let outcome = application::run_tests(
+        options,
+        TestRunRequest {
+            stage: args.stage,
+            all,
+            filter: args.filter,
+            list_tests,
+            fail_fast: args.fail_fast,
+            no_build: args.no_build,
+            keep_temp: args.keep_temp,
+            capture_details: !json && !terminal,
+            trigger: RunTrigger::Cli,
+        },
+        &mut sink,
+    )?;
+
+    if list_tests && !json {
+        for summary in &outcome.summaries {
+            println!("{}:", summary.stage_id);
+            for result in &summary.results {
+                println!("  {}", result.name);
+            }
         }
-        if !args.list_tests {
-            context.state.record_test_run(
-                stage.id.clone(),
-                summary.passed,
-                summary.failed,
-                summary
-                    .results
-                    .iter()
-                    .filter(|result| !result.passed)
-                    .map(|result| LastFailedTest {
-                        name: result.name.clone(),
-                        failures: result.failures.clone(),
-                    })
-                    .collect(),
-            )?;
-        }
-        summaries.push(summary);
     }
 
-    if !args.list_tests {
-        context.save_state()?;
-    }
-
-    let tests_failed = summaries.iter().any(|summary| !summary.is_success());
+    let tests_failed = !outcome.is_success();
     let browser_disabled = std::env::var_os("DELTAFORGE_NO_BROWSER").is_some();
-    let report_capable = !args.json && !args.list_tests && !args.terminal;
+    let report_capable = !json && !list_tests && !terminal;
     if report_capable {
-        // Regenerate on every run, not only failing ones, so a connected
-        // live viewer tab always shows the latest result.
-        let initial_stage = summaries
+        let context = ProjectContext::load(options)?;
+        let initial_stage = outcome
+            .summaries
             .iter()
             .find(|summary| summary.failed > 0)
-            .or_else(|| summaries.first())
+            .or_else(|| outcome.summaries.first())
             .map(|summary| summary.stage_id.as_str())
             .unwrap_or(&context.state.current_stage);
         let overview = super::overview::read_pack_overview(&context.pack);
         generate_learning_page(&context, &overview, InitialView::Stage(initial_stage))?;
-        let report = generate_test_report(&context, &summaries)?;
+        let report = generate_test_report(&context, &outcome.summaries)?;
         let ui_dir = context.root.join(".deltaforge/ui");
         let should_open =
-            !browser_disabled && (args.open || (tests_failed && should_use_browser(false)));
+            !browser_disabled && (open || (tests_failed && should_use_browser(false)));
         if should_open {
             match viewer::open_live(&ui_dir, "test-report.html") {
                 Ok(viewer::LiveOpen::OpenedTab(url)) => {
@@ -103,7 +132,7 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
             }
         } else {
             let _ = viewer::bump_version(&ui_dir, Some("test-report.html"));
-            if args.open || (tests_failed && !browser_disabled) {
+            if open || (tests_failed && !browser_disabled) {
                 println!("Test report: {}", report.display());
             } else if let Some(status) = viewer::live_status(&ui_dir)
                 && status.clients > 0
@@ -113,20 +142,32 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
         }
     }
 
-    if tests_failed {
-        if args.json {
-            println!("{}", serde_json::to_string_pretty(&summaries)?);
+    if outcome.newly_completed_current && !tests_failed {
+        let context = ProjectContext::load(options)?;
+        if context.config.git.auto_commit {
+            super::commit::run_automatic(options, json)?;
         }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&outcome)?);
+    }
+
+    if let Some(error) = outcome.execution_error {
+        bail!("{error}");
+    }
+    if tests_failed {
         bail!("tests failed");
     }
 
-    if newly_completed_current && context.config.git.auto_commit {
-        super::commit::run_automatic(options, args.json)?;
-    }
-
-    if args.json {
-        println!("{}", serde_json::to_string_pretty(&summaries)?);
-    }
-
     Ok(())
+}
+
+fn print_streams(result: &crate::runner::TestResult) {
+    if !result.stdout.is_empty() {
+        println!("stdout:\n{}", result.stdout);
+    }
+    if !result.stderr.is_empty() {
+        println!("stderr:\n{}", result.stderr);
+    }
 }

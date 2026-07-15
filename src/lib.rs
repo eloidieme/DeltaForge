@@ -1,3 +1,4 @@
+pub mod application;
 pub mod authoring;
 pub mod cli;
 pub mod commands;

@@ -10,11 +10,21 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cli::TestArgs;
+use crate::application::{EventSink, RunEvent};
 use crate::context::ProjectContext;
 use crate::integrity::is_safe_relative_path;
 use crate::pack::{CommandSpec, StageSpec, safe_expectation_path};
 use crate::process;
+
+#[derive(Debug, Clone, Default)]
+pub struct RunnerOptions {
+    pub filter: Option<String>,
+    pub list_tests: bool,
+    pub fail_fast: bool,
+    pub no_build: bool,
+    pub keep_temp: bool,
+    pub capture_details: bool,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,11 +109,13 @@ pub struct TestResult {
     pub report_stdout: Option<String>,
     #[serde(skip)]
     pub report_stderr: Option<String>,
-    #[serde(skip)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub input: Option<TestInput>,
+    #[serde(skip)]
+    pub kept_temp_dir: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TestInput {
     pub command: Vec<String>,
     pub stdin: Option<String>,
@@ -114,13 +126,13 @@ pub struct TestInput {
     pub fixture: Option<FixtureSnapshot>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FixtureSnapshot {
     pub entries: Vec<FixtureEntry>,
     pub omitted_entries: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FixtureEntry {
     pub path: String,
     pub kind: FixtureEntryKind,
@@ -130,13 +142,15 @@ pub struct FixtureEntry {
     pub preview_truncated: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FixtureEntryKind {
     Directory,
     File,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FixturePreviewKind {
     Text,
     Binary,
@@ -167,7 +181,8 @@ impl TestRunSummary {
 pub fn run_stage_tests(
     context: &ProjectContext,
     stage: &StageSpec,
-    args: &TestArgs,
+    args: &RunnerOptions,
+    sink: &mut dyn EventSink,
 ) -> Result<TestRunSummary> {
     let language = context
         .pack
@@ -217,16 +232,6 @@ pub fn run_stage_tests(
         }
     }
 
-    let human_output = !args.json;
-    let compact_output = human_output
-        && !args.verbose
-        && !args.terminal
-        && (args.open || crate::learning_web::should_use_browser(false));
-    if human_output {
-        println!("Stage {}: {}", stage.id, stage.title);
-        println!();
-    }
-
     if args.list_tests {
         let results = selected_tests
             .iter()
@@ -243,13 +248,9 @@ pub fn run_stage_tests(
                 report_stdout: None,
                 report_stderr: None,
                 input: None,
+                kept_temp_dir: None,
             })
             .collect::<Vec<_>>();
-        if human_output {
-            for test in &selected_tests {
-                println!("{}", test.name);
-            }
-        }
         return Ok(TestRunSummary {
             stage_id: stage.id.clone(),
             passed: results.len(),
@@ -267,30 +268,37 @@ pub fn run_stage_tests(
             build,
             &context.root,
             context.config.runner.build_timeout_ms,
-            args.verbose && !args.json,
+            sink,
         )?;
     }
 
     let mut results = Vec::new();
+    let selected_count = selected_tests.len();
 
-    for test in selected_tests {
+    for (index, test) in selected_tests.into_iter().enumerate() {
+        sink.emit(RunEvent::TestStarted {
+            stage_id: stage.id.clone(),
+            name: test.name.clone(),
+            index: index + 1,
+            total: selected_count,
+        });
         let result = run_test_case(context, stage, &language.run, test, args)?;
         let failed = !result.passed;
-        if human_output {
+        if false {
             if result.passed {
                 println!("✓ {}", test.name);
             } else {
                 println!("✗ {}", test.name);
-                if !compact_output {
+                if false {
                     for failure in &result.failures {
                         println!("  {failure}");
                     }
                 }
-                if !args.verbose && !compact_output {
+                if false {
                     print_actual_output(&result);
                 }
             }
-            if args.verbose {
+            if false {
                 if !result.stdout.is_empty() {
                     println!("stdout:\n{}", result.stdout);
                 }
@@ -300,7 +308,18 @@ pub fn run_stage_tests(
                 println!();
             }
         }
-        results.push(result);
+        results.push(result.clone());
+        sink.emit(if result.passed {
+            RunEvent::TestPassed {
+                stage_id: stage.id.clone(),
+                result: result.clone(),
+            }
+        } else {
+            RunEvent::TestFailed {
+                stage_id: stage.id.clone(),
+                result: result.clone(),
+            }
+        });
         if failed && args.fail_fast {
             break;
         }
@@ -308,17 +327,6 @@ pub fn run_stage_tests(
 
     let passed = results.iter().filter(|result| result.passed).count();
     let failed = results.len() - passed;
-
-    if human_output {
-        println!();
-        if failed == 0 {
-            println!("{passed} passed, 0 failed");
-            println!("Stage passed.");
-            println!("Run deltaforge next to continue.");
-        } else {
-            println!("{passed} passed, {failed} failed");
-        }
-    }
 
     Ok(TestRunSummary {
         stage_id: stage.id.clone(),
@@ -380,17 +388,33 @@ fn run_build(
     build: &CommandSpec,
     project_root: &Path,
     timeout_ms: u64,
-    verbose: bool,
+    sink: &mut dyn EventSink,
 ) -> Result<()> {
     if build.command.is_empty() {
         return Ok(());
     }
 
-    if verbose {
-        println!("Build: {}", build.command.join(" "));
-    }
+    sink.emit(RunEvent::BuildStarted {
+        command: build.command.clone(),
+    });
 
     let output = run_command(&build.command, project_root, timeout_ms)?;
+    if !output.stdout.is_empty() {
+        sink.emit(RunEvent::BuildOutput {
+            stream: "stdout",
+            text: String::from_utf8_lossy(&output.stdout).to_string(),
+        });
+    }
+    if !output.stderr.is_empty() {
+        sink.emit(RunEvent::BuildOutput {
+            stream: "stderr",
+            text: String::from_utf8_lossy(&output.stderr).to_string(),
+        });
+    }
+    sink.emit(RunEvent::BuildCompleted {
+        passed: output.status.success(),
+    });
+
     if !output.status.success() {
         bail!(
             "build failed\nstdout:\n{}\nstderr:\n{}",
@@ -407,7 +431,7 @@ fn run_test_case(
     stage: &StageSpec,
     run_command_spec: &CommandSpec,
     test: &TestCase,
-    args: &TestArgs,
+    args: &RunnerOptions,
 ) -> Result<TestResult> {
     let temp_dir = create_temp_dir(stage, &test.name)?;
     let keep_temp = args.keep_temp || context.config.runner.keep_temp;
@@ -433,6 +457,7 @@ fn run_test_case(
                 report_stdout: None,
                 report_stderr: None,
                 input: None,
+                kept_temp_dir: None,
             },
         };
 
@@ -444,8 +469,8 @@ fn run_test_case(
                 temp_dir.display()
             ));
         }
-    } else if args.verbose && !args.json {
-        println!("Kept temp dir: {}", temp_dir.display());
+    } else {
+        result.kept_temp_dir = Some(temp_dir.clone());
     }
 
     Ok(result)
@@ -456,7 +481,7 @@ fn run_test_case_in_temp(
     stage: &StageSpec,
     run_command_spec: &CommandSpec,
     test: &TestCase,
-    args: &TestArgs,
+    args: &RunnerOptions,
     temp_dir: &Path,
 ) -> Result<TestResult> {
     let fixture_path = if let Some(fixture) = &test.fixture {
@@ -480,10 +505,6 @@ fn run_test_case_in_temp(
             .iter()
             .map(|arg| expand_variables(arg, &fixture_path, temp_dir)),
     );
-
-    if args.verbose && !args.json {
-        println!("Command: {}", full_command.join(" "));
-    }
 
     let timeout_ms = test
         .expect
@@ -558,6 +579,7 @@ fn run_test_case_in_temp(
                 report_stdout: None,
                 report_stderr: None,
                 input,
+                kept_temp_dir: None,
             });
         }
     };
@@ -587,13 +609,12 @@ fn run_test_case_in_temp(
         report_stdout: Some(report_stdout),
         report_stderr: Some(report_stderr),
         input,
+        kept_temp_dir: None,
     })
 }
 
-fn should_capture_test_input(args: &TestArgs) -> bool {
-    !args.json
-        && !args.terminal
-        && (args.open || std::env::var_os("DELTAFORGE_NO_BROWSER").is_none())
+fn should_capture_test_input(args: &RunnerOptions) -> bool {
+    args.capture_details
 }
 
 fn sanitize_report_text(value: &str, fixture_path: &Path, temp_dir: &Path) -> String {

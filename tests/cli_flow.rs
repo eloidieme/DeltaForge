@@ -320,10 +320,32 @@ fn starter_project_initializes_and_fails_current_stage() {
 
     let parsed: serde_json::Value =
         serde_json::from_slice(&json_test.stdout).expect("test --json should emit valid JSON");
-    assert_eq!(parsed[0]["stage_id"], "01_scan_files");
-    assert_eq!(parsed[0]["passed"], 0);
-    assert_eq!(parsed[0]["failed"], 8);
-    assert_eq!(parsed[0]["results"].as_array().unwrap().len(), 8);
+    assert_eq!(parsed["summaries"][0]["stage_id"], "01_scan_files");
+    assert_eq!(parsed["summaries"][0]["passed"], 0);
+    assert_eq!(parsed["summaries"][0]["failed"], 8);
+    assert_eq!(
+        parsed["summaries"][0]["results"].as_array().unwrap().len(),
+        8
+    );
+    let persisted_state: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(project_dir.join(".deltaforge/state.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(persisted_state["active_job"].is_null());
+    assert_eq!(
+        persisted_state["attempt_history"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["status"],
+        "failed"
+    );
+    assert!(
+        !persisted_state["last_test_runs"]["01_scan_files"]["project_digest"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
 
     let config_json = run_deltaforge(["config", "show", "--json"], &project_dir);
     assert_success(&config_json);
@@ -816,7 +838,10 @@ fn test_runner_selection_flags_are_user_facing() {
     assert_success(&list);
     let listed: serde_json::Value =
         serde_json::from_slice(&list.stdout).expect("test --list-tests --json is valid JSON");
-    assert_eq!(listed[0]["results"].as_array().unwrap().len(), 8);
+    assert_eq!(
+        listed["summaries"][0]["results"].as_array().unwrap().len(),
+        8
+    );
     assert_stdout_contains(&list, "scans files in a basic project");
 
     let filtered = run_deltaforge(["test", "--filter", "nested"], &project_dir);

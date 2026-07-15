@@ -35,6 +35,10 @@ pub struct ProjectState {
     pub hint_state: BTreeMap<String, usize>,
     #[serde(default)]
     pub gate_results: BTreeMap<String, GateRecord>,
+    #[serde(default)]
+    pub attempt_history: Vec<TestAttempt>,
+    #[serde(default)]
+    pub active_job: Option<ActiveJob>,
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
@@ -86,6 +90,8 @@ pub struct LastTestRunSummary {
     pub timestamp: String,
     #[serde(default)]
     pub failed_tests: Vec<LastFailedTest>,
+    #[serde(default)]
+    pub project_digest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +99,40 @@ pub struct LastTestRunSummary {
 pub struct LastFailedTest {
     pub name: String,
     pub failures: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActiveJob {
+    pub id: String,
+    pub stage_ids: Vec<String>,
+    pub started_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptStatus {
+    Running,
+    Passed,
+    Failed,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestAttempt {
+    pub job_id: String,
+    pub stage_ids: Vec<String>,
+    pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    pub status: AttemptStatus,
+    #[serde(default)]
+    pub passed: usize,
+    #[serde(default)]
+    pub failed: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl ProjectState {
@@ -112,6 +152,8 @@ impl ProjectState {
             last_test_runs: BTreeMap::new(),
             hint_state: BTreeMap::new(),
             gate_results: BTreeMap::new(),
+            attempt_history: Vec::new(),
+            active_job: None,
             created_at: now.clone(),
             updated_at: now,
         })
@@ -204,6 +246,7 @@ impl ProjectState {
         passed: usize,
         failed: usize,
         failed_tests: Vec<LastFailedTest>,
+        project_digest: String,
     ) -> Result<()> {
         let now = current_timestamp()?;
         self.last_test_runs.insert(
@@ -214,10 +257,115 @@ impl ProjectState {
                 failed,
                 timestamp: now.clone(),
                 failed_tests,
+                project_digest,
             },
         );
         self.updated_at = now;
         Ok(())
+    }
+
+    pub fn start_test_job(&mut self, stage_ids: Vec<String>) -> Result<String> {
+        let now = current_timestamp()?;
+        let job_id = format!(
+            "{}-{}",
+            std::process::id(),
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        );
+        self.active_job = Some(ActiveJob {
+            id: job_id.clone(),
+            stage_ids: stage_ids.clone(),
+            started_at: now.clone(),
+        });
+        self.attempt_history.push(TestAttempt {
+            job_id: job_id.clone(),
+            stage_ids,
+            started_at: now.clone(),
+            finished_at: None,
+            status: AttemptStatus::Running,
+            passed: 0,
+            failed: 0,
+            error: None,
+        });
+        const ATTEMPT_HISTORY_LIMIT: usize = 20;
+        if self.attempt_history.len() > ATTEMPT_HISTORY_LIMIT {
+            let excess = self.attempt_history.len() - ATTEMPT_HISTORY_LIMIT;
+            self.attempt_history.drain(..excess);
+        }
+        self.updated_at = now;
+        Ok(job_id)
+    }
+
+    pub fn finish_test_job(
+        &mut self,
+        job_id: &str,
+        status: AttemptStatus,
+        passed: usize,
+        failed: usize,
+        error: Option<String>,
+    ) -> Result<()> {
+        let now = current_timestamp()?;
+        let attempt = self
+            .attempt_history
+            .iter_mut()
+            .find(|attempt| attempt.job_id == job_id)
+            .with_context(|| format!("test job {job_id} is missing from attempt history"))?;
+        attempt.finished_at = Some(now.clone());
+        attempt.status = status;
+        attempt.passed = passed;
+        attempt.failed = failed;
+        attempt.error = error;
+        if self
+            .active_job
+            .as_ref()
+            .is_some_and(|active| active.id == job_id)
+        {
+            self.active_job = None;
+        }
+        self.updated_at = now;
+        Ok(())
+    }
+
+    pub fn clear_active_job(&mut self, job_id: &str) -> Result<()> {
+        if self
+            .active_job
+            .as_ref()
+            .is_some_and(|active| active.id == job_id)
+        {
+            self.active_job = None;
+        }
+        self.attempt_history
+            .retain(|attempt| attempt.job_id != job_id || attempt.status != AttemptStatus::Running);
+        self.updated_at = current_timestamp()?;
+        Ok(())
+    }
+
+    pub fn recover_interrupted_job(&mut self) -> Result<bool> {
+        let Some(active) = self.active_job.take() else {
+            return Ok(false);
+        };
+        let now = current_timestamp()?;
+        if let Some(attempt) = self
+            .attempt_history
+            .iter_mut()
+            .find(|attempt| attempt.job_id == active.id)
+        {
+            attempt.finished_at = Some(now.clone());
+            attempt.status = AttemptStatus::Interrupted;
+            attempt.error = Some("DeltaForge stopped before this run finished".to_string());
+        } else {
+            self.attempt_history.push(TestAttempt {
+                job_id: active.id,
+                stage_ids: active.stage_ids,
+                started_at: active.started_at,
+                finished_at: Some(now.clone()),
+                status: AttemptStatus::Interrupted,
+                passed: 0,
+                failed: 0,
+                error: Some("DeltaForge stopped before this run finished".to_string()),
+            });
+        }
+        self.updated_at = now;
+        Ok(true)
     }
 
     pub fn touch(&mut self) -> Result<()> {
@@ -273,5 +421,58 @@ mod tests {
         assert!(!state.created_at.starts_with("unix:"));
         assert!(state.created_at.ends_with('Z'));
         OffsetDateTime::parse(&state.created_at, &Rfc3339).unwrap();
+    }
+    #[test]
+
+    fn active_job_is_recovered_as_interrupted() {
+        let mut state = ProjectState::new(
+            "flashindex".to_string(),
+            "rust".to_string(),
+            "01_scan_files".to_string(),
+        )
+        .unwrap();
+        let job_id = state
+            .start_test_job(vec!["01_scan_files".to_string()])
+            .unwrap();
+
+        assert!(state.recover_interrupted_job().unwrap());
+        assert!(state.active_job.is_none());
+        let attempt = state
+            .attempt_history
+            .iter()
+            .find(|attempt| attempt.job_id == job_id)
+            .unwrap();
+        assert_eq!(attempt.status, AttemptStatus::Interrupted);
+        assert!(attempt.finished_at.is_some());
+        assert!(attempt.error.is_some());
+        assert!(!state.recover_interrupted_job().unwrap());
+    }
+
+    #[test]
+    fn attempt_history_keeps_only_the_latest_twenty_runs() {
+        let mut state = ProjectState::new(
+            "flashindex".to_string(),
+            "rust".to_string(),
+            "01_scan_files".to_string(),
+        )
+        .unwrap();
+
+        for _ in 0..25 {
+            let job_id = state
+                .start_test_job(vec!["01_scan_files".to_string()])
+                .unwrap();
+            state
+                .finish_test_job(&job_id, AttemptStatus::Failed, 1, 1, None)
+                .unwrap();
+        }
+
+        assert_eq!(state.attempt_history.len(), 20);
+        assert!(state.active_job.is_none());
+        assert!(
+            state
+                .attempt_history
+                .iter()
+                .all(|attempt| attempt.status == AttemptStatus::Failed)
+        );
     }
 }
