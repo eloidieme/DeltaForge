@@ -48,3 +48,41 @@ tests:
     expect:
       exit_code: 0
       stdout_exact: ""
+
+  - name: last token is emitted without a trailing newline
+    fixture: no_trailing_newline
+    command: ["tokenize", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/tail.rs:1:1 alpha
+        src/tail.rs:1:7 beta
+
+  - name: columns count bytes and lone underscore is a token
+    fixture: byte_columns
+    command: ["tokenize", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/unicode.rs:1:1 let
+        src/unicode.rs:1:7 _x
+        src/unicode.rs:2:1 _
+
+  - name: carriage return line endings keep one based positions
+    fixture: crlf_lines
+    command: ["tokenize", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "src/win.rs:1:1 alpha"
+        - "src/win.rs:2:1 beta"
+        - "src/win.rs:2:6 gamma"
+
+  - name: files are processed in sorted portable path order
+    fixture: two_files_order
+    command: ["tokenize", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/a.rs:1:1 one
+        src/b.rs:1:1 two

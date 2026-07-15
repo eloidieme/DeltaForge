@@ -55,3 +55,27 @@ tests:
       stdout_exact: ""
       stderr_contains:
         - "positive integer"
+
+  - name: negative thread count is rejected
+    fixture: parallel_project
+    command: ["index", "{fixture_path}", "--threads", "-1"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+      stderr_contains:
+        - "positive integer"
+
+  - name: two threads produce byte-identical output
+    fixture: parallel_project
+    command: ["index", "{fixture_path}", "--threads", "2"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        Gamma lib/core.rs
+        alpha src/a.rs src/b.rs
+        beta src/a.rs src/b.rs
+        delta src/b.rs
+        fn lib/core.rs src/a.rs src/b.rs
+        gamma lib/core.rs src/a.rs
+        let src/a.rs src/b.rs
+        struct lib/core.rs

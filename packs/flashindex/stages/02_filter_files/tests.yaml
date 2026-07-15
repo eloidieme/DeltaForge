@@ -41,3 +41,41 @@ tests:
       exit_code: 0
       stdout_not_contains:
         - "target/generated.rs"
+
+  - name: accepts every allowed extension
+    fixture: allowed_extensions
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        a.c
+        b.cpp
+        c.h
+        d.hpp
+        e.rs
+        f.py
+        g.md
+        h.txt
+        i.cmake
+
+  - name: extension matching is case sensitive
+    fixture: tricky_names
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "src/main.rs"
+      stdout_not_contains:
+        - "NOTES.RS"
+        - "readme.MD"
+
+  - name: names without an allowed suffix are excluded
+    fixture: tricky_names
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/main.rs
+      stdout_not_contains:
+        - "Makefile"
+        - "notes.rs.bak"

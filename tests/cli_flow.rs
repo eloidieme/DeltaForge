@@ -265,7 +265,7 @@ fn starter_project_initializes_and_fails_current_stage() {
 
     let test = run_deltaforge(["test"], &project_dir);
     assert_failure(&test);
-    assert_stdout_contains(&test, "0 passed, 5 failed");
+    assert_stdout_contains(&test, "0 passed, 8 failed");
     assert_stdout_contains(&test, "Test report:");
     assert_stderr_contains(&test, "error: tests failed");
 
@@ -274,7 +274,7 @@ fn starter_project_initializes_and_fails_current_stage() {
         .join("ui")
         .join("test-report.html");
     let test_report = fs::read_to_string(&test_report_path).unwrap();
-    assert!(test_report.contains("5 tests need attention"));
+    assert!(test_report.contains("8 tests need attention"));
     assert!(test_report.contains("Needs attention"));
     assert!(test_report.contains("data-tab=\"input\""));
     assert!(test_report.contains("data-tab=\"output\""));
@@ -322,8 +322,8 @@ fn starter_project_initializes_and_fails_current_stage() {
         serde_json::from_slice(&json_test.stdout).expect("test --json should emit valid JSON");
     assert_eq!(parsed[0]["stage_id"], "01_scan_files");
     assert_eq!(parsed[0]["passed"], 0);
-    assert_eq!(parsed[0]["failed"], 5);
-    assert_eq!(parsed[0]["results"].as_array().unwrap().len(), 5);
+    assert_eq!(parsed[0]["failed"], 8);
+    assert_eq!(parsed[0]["results"].as_array().unwrap().len(), 8);
 
     let config_json = run_deltaforge(["config", "show", "--json"], &project_dir);
     assert_success(&config_json);
@@ -816,12 +816,12 @@ fn test_runner_selection_flags_are_user_facing() {
     assert_success(&list);
     let listed: serde_json::Value =
         serde_json::from_slice(&list.stdout).expect("test --list-tests --json is valid JSON");
-    assert_eq!(listed[0]["results"].as_array().unwrap().len(), 5);
+    assert_eq!(listed[0]["results"].as_array().unwrap().len(), 8);
     assert_stdout_contains(&list, "scans files in a basic project");
 
     let filtered = run_deltaforge(["test", "--filter", "nested"], &project_dir);
     assert_failure(&filtered);
-    assert_stdout_contains(&filtered, "0 passed, 1 failed");
+    assert_stdout_contains(&filtered, "0 passed, 2 failed");
     assert_stdout_contains(&filtered, "scans nested directories");
     assert_stdout_not_contains(&filtered, "skips ignored directories");
 
@@ -1683,7 +1683,7 @@ keep_temp = false
     let timeout = run_deltaforge(["test"], &timeout_project);
     assert_failure(&timeout);
     assert_stdout_contains(&timeout, "command timed out after 1 ms");
-    assert_stdout_contains(&timeout, "0 passed, 5 failed");
+    assert_stdout_contains(&timeout, "0 passed, 8 failed");
     assert_stderr_contains(&timeout, "error: tests failed");
 }
 
@@ -1710,7 +1710,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
     let stage1 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage1);
     assert_stdout_contains(&stage1, "Stage 01_scan_files: Scan files");
-    assert_stdout_contains(&stage1, "5 passed");
+    assert_stdout_contains(&stage1, "8 passed");
 
     let next1 = run_deltaforge(["next"], &project_dir);
     assert_success(&next1);
@@ -1722,7 +1722,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
     let stage2 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage2);
     assert_stdout_contains(&stage2, "Stage 02_filter_files: Filter source files");
-    assert_stdout_contains(&stage2, "4 passed");
+    assert_stdout_contains(&stage2, "7 passed");
 
     let next2 = run_deltaforge(["next"], &project_dir);
     assert_success(&next2);
@@ -1731,7 +1731,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
     let stage3 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage3);
     assert_stdout_contains(&stage3, "Stage 03_tokenize: Tokenize files");
-    assert_stdout_contains(&stage3, "5 passed");
+    assert_stdout_contains(&stage3, "9 passed");
 
     let next3 = run_deltaforge(["next"], &project_dir);
     assert_success(&next3);
@@ -2751,14 +2751,16 @@ fn tokenize(root: &Path) -> Result<(), String> {
             let mut start_column = None;
             let mut token = String::new();
 
-            for (column_index, ch) in line.chars().chain(std::iter::once(' ')).enumerate() {
-                let column = column_index + 1;
+            for (byte_index, ch) in line
+                .char_indices()
+                .chain(std::iter::once((line.len(), ' ')))
+            {
                 if ch == '_' || ch.is_ascii_alphanumeric() {
                     if token.is_empty() && ch.is_ascii_digit() {
                         continue;
                     }
                     if token.is_empty() {
-                        start_column = Some(column);
+                        start_column = Some(byte_index + 1);
                     }
                     token.push(ch);
                 } else if !token.is_empty() {

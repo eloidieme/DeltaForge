@@ -36,3 +36,17 @@ tests:
     expect:
       exit_code: 0
       stdout_exact: ""
+
+  - name: token prefix does not match a longer stored token
+    fixture: persisted_query
+    command: ["query", "{fixture_path}/index.fi", "durable"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""
+
+  - name: token suffix does not match a longer stored token
+    fixture: persisted_query
+    command: ["query", "{fixture_path}/index.fi", "token"]
+    expect:
+      exit_code: 0
+      stdout_exact: ""

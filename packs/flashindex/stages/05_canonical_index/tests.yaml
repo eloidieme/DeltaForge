@@ -25,3 +25,29 @@ tests:
     expect:
       exit_code: 0
       stdout_exact: ""
+
+  - name: many occurrences in one file produce one posting path
+    fixture: dedup_heavy
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        echo src/other.rs src/rep.rs
+
+  - name: tokens sort by ascending byte order
+    fixture: byte_order
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        Beta src/m.rs
+        Zeta src/m.rs
+        alpha src/m.rs
+
+  - name: paths within a posting sort ascending
+    fixture: path_order
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        shared src/aa/y.rs src/b.rs src/z.rs

@@ -43,5 +43,24 @@ tests:
     command: ["index", "{fixture_path}", "--out", "{temp_dir}/empty.fi"]
     expect:
       exit_code: 0
+      stdout_contains:
+        - "wrote"
       file_exists:
         - "{temp_dir}/empty.fi"
+
+  - name: multi path records are tab separated in sorted order
+    fixture: multi_path_persist
+    command: ["index", "{fixture_path}", "--out", "{temp_dir}/pair.fi"]
+    expect:
+      exit_code: 0
+      file_contains:
+        - path: "{temp_dir}/pair.fi"
+          contains: "pair\tsrc/a.rs\tsrc/b.rs"
+
+  - name: missing source root writes nothing
+    fixture: persist_project
+    command: ["index", "{fixture_path}/does_not_exist", "--out", "{temp_dir}/never.fi"]
+    expect:
+      exit_code: 1
+      file_not_exists:
+        - "{temp_dir}/never.fi"

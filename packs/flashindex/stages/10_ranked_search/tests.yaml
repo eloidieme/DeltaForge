@@ -40,3 +40,30 @@ tests:
     expect:
       exit_code: 0
       stdout_exact: ""
+
+  - name: whitespace only query is rejected
+    fixture: rank_project
+    command: ["rank", "{fixture_path}", "   "]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+      stderr_contains:
+        - "non-empty query"
+
+  - name: highest occurrence count wins a duplicate token query
+    fixture: rank_project
+    command: ["rank", "{fixture_path}", "alpha alpha"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - "(?m)^1\\. src/two_hi\\.rs \\(matched 1/1 tokens, 2 occurrences\\)$"
+      stdout_not_contains:
+        - "1/2 tokens"
+
+  - name: files without any query token are absent
+    fixture: rank_project
+    command: ["rank", "{fixture_path}", "gamma"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        1. src/three.rs (matched 1/1 tokens, 1 occurrences)

@@ -1,5 +1,2 @@
-# Normalize line endings to LF on checkout across all platforms.
-# Byte-exact test fixtures (e.g. HTTP range requests) depend on this:
-# without it, Windows runners with core.autocrlf=true rewrite LF -> CRLF
-# and inflate fixture byte counts, breaking cross-platform tests.
-* text=auto eol=lf
+# CRLF fixture bytes are the contract; never normalize line endings.
+packs/flashindex/stages/03_tokenize/fixtures/crlf_lines/** -text

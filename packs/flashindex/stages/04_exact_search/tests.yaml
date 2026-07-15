@@ -42,3 +42,25 @@ tests:
         src/a.rs:1:1 needle
         src/b.rs:1:1 needle
         src/b.rs:1:8 needle
+
+  - name: underscore prefixed query matches the whole token only
+    fixture: underscore_search
+    command: ["search", "{fixture_path}", "_cache"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/us.rs:1:1 _cache
+
+  - name: missing token argument is an error
+    fixture: search_project
+    command: ["search", "{fixture_path}"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
+
+  - name: unreadable root is an error
+    fixture: search_project
+    command: ["search", "{fixture_path}/does_not_exist", "main"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""

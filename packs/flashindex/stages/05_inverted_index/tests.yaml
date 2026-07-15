@@ -4,8 +4,9 @@ tests:
     command: ["index", "{fixture_path}"]
     expect:
       exit_code: 0
+      regex_match:
+        - "(?m)^alpha (src/a\\.rs src/b\\.rs|src/b\\.rs src/a\\.rs)$"
       stdout_contains:
-        - "alpha src/a.rs src/b.rs"
         - "beta src/a.rs"
         - "gamma src/b.rs"
 
@@ -15,4 +16,23 @@ tests:
     expect:
       exit_code: 0
       regex_match:
-        - "(?m)^alpha src/a\\.rs src/b\\.rs$"
+        - "(?m)^alpha .*src/a\\.rs"
+        - "(?m)^alpha .*src/b\\.rs"
+
+  - name: preserves case and underscores in tokens
+    fixture: token_variety
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_contains:
+        - "Value src/v.rs"
+        - "value src/v.rs"
+        - "_value src/v.rs"
+
+  - name: every line is one token followed by its paths
+    fixture: index_project
+    command: ["index", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      regex_match:
+        - "\\A(?:\\S+(?: \\S+)+\\n)*\\z"

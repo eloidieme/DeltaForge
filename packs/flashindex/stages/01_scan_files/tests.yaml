@@ -46,3 +46,29 @@ tests:
     expect:
       exit_code: 0
       stdout_exact: ""
+
+  - name: deeply nested file stays root relative with forward slashes
+    fixture: deep_paths
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        a/b/c/d/deep.rs
+      stdout_not_contains:
+        - "\\"
+
+  - name: ignored directories are skipped at any depth
+    fixture: nested_ignored
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        src/deep/keep.rs
+        src/lib.rs
+
+  - name: missing root is an error
+    fixture: basic_project
+    command: ["scan", "{fixture_path}/does_not_exist"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""

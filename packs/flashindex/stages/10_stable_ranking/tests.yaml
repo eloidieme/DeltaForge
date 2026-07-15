@@ -30,3 +30,37 @@ tests:
         - "11."
         - "file11.rs"
         - "file12.rs"
+
+  - name: limit applies after the complete sort
+    fixture: late_winner
+    command: ["rank", "{fixture_path}", "token"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        1. src/zz_top.rs (matched 1/1 tokens, 5 occurrences)
+        2. src/file01.rs (matched 1/1 tokens, 1 occurrences)
+        3. src/file02.rs (matched 1/1 tokens, 1 occurrences)
+        4. src/file03.rs (matched 1/1 tokens, 1 occurrences)
+        5. src/file04.rs (matched 1/1 tokens, 1 occurrences)
+        6. src/file05.rs (matched 1/1 tokens, 1 occurrences)
+        7. src/file06.rs (matched 1/1 tokens, 1 occurrences)
+        8. src/file07.rs (matched 1/1 tokens, 1 occurrences)
+        9. src/file08.rs (matched 1/1 tokens, 1 occurrences)
+        10. src/file09.rs (matched 1/1 tokens, 1 occurrences)
+
+  - name: exactly ten candidates all print with consecutive ranks
+    fixture: exactly_ten
+    command: ["rank", "{fixture_path}", "token"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        1. src/f01.rs (matched 1/1 tokens, 1 occurrences)
+        2. src/f02.rs (matched 1/1 tokens, 1 occurrences)
+        3. src/f03.rs (matched 1/1 tokens, 1 occurrences)
+        4. src/f04.rs (matched 1/1 tokens, 1 occurrences)
+        5. src/f05.rs (matched 1/1 tokens, 1 occurrences)
+        6. src/f06.rs (matched 1/1 tokens, 1 occurrences)
+        7. src/f07.rs (matched 1/1 tokens, 1 occurrences)
+        8. src/f08.rs (matched 1/1 tokens, 1 occurrences)
+        9. src/f09.rs (matched 1/1 tokens, 1 occurrences)
+        10. src/f10.rs (matched 1/1 tokens, 1 occurrences)

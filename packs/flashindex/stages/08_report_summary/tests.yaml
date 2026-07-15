@@ -54,3 +54,20 @@ tests:
         files: 1
         tokens: 2
         unique_tokens: 2
+
+  - name: repeated spellings grow tokens but not vocabulary
+    fixture: vocab_summary
+    command: ["summary", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_exact: |
+        files: 1
+        tokens: 5
+        unique_tokens: 2
+
+  - name: missing root is an error
+    fixture: summary_project
+    command: ["summary", "{fixture_path}/does_not_exist"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
