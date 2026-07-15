@@ -25,6 +25,7 @@ cd flashindex-rust
 deltaforge overview
 deltaforge instructions
 deltaforge test
+deltaforge serve
 deltaforge explain-failure
 deltaforge hint
 deltaforge status
@@ -37,9 +38,13 @@ deltaforge portfolio --output PORTFOLIO.md
 deltaforge doctor
 ```
 
+## Live viewer
+
+`deltaforge serve` runs a local viewer for the generated learning and test-report pages at a stable `http://127.0.0.1:<port>/` address. A connected browser tab follows the terminal: `deltaforge test` refreshes the report in place and `deltaforge instructions` navigates the tab to the requested stage. Interactive commands start the viewer automatically when needed; auto-started viewers exit after thirty idle minutes. `deltaforge serve --stop` stops the running viewer and `deltaforge serve --restart` replaces it (do this after reinstalling deltaforge). Set `DELTAFORGE_NO_BROWSER=1` to disable all browser behavior.
+
 ## Safety
 
-DeltaForge runs learner commands directly without a shell, copies fixtures to temporary directories for tests and benchmarks, and keeps state under `.deltaforge/`. Pack fixtures are treated as immutable inputs.
+DeltaForge runs learner commands directly without a shell, copies fixtures to temporary directories for tests and benchmarks, and keeps state under `.deltaforge/`. Pack fixtures are treated as immutable inputs. The viewer binds only to the loopback interface and serves only the generated pages under `.deltaforge/ui/`.
 
 ## Pack Authoring
 

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Live viewer server
+
+- Added `deltaforge serve`: a dependency-free local HTTP server on `127.0.0.1` that serves the generated learning and test-report pages and pushes a server-sent event whenever a command regenerates them. One browser tab now follows the terminal — `deltaforge test` refreshes the report in place and `deltaforge instructions`/`overview` navigate the connected tab — instead of a new tab opening on every failed run.
+- Interactive commands that would open a browser now start the viewer automatically when none is running (auto-started viewers shut themselves down after thirty idle minutes) and reuse an already-connected tab instead of opening another. When no viewer can be started, the previous file-based opening remains the fallback.
+- `deltaforge test` now regenerates the browser report after every human-readable run, not only failing ones, so a connected tab always shows the latest result. `--json`, `--terminal`, `--list-tests`, non-interactive output, and `DELTAFORGE_NO_BROWSER=1` behave exactly as before and never start a server.
+- The viewer binds only to the loopback interface, prefers a stable per-project port, serves only known page names inside `.deltaforge/ui/`, and the generated HTML files remain valid standalone documents — the live-reload hook is injected only when a page travels through the viewer.
+- The request reader routes on the request line alone and drains large header blocks, because cookies scoped to `127.0.0.1` are shared across every local port and real browser requests routinely exceed a small buffer. Idle speculative browser connections are closed silently instead of receiving an unsolicited error response.
+- Added a shared Learn / Test report navigation to the top of both generated pages, so either page reaches the other without returning to the terminal. In the viewer, a known page that has not been generated yet shows a placeholder that names the command that creates it and reloads itself the moment the page exists.
+- Added `deltaforge serve --stop` and `deltaforge serve --restart`. Shutdown goes through a loopback endpoint guarded by a random token recorded in `.deltaforge/ui/viewer.json`, so local commands can stop the viewer but a drive-by web page cannot. Restart reuses the project's stable port, so a connected tab reconnects to the fresh server by itself — useful after reinstalling deltaforge while an older viewer is still running.
+- Unified the learning page and test report under one shared theme (`web_theme`): a single warm paper/ember palette with matching light and dark variants that both pages resolve from the system preference — the report previously shipped light-only and clashed with the dark learning page. The shared layer also unifies the header, pill navigation, serif display headings, and card treatment, and adds motion: entrance transitions, staggered card reveals, hover lift, a pulsing failure indicator, and cross-document view transitions between the two pages, all disabled under `prefers-reduced-motion`.
+- Fixed invisible command text in the learning page's console examples under the light theme: an inline-code background rule also matched code inside dark code blocks.
+
+### Exhaustive FlashIndex contracts (FlashIndex 1.1.0)
+
+- Expanded FlashIndex black-box coverage from 61 to 94 tests so every requirement and edge-case bullet in the stage guides has a corresponding deterministic case: missing/unreadable roots for `scan`, `search`, `summary`, and persisted `index --out`; all nine corpus extensions with case-sensitive suffix matching; tokens at end-of-file without a trailing newline; CRLF line endings; byte-counted columns around multi-byte characters; lone-underscore tokens; posting dedup, bytewise token order, and per-posting path order; tab-separated multi-path persisted records; prefix/suffix non-matches against a saved index; negative and two-thread worker counts; whitespace-only ranked queries; and rank limits applied only after the complete sort.
+- Corrected two Stage 05 (inverted index) tests that pinned path order inside a posting even though canonical ordering is explicitly deferred to the next stage; membership is now asserted order-insensitively.
+- Bumped FlashIndex to `1.1.0`. Existing projects should run `deltaforge sync-pack`; the strengthened tests intentionally require affected completed stages to be revalidated.
+
 ### Browser test reports
 
 - Added a self-contained `.deltaforge/ui/test-report.html` for failed human-readable test runs. Interactive failures open it automatically; redirected runs print its path without launching a browser.
