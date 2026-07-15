@@ -14,7 +14,7 @@ pub struct Cli {
     pub packs_dir: Option<PathBuf>,
 
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -61,6 +61,14 @@ pub enum Command {
     ExplainFailure(ExplainFailureArgs),
     /// Run the live viewer server for the learning and test-report pages.
     Serve(ServeArgs),
+    #[command(name = "__workbench", hide = true)]
+    Workbench(WorkbenchArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WorkbenchArgs {
+    #[arg(long, hide = true)]
+    pub token: String,
 }
 
 #[derive(Debug, Args)]
