@@ -1,6 +1,6 @@
 # DeltaForge handoff prompts
 
-One prompt per implementation task for the incomplete feature work. To dispatch a task, give the agent `00-shared-context.md` followed by the task file. Assumed already done (separate prompt, delivered earlier): the foundation-repair pass (pack pinning/`sync-pack`, per-user pack cache, digest robustness, `bench_run`, discovery error tolerance, failure output, small fixes).
+One prompt per implementation task for the incomplete feature work. To dispatch a task, give the agent `00-shared-context.md`, then `00-current-state.md` (the up-to-date project snapshot — what has shipped and what is open), followed by the task file. Assumed already done (separate prompt, delivered earlier): the foundation-repair pass (pack pinning/`sync-pack`, per-user pack cache, digest robustness, `bench_run`, discovery error tolerance, failure output, small fixes).
 
 ## Priority order and dependencies
 
