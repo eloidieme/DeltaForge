@@ -65,9 +65,11 @@ printing the workbench URL and CLI fallback.
 
 ## Verification workflow
 
-Use `docs/product/phase-1-checkpoint.md` as the current verification authority. Phase 1
-workbench changes require release check, Clippy, library tests, the failure corpus, the
-real-service workbench suite, and browser/keyboard inspection proportional to the change.
+Phase 1 is complete. `docs/product/phase-1-checkpoint.md` records the implementation
+boundary, and `docs/product/phase-1-release-audit.md` records the green local and hosted
+release evidence. Future workbench changes still require release check, Clippy, library
+tests, the failure corpus, the real-service workbench suite, and browser/keyboard
+inspection proportional to the change.
 
 ## Known open threads (prioritized candidates)
 
@@ -79,8 +81,7 @@ real-service workbench suite, and browser/keyboard inspection proportional to th
    number/name, and commit.rs strips the id prefix so two stages produce "Complete Stage
    05". Fix = renumber ids to 01–14 (or headings to ids) + sync yaml titles; mind
    state/proof migration and the stage-id tags.
-2. Phase 1 closeout: native macOS gates and Linux/Windows cross-target release checks
-   pass, stale legacy assertions are replaced, and the observation protocol is ready.
-   Commit/push authorization and passing native GitHub CI jobs on macOS, Linux, and
-   Windows are the only remaining engineering evidence; see
-   `docs/product/phase-1-release-audit.md`.
+2. External learner observation: run the prepared five-learner, two-session protocol
+   before expanding beyond FlashIndex's early stages. This is follow-up product
+   validation, not unfinished Phase 1 engineering; see
+   `docs/product/phase-1-observation-protocol.md`.

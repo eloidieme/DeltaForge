@@ -1,6 +1,6 @@
 # Phase 1 implementation checkpoint
 
-Status: **Active implementation checkpoint — Phase 1 is not complete**
+Status: **Complete — Phase 1 engineering and release audit are closed**
 
 Updated on: 2026-07-16
 
@@ -405,7 +405,8 @@ The following checks passed at this checkpoint:
 
 - `cargo check --release --offline`;
 - `cargo clippy --release --offline --all-targets -- -D warnings`;
-- all 68 current library tests after deleting eleven legacy page/viewer unit tests;
+- all 69 current library tests after deleting eleven legacy page/viewer unit tests and
+  adding the bounded run-lease regression;
 - all new run-coordination, journal, workbench security, request, and shell unit tests;
 - targeted CLI integration tests for the starter project, test selection/JSON, and
   kept-temp/timeout configuration;
@@ -465,20 +466,20 @@ fixture subtree.
 
 The detailed command and platform record is in `phase-1-release-audit.md`.
 
-- native macOS formatting, release compilation, release Clippy, all 133 tests, strict
+- native macOS formatting, release compilation, release Clippy, all 134 tests, strict
   validation, and all four direct reference-solution proofs pass;
 - Linux and Windows release compilation and Clippy pass for all targets through
   target-specific cross-compilation;
-- the CI matrix now runs the same release compilation and lint contract before the full
+- the CI matrix runs the same release compilation and lint contract before the full
   test and strict-validation gates on macOS, Linux, and Windows;
-- native Linux and Windows execution for this exact candidate remains pending because
-  the current Phase 1 worktree has not been committed or pushed.
+- candidate `40e4e23d09c46b8ea2ec82b800bc2b41170c10ad` passed all three native
+  jobs in [CI run 29529556805](https://github.com/eloidieme/DeltaForge/actions/runs/29529556805).
 
 ## Current limitations
 
-Phase 1 is not yet complete, but the decisive Stage 1 browser learner loop, observation
-preparation, native macOS audit, and Linux/Windows target audit are complete. Hosted
-native Linux and Windows execution for the candidate commit remains.
+Phase 1 is complete. The decisive Stage 1 browser learner loop, observation preparation,
+native macOS audit, Linux/Windows target audit, and hosted three-platform execution are
+all complete.
 
 - The service observes the shared persisted journal at 500 ms intervals rather than
   receiving direct inter-process notifications.
@@ -499,16 +500,16 @@ native Linux and Windows execution for the candidate commit remains.
 
 ## Work remaining for Phase 1
 
-### 1. Complete the final release audit
+None. The approved definition of Phase 1 complete is satisfied.
 
-- Commit and push the Phase 1 candidate after explicit user authorization.
-- Record passing `ubuntu-latest`, `macos-latest`, and `windows-latest` matrix jobs for
-  that candidate, fixing and rerunning any platform-owned failure.
+The prepared five-learner observation sessions remain valuable product-validation work
+before expanding beyond FlashIndex's early stages. They are a post-Phase-1 follow-up,
+not an open engineering release gate: the Phase 1 definition requires the external
+research protocol to be ready, and that protocol is complete.
 
 ## Resume point
 
-Resume Phase 1 by committing and pushing the release candidate after user authorization,
-then record the hosted three-platform CI result.
-
-Do not expand into the full catalog, later FlashIndex stages, AI coaching, cloud
-features, or a final design system until the Phase 1 release audit is complete.
+Begin with explicit Phase 2 scoping against the frozen product direction and the
+completed Phase 1 evidence. Do not start Phase 2 implementation, expand the catalog,
+add AI coaching or cloud features, or establish a final design system without a new
+approved phase contract.

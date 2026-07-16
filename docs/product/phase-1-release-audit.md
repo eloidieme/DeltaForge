@@ -1,13 +1,14 @@
 # Phase 1 release audit
 
-Status: **Local release candidate green; hosted Linux and Windows execution pending**
+Status: **Complete**
 
 Audit date: 2026-07-16
 
 Candidate branch: `codex/product-workbench`
 
-Candidate base commit: `9c289a30f56cbc761ea8a4a41c1c0cbd6d4b1acb` plus the current
-uncommitted Phase 1 worktree
+Verified candidate commit: `40e4e23d09c46b8ea2ec82b800bc2b41170c10ad`
+
+Hosted verification: [CI run 29529556805](https://github.com/eloidieme/DeltaForge/actions/runs/29529556805)
 
 ## Scope
 
@@ -20,7 +21,7 @@ This audit closes the Phase 1 engineering checklist defined by
 - strict bundled-pack validation and direct reference-solution proof;
 - macOS execution evidence;
 - Linux and Windows target-specific compilation and linting;
-- hosted CI configuration for native execution on macOS, Linux, and Windows.
+- hosted native execution on macOS, Linux, and Windows.
 
 ## Audit environment
 
@@ -71,6 +72,36 @@ Resolution:
 - verified Git attributes select LF for ordinary MiniKV/TinyHTTP fixtures while the
   CRLF fixture remains byte-preserved.
 
+### 4. Hosted run coordination race
+
+Ubuntu exposed a narrow handoff between a cancelled browser run, its released run
+lease, and the source-health observer. Windows also exposed a lifecycle-test hang when
+captured pipe handles outlived the two concurrent bare-launch processes.
+
+Resolution:
+
+- bounded foreground lease acquisition while the observer completes a short-lived
+  lease handoff;
+- made cancellation acceptance wait for the run lease as well as persisted terminal
+  state;
+- serialized the real-service lifecycle suite inside its own test binary;
+- replaced launcher pipes with bounded, file-backed capture and bounded the hosted test
+  step so future leaks fail with retrievable evidence.
+
+### 5. Windows path aliases bypassed absolute-path diagnosis
+
+Windows can expose the same temporary directory through long, short, mixed-prefix, and
+component-joined drive-root spellings. These variants could make an absolute-path leak
+look different from the expanded fixture path.
+
+Resolution:
+
+- normalize equivalent long and short ancestor prefixes while preserving separator
+  style;
+- normalize component-joined drive roots before comparison;
+- added a native Windows regression and confirmed the seven-case failure corpus selects
+  the intended priority-25 absolute-path diagnosis.
+
 ## Local macOS results
 
 | Gate | Command | Result |
@@ -88,14 +119,14 @@ Resolution:
 
 The complete Rust suite executed:
 
-- 68 library tests;
+- 69 library tests;
 - 51 CLI integration tests;
 - 4 official MCP client integration tests;
 - 1 seven-case Phase 1 diagnosis-corpus test;
 - 9 real-service workbench integration tests;
 - binary and documentation test harnesses with no additional tests.
 
-Total executed tests: 133 passed, 0 failed, 0 ignored.
+Total executed tests: 134 passed, 0 failed, 0 ignored.
 
 The first sandboxed test attempt could not bind loopback ports. The authoritative rerun
 used normal local-service permission and passed; this was an execution-environment
@@ -136,18 +167,17 @@ Each job now runs:
 The complete test command includes bundled reference solutions, the Phase 1 failure
 corpus, and the real-service workbench suite.
 
-## Remaining release evidence
+## Hosted completion record
 
-The current worktree has not been committed or pushed, so hosted CI cannot yet execute
-this exact candidate. Phase 1 remains open until the native `ubuntu-latest` and
-`windows-latest` jobs pass for the candidate commit. The hosted macOS job should also be
-recorded, although the same worktree already has complete native macOS evidence above.
+Candidate `40e4e23d09c46b8ea2ec82b800bc2b41170c10ad` passed the complete
+matrix in [CI run 29529556805](https://github.com/eloidieme/DeltaForge/actions/runs/29529556805):
 
-After the user authorizes a commit and push:
+| Native job | Result |
+|---|---|
+| `ubuntu-latest` | Pass |
+| `macos-latest` | Pass |
+| `windows-latest` | Pass |
 
-1. commit the complete Phase 1 worktree on `codex/product-workbench`;
-2. push the branch;
-3. wait for all three matrix jobs;
-4. fix and rerun any platform-owned failure;
-5. record the candidate commit and CI run in this document;
-6. change this audit to `Complete` and mark Phase 1 complete in the checkpoint.
+Every job passed formatting, release compilation, warning-free release Clippy, the
+complete native test suite, and strict validation of all four bundled packs. The hosted
+execution boundary is satisfied and no Phase 1 engineering release evidence remains.

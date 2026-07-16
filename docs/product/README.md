@@ -1,6 +1,6 @@
 # DeltaForge product direction
 
-Status: **Frozen for Phase 1**
+Status: **Phase 1 complete; frozen baseline retained for later phase scoping**
 Drafted: 2026-07-15  
 Branch: `codex/product-workbench`
 
@@ -54,5 +54,6 @@ The following decisions are binding for Phase 1:
 Later direction changes require an explicit amendment that identifies the frozen
 decision, explains why it changed, and records its consequences for active work.
 
-Phase 0 contains no production implementation. Phase 1 begins with the vertical slice
-defined in `phase-1-vertical-slice.md`.
+Phase 0 contains no production implementation. Phase 1 completed the vertical slice
+defined in `phase-1-vertical-slice.md`; later implementation requires an explicitly
+approved phase contract.
