@@ -62,6 +62,7 @@ fn output_text(output: &Output) -> String {
     )
 }
 
+#[track_caller]
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
@@ -71,6 +72,7 @@ fn assert_success(output: &Output) {
     );
 }
 
+#[track_caller]
 fn assert_failure(output: &Output) {
     assert!(
         !output.status.success(),
@@ -79,6 +81,7 @@ fn assert_failure(output: &Output) {
     );
 }
 
+#[track_caller]
 fn assert_stdout_contains(output: &Output, expected: &str) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -88,6 +91,7 @@ fn assert_stdout_contains(output: &Output, expected: &str) {
     );
 }
 
+#[track_caller]
 fn assert_stdout_not_contains(output: &Output, unexpected: &str) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -97,6 +101,7 @@ fn assert_stdout_not_contains(output: &Output, unexpected: &str) {
     );
 }
 
+#[track_caller]
 fn assert_stderr_contains(output: &Output, expected: &str) {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
