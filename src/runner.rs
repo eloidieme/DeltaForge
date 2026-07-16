@@ -769,6 +769,7 @@ fn equivalent_path_spellings(path: &Path) -> Vec<String> {
 
 #[cfg(windows)]
 fn normalize_windows_path_prefixes(value: &str, path: &Path) -> String {
+    let value = normalize_windows_component_joined_roots(value);
     let long_path = windows_long_path(path).unwrap_or_else(|| path.to_path_buf());
     long_path
         .ancestors()
@@ -781,9 +782,14 @@ fn normalize_windows_path_prefixes(value: &str, path: &Path) -> String {
                 )
             })
         })
-        .fold(value.to_string(), |value, (short_prefix, long_prefix)| {
+        .fold(value, |value, (short_prefix, long_prefix)| {
             replace_path_prefix_preserving_separators(&value, &short_prefix, &long_prefix)
         })
+}
+
+#[cfg(windows)]
+fn normalize_windows_component_joined_roots(value: &str) -> String {
+    value.replace(":/\\/", ":/").replace(":\\/", ":\\")
 }
 
 #[cfg(windows)]
@@ -1525,6 +1531,11 @@ stderr_contains: ["work: {temp_dir}"]
                 .replace('\\', "/");
             assert_eq!(
                 replace_report_path(&format!("{hybrid}/file.txt"), &root, "{temp_dir}"),
+                "{temp_dir}/file.txt"
+            );
+            let component_joined = hybrid.replacen(":/", ":/\\/", 1);
+            assert_eq!(
+                replace_report_path(&format!("{component_joined}/file.txt"), &root, "{temp_dir}"),
                 "{temp_dir}/file.txt"
             );
         }
