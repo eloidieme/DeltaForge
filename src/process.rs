@@ -2,13 +2,27 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
 const OUTPUT_LIMIT: usize = 1024 * 1024;
+const STREAM_CHUNK_BYTES: usize = 4 * 1024;
+const STREAM_QUEUE_CHUNKS: usize = 64;
 const TRUNCATED_MARKER: &[u8] = b"\n[deltaforge: output truncated after 1 MiB]\n";
+type StreamChunk = (&'static str, Vec<u8>);
+type OutputSink<'a> = &'a mut dyn FnMut(&'static str, &[u8]);
+
+struct CommandRunOptions<'a> {
+    timeout_ms: u64,
+    stdin: Option<&'a str>,
+    envs: &'a BTreeMap<String, String>,
+    measure: bool,
+    cancel_path: Option<&'a Path>,
+    output_sink: Option<OutputSink<'a>>,
+}
 
 /// A finished command plus best-effort peak-memory data.
 pub struct MeasuredOutput {
@@ -28,7 +42,66 @@ pub fn run_command(
     stdin: Option<&str>,
     envs: &BTreeMap<String, String>,
 ) -> Result<Output> {
-    Ok(run_command_impl(command, cwd, timeout_ms, stdin, envs, false)?.output)
+    Ok(run_command_impl(
+        command,
+        cwd,
+        CommandRunOptions {
+            timeout_ms,
+            stdin,
+            envs,
+            measure: false,
+            cancel_path: None,
+            output_sink: None,
+        },
+    )?
+    .output)
+}
+
+pub fn run_command_cancellable(
+    command: &[String],
+    cwd: &Path,
+    timeout_ms: u64,
+    stdin: Option<&str>,
+    envs: &BTreeMap<String, String>,
+    cancel_path: Option<&Path>,
+) -> Result<Output> {
+    Ok(run_command_impl(
+        command,
+        cwd,
+        CommandRunOptions {
+            timeout_ms,
+            stdin,
+            envs,
+            measure: false,
+            cancel_path,
+            output_sink: None,
+        },
+    )?
+    .output)
+}
+
+pub fn run_command_cancellable_streaming(
+    command: &[String],
+    cwd: &Path,
+    timeout_ms: u64,
+    stdin: Option<&str>,
+    envs: &BTreeMap<String, String>,
+    cancel_path: Option<&Path>,
+    output_sink: &mut dyn FnMut(&'static str, &[u8]),
+) -> Result<Output> {
+    Ok(run_command_impl(
+        command,
+        cwd,
+        CommandRunOptions {
+            timeout_ms,
+            stdin,
+            envs,
+            measure: false,
+            cancel_path,
+            output_sink: Some(output_sink),
+        },
+    )?
+    .output)
 }
 
 /// Like [`run_command`], additionally sampling the child's peak memory.
@@ -41,17 +114,33 @@ pub fn run_command_measured(
     stdin: Option<&str>,
     envs: &BTreeMap<String, String>,
 ) -> Result<MeasuredOutput> {
-    run_command_impl(command, cwd, timeout_ms, stdin, envs, true)
+    run_command_impl(
+        command,
+        cwd,
+        CommandRunOptions {
+            timeout_ms,
+            stdin,
+            envs,
+            measure: true,
+            cancel_path: None,
+            output_sink: None,
+        },
+    )
 }
 
 fn run_command_impl(
     command: &[String],
     cwd: &Path,
-    timeout_ms: u64,
-    stdin: Option<&str>,
-    envs: &BTreeMap<String, String>,
-    measure: bool,
+    options: CommandRunOptions<'_>,
 ) -> Result<MeasuredOutput> {
+    let CommandRunOptions {
+        timeout_ms,
+        stdin,
+        envs,
+        measure,
+        cancel_path,
+        mut output_sink,
+    } = options;
     if command.is_empty() {
         bail!("cannot run empty command");
     }
@@ -84,8 +173,19 @@ fn run_command_impl(
         .stderr
         .take()
         .context("child stderr pipe is missing")?;
-    let stdout_reader = thread::spawn(move || read_bounded(stdout));
-    let stderr_reader = thread::spawn(move || read_bounded(stderr));
+    let (stream_sender, stream_receiver) = if output_sink.is_some() {
+        let (sender, receiver) = sync_channel(STREAM_QUEUE_CHUNKS);
+        (Some(sender), Some(receiver))
+    } else {
+        (None, None)
+    };
+    let stdout_sender = stream_sender.clone();
+    let stderr_sender = stream_sender.clone();
+    drop(stream_sender);
+    let stdout_reader =
+        thread::spawn(move || read_bounded_streaming(stdout, "stdout", stdout_sender));
+    let stderr_reader =
+        thread::spawn(move || read_bounded_streaming(stderr, "stderr", stderr_sender));
     let stdin_writer = stdin.map(|input| {
         let bytes = input.as_bytes().to_vec();
         let mut pipe = child.stdin.take().expect("piped stdin is present");
@@ -94,8 +194,12 @@ fn run_command_impl(
 
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let mut timed_out = false;
+    let mut cancelled = false;
     let mut peak_rss_bytes: Option<u64> = None;
     let status = loop {
+        if let (Some(receiver), Some(sink)) = (stream_receiver.as_ref(), output_sink.as_mut()) {
+            drain_available_stream_output(receiver, *sink);
+        }
         // Sample before try_wait: once the child is reaped its memory
         // accounting is gone (except on Windows, where the open handle
         // keeps it readable).
@@ -115,8 +219,21 @@ fn run_command_impl(
                 format!("failed to wait for timed-out command {}", command.join(" "))
             })?;
         }
+        if cancel_path.is_some_and(Path::exists) {
+            cancelled = true;
+            terminate_process_tree(&mut child);
+            break child.wait().with_context(|| {
+                format!("failed to wait for cancelled command {}", command.join(" "))
+            })?;
+        }
         thread::sleep(Duration::from_millis(10));
     };
+
+    if let (Some(receiver), Some(sink)) = (stream_receiver.as_ref(), output_sink.as_mut()) {
+        while let Ok((stream, bytes)) = receiver.recv() {
+            sink(stream, &bytes);
+        }
+    }
 
     if let Some(writer) = stdin_writer {
         let _ = writer.join();
@@ -130,6 +247,9 @@ fn run_command_impl(
             String::from_utf8_lossy(&stdout),
             String::from_utf8_lossy(&stderr)
         );
+    }
+    if cancelled {
+        bail!("run cancelled");
     }
     Ok(MeasuredOutput {
         output: Output {
@@ -226,14 +346,24 @@ fn sample_peak_rss(_child: &std::process::Child) -> Option<u64> {
     None
 }
 
-fn read_bounded(mut reader: impl Read) -> std::io::Result<Vec<u8>> {
+fn read_bounded_streaming(
+    mut reader: impl Read,
+    stream: &'static str,
+    mut sender: Option<SyncSender<StreamChunk>>,
+) -> std::io::Result<Vec<u8>> {
     let mut captured = Vec::new();
-    let mut buffer = [0_u8; 16 * 1024];
+    let mut buffer = [0_u8; STREAM_CHUNK_BYTES];
     let mut truncated = false;
     loop {
         let read = reader.read(&mut buffer)?;
         if read == 0 {
             break;
+        }
+        if sender
+            .as_ref()
+            .is_some_and(|sender| sender.send((stream, buffer[..read].to_vec())).is_err())
+        {
+            sender = None;
         }
         let remaining = OUTPUT_LIMIT.saturating_sub(captured.len());
         captured.extend_from_slice(&buffer[..read.min(remaining)]);
@@ -243,6 +373,15 @@ fn read_bounded(mut reader: impl Read) -> std::io::Result<Vec<u8>> {
         captured.extend_from_slice(TRUNCATED_MARKER);
     }
     Ok(captured)
+}
+
+fn drain_available_stream_output(
+    receiver: &Receiver<StreamChunk>,
+    sink: &mut dyn FnMut(&'static str, &[u8]),
+) {
+    while let Ok((stream, bytes)) = receiver.try_recv() {
+        sink(stream, &bytes);
+    }
 }
 
 fn join_reader(
@@ -349,5 +488,46 @@ mod tests {
         assert!(message.contains("timed out"));
         assert!(message.contains("output truncated"));
         assert!(message.len() < OUTPUT_LIMIT + 4096);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn streaming_output_is_delivered_before_the_process_finishes() {
+        let cancel_path = std::env::temp_dir().join(format!(
+            "deltaforge-stream-cancel-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let started = Instant::now();
+        let mut received = String::new();
+        let mut sink = |stream, bytes: &[u8]| {
+            if stream == "stdout" {
+                received.push_str(&String::from_utf8_lossy(bytes));
+                let _ = std::fs::write(&cancel_path, b"cancel");
+            }
+        };
+        let error = run_command_cancellable_streaming(
+            &[
+                "sh".to_string(),
+                "-c".to_string(),
+                "printf 'ready\\n'; sleep 5; printf 'late\\n'".to_string(),
+            ],
+            Path::new("/"),
+            10_000,
+            None,
+            &BTreeMap::new(),
+            Some(&cancel_path),
+            &mut sink,
+        )
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("run cancelled"));
+        assert!(received.contains("ready"));
+        assert!(!received.contains("late"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        let _ = std::fs::remove_file(cancel_path);
     }
 }

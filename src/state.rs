@@ -39,6 +39,16 @@ pub struct ProjectState {
     pub attempt_history: Vec<TestAttempt>,
     #[serde(default)]
     pub active_job: Option<ActiveJob>,
+    #[serde(default)]
+    pub observed_project_digest: String,
+    #[serde(default)]
+    pub source_revision: u64,
+    #[serde(default)]
+    pub source_event_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_source_change: Option<SourceChangeRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_workbench_session: Option<WorkbenchSessionRecord>,
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
@@ -99,6 +109,33 @@ pub struct LastTestRunSummary {
 pub struct LastFailedTest {
     pub name: String,
     pub failures: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnosis: Option<FailureDiagnosis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FailureDiagnosis {
+    #[serde(default = "default_diagnosis_priority")]
+    pub priority: u32,
+    pub kind: String,
+    pub headline: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual: Option<String>,
+    pub contract: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixture: Option<String>,
+    #[serde(default)]
+    pub fixture_entries: Vec<String>,
+    #[serde(default)]
+    pub command: Vec<String>,
+}
+
+fn default_diagnosis_priority() -> u32 {
+    1_000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +152,7 @@ pub enum AttemptStatus {
     Running,
     Passed,
     Failed,
+    Cancelled,
     Interrupted,
 }
 
@@ -133,6 +171,30 @@ pub struct TestAttempt {
     pub failed: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceChangeRecord {
+    pub revision: u64,
+    pub previous_digest: String,
+    pub current_digest: String,
+    pub observed_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkbenchSessionRecord {
+    pub id: String,
+    pub started_at: String,
+    pub stage_id: String,
+    pub baseline_updated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_session_started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_stage_id: Option<String>,
+    #[serde(default)]
+    pub recovered_interrupted_job: bool,
 }
 
 impl ProjectState {
@@ -154,6 +216,11 @@ impl ProjectState {
             gate_results: BTreeMap::new(),
             attempt_history: Vec::new(),
             active_job: None,
+            observed_project_digest: String::new(),
+            source_revision: 0,
+            source_event_revision: 0,
+            last_source_change: None,
+            last_workbench_session: None,
             created_at: now.clone(),
             updated_at: now,
         })
@@ -205,6 +272,39 @@ impl ProjectState {
         self.completed_stages
             .iter()
             .any(|completed| completed == stage_id)
+    }
+
+    pub fn initialize_source_observation(&mut self, digest: String) -> bool {
+        if !self.observed_project_digest.is_empty() {
+            return false;
+        }
+        self.observed_project_digest = digest;
+        true
+    }
+
+    pub fn observe_source_digest(&mut self, digest: String) -> Result<Option<SourceChangeRecord>> {
+        if self.observed_project_digest.is_empty() {
+            self.observed_project_digest = digest;
+            return Ok(None);
+        }
+        if self.observed_project_digest == digest {
+            return Ok(None);
+        }
+        let now = current_timestamp()?;
+        let change = SourceChangeRecord {
+            revision: self.source_revision.saturating_add(1),
+            previous_digest: std::mem::replace(&mut self.observed_project_digest, digest.clone()),
+            current_digest: digest,
+            observed_at: now.clone(),
+        };
+        self.source_revision = change.revision;
+        self.last_source_change = Some(change.clone());
+        self.updated_at = now;
+        Ok(Some(change))
+    }
+
+    pub fn acknowledge_source_event(&mut self, revision: u64) {
+        self.source_event_revision = self.source_event_revision.max(revision);
     }
 
     pub fn mark_completed(&mut self, stage_id: &str) -> Result<()> {
@@ -368,6 +468,33 @@ impl ProjectState {
         Ok(true)
     }
 
+    pub fn begin_workbench_session(
+        &mut self,
+        session_id: String,
+        recovered_interrupted_job: bool,
+    ) -> Result<bool> {
+        if let Some(session) = self.last_workbench_session.as_mut()
+            && session.id == session_id
+        {
+            let changed = recovered_interrupted_job && !session.recovered_interrupted_job;
+            session.recovered_interrupted_job |= recovered_interrupted_job;
+            return Ok(changed);
+        }
+        let previous = self.last_workbench_session.take();
+        self.last_workbench_session = Some(WorkbenchSessionRecord {
+            id: session_id,
+            started_at: current_timestamp()?,
+            stage_id: self.current_stage.clone(),
+            baseline_updated_at: self.updated_at.clone(),
+            previous_session_started_at: previous
+                .as_ref()
+                .map(|session| session.started_at.clone()),
+            previous_stage_id: previous.map(|session| session.stage_id),
+            recovered_interrupted_job,
+        });
+        Ok(true)
+    }
+
     pub fn touch(&mut self) -> Result<()> {
         self.updated_at = current_timestamp()?;
         Ok(())
@@ -422,6 +549,42 @@ mod tests {
         assert!(state.created_at.ends_with('Z'));
         OffsetDateTime::parse(&state.created_at, &Rfc3339).unwrap();
     }
+
+    #[test]
+    fn source_observations_are_revisioned_and_idempotent() {
+        let mut state = ProjectState::new(
+            "flashindex".to_string(),
+            "rust".to_string(),
+            "01_scan_files".to_string(),
+        )
+        .unwrap();
+
+        assert!(state.initialize_source_observation("digest-a".to_string()));
+        assert!(!state.initialize_source_observation("ignored".to_string()));
+        assert!(
+            state
+                .observe_source_digest("digest-a".to_string())
+                .unwrap()
+                .is_none()
+        );
+        let change = state
+            .observe_source_digest("digest-b".to_string())
+            .unwrap()
+            .unwrap();
+        assert_eq!(change.revision, 1);
+        assert_eq!(change.previous_digest, "digest-a");
+        assert_eq!(change.current_digest, "digest-b");
+        assert_eq!(state.source_revision, 1);
+        assert_eq!(state.source_event_revision, 0);
+        assert!(
+            state
+                .observe_source_digest("digest-b".to_string())
+                .unwrap()
+                .is_none()
+        );
+        state.acknowledge_source_event(change.revision);
+        assert_eq!(state.source_event_revision, 1);
+    }
     #[test]
 
     fn active_job_is_recovered_as_interrupted() {
@@ -446,6 +609,48 @@ mod tests {
         assert!(attempt.finished_at.is_some());
         assert!(attempt.error.is_some());
         assert!(!state.recover_interrupted_job().unwrap());
+    }
+
+    #[test]
+    fn workbench_sessions_preserve_the_previous_resumption_point() {
+        let mut state = ProjectState::new(
+            "flashindex".to_string(),
+            "rust".to_string(),
+            "01_scan_files".to_string(),
+        )
+        .unwrap();
+
+        assert!(
+            state
+                .begin_workbench_session("session-one".to_string(), false)
+                .unwrap()
+        );
+        assert!(
+            !state
+                .begin_workbench_session("session-one".to_string(), false)
+                .unwrap()
+        );
+        let first_started_at = state
+            .last_workbench_session
+            .as_ref()
+            .unwrap()
+            .started_at
+            .clone();
+        state.current_stage = "02_filter_files".to_string();
+
+        assert!(
+            state
+                .begin_workbench_session("session-two".to_string(), true)
+                .unwrap()
+        );
+        let resumed = state.last_workbench_session.as_ref().unwrap();
+        assert_eq!(
+            resumed.previous_session_started_at.as_deref(),
+            Some(first_started_at.as_str())
+        );
+        assert_eq!(resumed.previous_stage_id.as_deref(), Some("01_scan_files"));
+        assert_eq!(resumed.stage_id, "02_filter_files");
+        assert!(resumed.recovered_interrupted_job);
     }
 
     #[test]

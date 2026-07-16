@@ -2,12 +2,8 @@ use anyhow::{Context, Result};
 
 use crate::cli::InstructionsArgs;
 use crate::context::{GlobalOptions, ProjectContext};
-use crate::learning_web::{
-    InitialView, generate_learning_page, open_learning_page, should_use_browser,
-};
 use crate::pack::StageSpec;
 use crate::terminal::Terminal;
-use crate::viewer;
 
 pub fn run(args: InstructionsArgs, options: &GlobalOptions) -> Result<()> {
     let context = ProjectContext::load(options)?;
@@ -20,37 +16,6 @@ pub fn run(args: InstructionsArgs, options: &GlobalOptions) -> Result<()> {
         .manifest
         .stage(stage_id)
         .with_context(|| format!("pack does not contain stage {stage_id}"))?;
-
-    if args.no_open {
-        let overview = super::overview::read_pack_overview(&context.pack);
-        let path = generate_learning_page(&context, &overview, InitialView::Stage(stage_id))?;
-        println!("Generated learning page: {}", path.display());
-        return Ok(());
-    }
-    if should_use_browser(args.terminal) {
-        let overview = super::overview::read_pack_overview(&context.pack);
-        let path = generate_learning_page(&context, &overview, InitialView::Stage(stage_id))?;
-        let ui_dir = context.root.join(".deltaforge/ui");
-        match viewer::open_live(&ui_dir, "learning.html") {
-            Ok(viewer::LiveOpen::OpenedTab(_)) => {
-                println!("Opened stage {stage_id} instructions in your browser.");
-                return Ok(());
-            }
-            Ok(viewer::LiveOpen::Updated(url)) => {
-                println!("Live view updated to stage {stage_id} instructions: {url}");
-                return Ok(());
-            }
-            Err(_) => match open_learning_page(&path) {
-                Ok(()) => {
-                    println!("Opened stage {stage_id} instructions in your browser.");
-                    return Ok(());
-                }
-                Err(error) => {
-                    eprintln!("warning: {error:#}; showing the terminal view instead");
-                }
-            },
-        }
-    }
 
     render_terminal(&context, &args)
 }

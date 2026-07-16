@@ -18,7 +18,6 @@ pub mod overview;
 pub mod pack;
 pub mod portfolio;
 pub mod report;
-pub mod serve;
 pub mod status;
 pub mod sync_pack;
 pub mod test;
@@ -51,8 +50,11 @@ pub fn run(cli: Cli) -> Result<()> {
         Some(Command::Commit(args)) => commit::run(args, &options),
         Some(Command::Doctor(args)) => doctor::run(args, &options),
         Some(Command::ExplainFailure(args)) => explain_failure::run(args, &options),
-        Some(Command::Serve(args)) => serve::run(args, &options),
-        Some(Command::Workbench(args)) => crate::workbench::serve(&options, args.token),
+        Some(Command::Workbench(args)) => crate::workbench::serve(
+            &options,
+            args.token,
+            args.idle_timeout_ms.map(std::time::Duration::from_millis),
+        ),
     }
 }
 

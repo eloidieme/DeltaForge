@@ -2,7 +2,8 @@
 
 ## Goal
 
-Add a command that discovers the files inside a project.
+Build `flashindex scan <path>` so it recursively discovers every regular file beneath
+the supplied root and prints one deterministic, portable path per line.
 
 At the end of this stage, a command such as:
 
@@ -15,6 +16,10 @@ will print a stable list of the files beneath `project`.
 This does not search their contents. It gives the rest of the search pipeline a dependable answer to a more basic question: which files exist?
 
 ## Background
+
+Every later FlashIndex capability depends on a trustworthy corpus. If discovery misses
+a nested file, includes generated output, leaks machine-specific absolute paths, or
+changes order between runs, indexing and search results cannot be reproduced.
 
 Consider this small project:
 
@@ -59,15 +64,15 @@ This is FlashIndex's default ignore policy, not a complete or universal list. It
 
 ## Requirements
 
-Add the command `flashindex scan <path>`.
-
-It must visit every regular file below `<path>` and print one path per line. Each printed path must:
-
-- be relative to the supplied root, never an absolute path;
-- use `/` as its separator on every operating system; and
-- appear in lexicographic (dictionary-like) order.
-
-Do not print directories. Do not enter a directory named `.git`, `target`, `build`, or `node_modules`, even when that directory is nested inside another folder. A missing or unreadable root must produce a non-zero exit code.
+- Accept exactly the command shape `flashindex scan <path>`.
+- Visit every regular file below `<path>`, including files in nested directories.
+- Print one root-relative path per line and never print an absolute path.
+- Use `/` as the visible separator on every operating system.
+- Sort the complete output lexicographically before printing it.
+- Do not print directory paths.
+- Never enter a directory named `.git`, `target`, `build`, or `node_modules`, wherever it appears in the tree.
+- Succeed with empty output when the root contains no included regular files.
+- Return a non-zero exit code when the supplied root is missing or unreadable.
 
 ## Example
 
@@ -91,7 +96,10 @@ The paths are relative to `project`, they use `/`, and they appear in sorted ord
 
 ## Success criteria
 
-All `deltaforge test` cases pass, every printed path is portable and ordered, and the existing scan benchmark runs successfully.
+- Every defined behavioral check passes.
+- Repeating a scan of the same tree produces byte-for-byte identical output.
+- The output contains only root-relative `/`-separated regular-file paths.
+- The existing scan benchmark runs successfully.
 
 ### Reading the benchmark
 
@@ -108,3 +116,8 @@ After `deltaforge bench`, write down the file count, fixture size, median time, 
 - Reading or understanding file contents.
 - Watching for later changes or scanning remote storage.
 - Making the ignore list configurable.
+
+## Capability acquired
+
+Your program can now turn an arbitrary local project tree into a deterministic stream
+of portable file identities—the stable input required by every later indexing stage.

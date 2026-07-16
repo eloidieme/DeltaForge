@@ -291,6 +291,9 @@ submitted, and repository files cannot be retrieved through guessed paths.
 
 ## Product research protocol
 
+The runnable facilitator script, participant criteria, recording sheets, pass
+thresholds, and issue rubric are in `phase-1-observation-protocol.md`.
+
 Until external participants are available, the product owner dogfoods the slice using a
 fresh project and an interrupted/resumed session. The test protocol is prepared for at
 least five target learners before expansion beyond FlashIndex's early stages.

@@ -21,6 +21,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo check --release
+      - run: cargo clippy --release --all-targets -- -D warnings
       - run: cargo test
       - run: cargo run -- validate-pack --strict

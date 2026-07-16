@@ -55,7 +55,7 @@ impl ProjectContext {
     }
 
     fn load_inner(options: &GlobalOptions, verify_pin: bool) -> Result<Self> {
-        let root = resolve_project_root(options)?;
+        let root = locate_project_root(options)?;
         let state_path = root.join(".deltaforge").join("state.json");
         let config_path = root.join(".deltaforge").join("config.toml");
 
@@ -317,7 +317,7 @@ fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {
     Ok(())
 }
 
-fn resolve_project_root(options: &GlobalOptions) -> Result<PathBuf> {
+pub fn locate_project_root(options: &GlobalOptions) -> Result<PathBuf> {
     let start = match &options.project_dir {
         Some(path) => path.clone(),
         None => env::current_dir().context("failed to read current directory")?,

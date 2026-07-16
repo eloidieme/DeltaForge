@@ -7,9 +7,10 @@
 - `pack doctor`: report authoring quality gaps, including missing edge-case/non-goal sections, fewer than three hints, and fewer than two tests.
 - `pack check-reference`: prove a pack with a reference solution.
 - `init <pack> --lang <language>`: create a learner repo.
-- `overview`: open the local learning page at the project overview, including the big picture, progress, and full stage roadmap.
-- `instructions`: open the local learning page at the current stage (or a stage selected with `--stage`).
-- `test`: run black-box stage tests. Failed human-readable runs generate `.deltaforge/ui/test-report.html`; interactive runs open it automatically.
+- bare `deltaforge`: start or focus the local project workbench, the canonical learner entry.
+- `overview`: print the big picture, progress, and full stage roadmap as a terminal diagnostic. Supports `--json`.
+- `instructions`: print the current stage instructions, a stage selected with `--stage`, or every stage with `--all`.
+- `test`: run black-box stage tests and stream bounded human-readable evidence in the terminal. Supports `--json` for automation.
 - `explain-failure`: summarize the last failed test run and suggest next steps.
 - `next`: unlock the next stage after tests pass. Gate-bearing stages also require a current passing performance record from `deltaforge bench`, unless `[gates] enforce = false`; the latter prints `performance gates skipped: gates.enforce = false` without claiming a pass.
 - `sync-pack`: adopt the currently discovered pack after a pack upgrade. Updates only the project-level pin (version, source, digest); completion proofs keep the digests of what actually passed. Reports each completed stage as valid or needing revalidation. Supports `--json`.
@@ -43,15 +44,10 @@ Global flags:
 
 Display behavior:
 
-- In an interactive terminal, `overview` and `instructions` generate `.deltaforge/ui/learning.html` and open it in the system browser. The page is self-contained: it loads no scripts, fonts, styles, or learner content from the network.
-- The learning page keeps the complete pack available in a stage sidebar, but presents the current task in smaller tabs: task, example, rationale, and reference. It also shows completed/current/upcoming status and previews the neighboring stages.
-- Pass `--terminal` to use the original terminal renderer. Pass `--no-open` to generate the page and print its path without launching a browser; this is useful in remote environments and automated tests.
-- Set `DELTAFORGE_NO_BROWSER=1` to make browser-capable commands use their terminal view by default. Piped or redirected commands also stay in the terminal so scripts do not launch a GUI. `overview --json` remains JSON-only.
+- Bare `deltaforge` opens the workbench. Set `DELTAFORGE_NO_BROWSER=1` to print its local URL instead of launching the system browser.
+- `overview`, `instructions`, and `test` remain explicit terminal diagnostics and never generate or open HTML pages. `overview --json` and `test --json` remain machine-readable.
 - The terminal renderer may open `$PAGER`, defaulting to `less -R`. Set `DELTAFORGE_NO_PAGER=1` to print that view directly.
-- In an interactive terminal, `test` keeps its live output compact and opens a failure-first browser report when the run fails. The self-contained report groups failures before passes, presents structured expected/actual comparisons, exposes stdout and stderr separately, can reveal spaces/tabs/line endings, links back to the stage instructions, and provides a copyable filtered rerun command.
-- Each reported test includes a **Test input** view with the sanitized command, working directory, timeout, declared environment, standard input, and a browsable snapshot of the fresh fixture tree. Text files can be expanded in place; binary files receive a bounded hexadecimal preview. Large fixture trees and file contents are capped so reports remain responsive.
-- Pass `test --open` to generate and open the report even when every test passes. Pass `test --terminal` to keep detailed diagnostics in the terminal and skip report generation. `DELTAFORGE_NO_BROWSER=1` suppresses automatic report generation and browser launches; an explicit `test --open` still generates the report and prints its path. `test --json` remains JSON-only and never launches a browser.
-- When browser reporting is unavailable because output is redirected, a failed run still generates the report and prints its path while retaining detailed terminal diagnostics. Program output in the terminal is truncated to the first 30 lines / 2000 characters; use `--verbose` for full output.
+- Human-readable `test` output keeps the first contradiction actionable with bounded actual stdout; use `--verbose` for complete captured streams. The same run state and structured evidence remain available in the workbench without a generated report or manual refresh.
 - `list`, `doctor`, and `validate-pack` tolerate a single malformed pack in a search directory: `list` warns on stderr and still lists the valid packs, `doctor` reports the broken pack, and `validate-pack` reports it and exits non-zero.
 
 Pack pinning and upgrades:

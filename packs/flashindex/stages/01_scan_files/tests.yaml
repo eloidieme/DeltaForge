@@ -1,5 +1,9 @@
 tests:
   - name: scans files in a basic project
+    diagnosis:
+      priority: 10
+      headline: Required project files are missing
+      contract: Every regular file beneath the supplied root must be reported.
     fixture: basic_project
     command: ["scan", "{fixture_path}"]
     expect:
@@ -9,6 +13,10 @@ tests:
         - "src/main.rs"
 
   - name: scans nested directories
+    diagnosis:
+      priority: 20
+      headline: Discovery stops before nested files
+      contract: Directory traversal must continue recursively through every non-ignored directory.
     fixture: nested_project
     command: ["scan", "{fixture_path}"]
     expect:
@@ -18,7 +26,23 @@ tests:
         - "src/lib.rs"
         - "crates/core/src/index.rs"
 
+  - name: prints paths relative to the supplied root
+    diagnosis:
+      priority: 25
+      headline: A discovered path leaks the machine-specific root
+      contract: Every printed path must be relative to the supplied scan root.
+    fixture: basic_project
+    command: ["scan", "{fixture_path}"]
+    expect:
+      exit_code: 0
+      stdout_not_contains:
+        - "{fixture_path}"
+
   - name: prints paths in stable lexical order
+    diagnosis:
+      priority: 40
+      headline: The path stream is not deterministic
+      contract: The complete root-relative path list must be sorted lexicographically before printing.
     fixture: nested_project
     command: ["scan", "{fixture_path}"]
     expect:
@@ -29,6 +53,10 @@ tests:
         src/main.rs
 
   - name: skips ignored directories
+    diagnosis:
+      priority: 30
+      headline: Generated or dependency files entered the scan
+      contract: The scanner must never enter .git, target, build, or node_modules directories.
     fixture: ignored_dirs
     command: ["scan", "{fixture_path}"]
     expect:
@@ -41,6 +69,10 @@ tests:
         - "node_modules/pkg/index.js"
 
   - name: ignored only tree produces empty output
+    diagnosis:
+      priority: 35
+      headline: An ignored-only tree produced output
+      contract: A tree containing only ignored directories must succeed without printing paths.
     fixture: ignored_only
     command: ["scan", "{fixture_path}"]
     expect:
@@ -48,6 +80,10 @@ tests:
       stdout_exact: ""
 
   - name: deeply nested file stays root relative with forward slashes
+    diagnosis:
+      priority: 50
+      headline: A discovered path is not portable and root-relative
+      contract: Every visible path must be relative to the supplied root and use forward slashes.
     fixture: deep_paths
     command: ["scan", "{fixture_path}"]
     expect:
@@ -58,6 +94,10 @@ tests:
         - "\\"
 
   - name: ignored directories are skipped at any depth
+    diagnosis:
+      priority: 31
+      headline: A nested ignored directory was traversed
+      contract: Ignored directory names apply at every depth, not only directly below the root.
     fixture: nested_ignored
     command: ["scan", "{fixture_path}"]
     expect:
@@ -67,6 +107,10 @@ tests:
         src/lib.rs
 
   - name: missing root is an error
+    diagnosis:
+      priority: 70
+      headline: A missing scan root was accepted
+      contract: A missing or unreadable root must return a non-zero exit code and no standard output.
     fixture: basic_project
     command: ["scan", "{fixture_path}/does_not_exist"]
     expect:

@@ -3,12 +3,8 @@ use serde::Serialize;
 
 use crate::cli::OverviewArgs;
 use crate::context::{GlobalOptions, ProjectContext};
-use crate::learning_web::{
-    InitialView, generate_learning_page, open_learning_page, should_use_browser,
-};
 use crate::pack::LoadedPack;
 use crate::terminal::Terminal;
-use crate::viewer;
 
 pub fn run(args: OverviewArgs, options: &GlobalOptions) -> Result<()> {
     let context = ProjectContext::load(options)?;
@@ -43,28 +39,6 @@ pub fn run(args: OverviewArgs, options: &GlobalOptions) -> Result<()> {
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&document)?);
-    } else if args.no_open {
-        let path = generate_learning_page(&context, &document.overview, InitialView::Overview)?;
-        println!("Generated learning page: {}", path.display());
-    } else if should_use_browser(args.terminal) {
-        let path = generate_learning_page(&context, &document.overview, InitialView::Overview)?;
-        let ui_dir = context.root.join(".deltaforge/ui");
-        match viewer::open_live(&ui_dir, "learning.html") {
-            Ok(viewer::LiveOpen::OpenedTab(_)) => {
-                println!("Opened {} overview in your browser.", document.name);
-            }
-            Ok(viewer::LiveOpen::Updated(url)) => {
-                println!("Live view updated to the {} overview: {url}", document.name);
-            }
-            Err(_) => {
-                if let Err(error) = open_learning_page(&path) {
-                    eprintln!("warning: {error:#}; showing the terminal view instead");
-                    render_terminal(&document)?;
-                } else {
-                    println!("Opened {} overview in your browser.", document.name);
-                }
-            }
-        }
     } else {
         render_terminal(&document)?;
     }

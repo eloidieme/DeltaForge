@@ -1365,7 +1365,11 @@ fn hint_heading_count(source: &str) -> usize {
         .lines()
         .filter(|line| {
             let line = line.trim();
-            line.strip_prefix("# Hint ").is_some_and(|level| {
+            line.strip_prefix("# Hint ").is_some_and(|heading| {
+                let level = heading
+                    .split_once(['—', '-'])
+                    .map_or(heading, |(level, _)| level)
+                    .trim();
                 !level.is_empty() && level.chars().all(|ch| ch.is_ascii_digit())
             })
         })
@@ -1942,6 +1946,10 @@ mod tests {
 
         let hints = "# Hint 1\nfirst\n# Hint 2\nsecond\n# Hint 3\nthird\n";
         assert_eq!(hint_heading_count(hints), 3);
+        assert_eq!(
+            hint_heading_count("# Hint 1 — Observation\none\n# Hint 2 - Concept\ntwo\n"),
+            2
+        );
         assert_eq!(hint_heading_count("# Hint 1\none\n# Hint two\n"), 1);
     }
 

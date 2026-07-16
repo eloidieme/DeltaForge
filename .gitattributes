@@ -1,2 +1,5 @@
-# CRLF fixture bytes are the contract; never normalize line endings.
+# Keep ordinary source, manifests, and fixtures byte-identical on every checkout.
+* text=auto eol=lf
+
+# These CRLF fixture bytes are the contract; never normalize this subtree.
 packs/flashindex/stages/03_tokenize/fixtures/crlf_lines/** -text

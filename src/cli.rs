@@ -28,9 +28,9 @@ pub enum Command {
     Init(InitArgs),
     /// Validate one project pack or all discovered packs.
     ValidatePack(ValidatePackArgs),
-    /// Show instructions for the current or selected stage.
+    /// Print instructions for the current or selected stage.
     Instructions(InstructionsArgs),
-    /// Explain the project goal, usefulness, and full stage roadmap.
+    /// Print the project goal, usefulness, and full stage roadmap.
     Overview(OverviewArgs),
     /// Run black-box tests for the current or selected stage.
     Test(TestArgs),
@@ -59,8 +59,6 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Explain the latest failing stage results and suggest next steps.
     ExplainFailure(ExplainFailureArgs),
-    /// Run the live viewer server for the learning and test-report pages.
-    Serve(ServeArgs),
     #[command(name = "__workbench", hide = true)]
     Workbench(WorkbenchArgs),
 }
@@ -69,33 +67,9 @@ pub enum Command {
 pub struct WorkbenchArgs {
     #[arg(long, hide = true)]
     pub token: String,
-}
 
-#[derive(Debug, Args)]
-pub struct ServeArgs {
-    /// Open the viewer in your browser after starting.
-    #[arg(long)]
-    pub open: bool,
-
-    /// Stop the running viewer for this project.
-    #[arg(long, conflicts_with_all = ["open", "restart", "auto"])]
-    pub stop: bool,
-
-    /// Stop the running viewer, then start a fresh one.
-    #[arg(long)]
-    pub restart: bool,
-
-    /// Print only errors.
-    #[arg(long)]
-    pub quiet: bool,
-
-    /// Shut down automatically after thirty idle minutes.
     #[arg(long, hide = true)]
-    pub auto: bool,
-
-    /// Serve this UI directory instead of discovering the project.
-    #[arg(long, hide = true)]
-    pub ui_dir: Option<PathBuf>,
+    pub idle_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Args)]
@@ -143,29 +117,13 @@ pub struct InstructionsArgs {
     /// Show instructions for all stages.
     #[arg(long)]
     pub all: bool,
-
-    /// Render in the terminal instead of opening the learning page.
-    #[arg(long, conflicts_with = "no_open")]
-    pub terminal: bool,
-
-    /// Generate the learning page and print its path without opening a browser.
-    #[arg(long)]
-    pub no_open: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct OverviewArgs {
     /// Print machine-readable JSON only.
-    #[arg(long, conflicts_with_all = ["terminal", "no_open"])]
-    pub json: bool,
-
-    /// Render in the terminal instead of opening the learning page.
-    #[arg(long, conflicts_with = "no_open")]
-    pub terminal: bool,
-
-    /// Generate the learning page and print its path without opening a browser.
     #[arg(long)]
-    pub no_open: bool,
+    pub json: bool,
 }
 
 #[derive(Debug, Args)]
@@ -203,16 +161,8 @@ pub struct TestArgs {
     pub keep_temp: bool,
 
     /// Print machine-readable JSON results.
-    #[arg(long, conflicts_with_all = ["open", "terminal"])]
+    #[arg(long)]
     pub json: bool,
-
-    /// Generate and open the browser test report, even when every test passes.
-    #[arg(long, conflicts_with_all = ["json", "terminal", "list_tests"])]
-    pub open: bool,
-
-    /// Keep detailed test diagnostics in the terminal and do not generate a browser report.
-    #[arg(long, conflicts_with = "open")]
-    pub terminal: bool,
 }
 
 #[derive(Debug, Args)]

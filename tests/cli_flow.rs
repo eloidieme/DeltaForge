@@ -184,6 +184,18 @@ fn starter_project_initializes_and_fails_current_stage() {
     assert_success(&init);
     assert_stdout_contains(&init, "Created project.");
 
+    let root_help = run_deltaforge(["--help"], &project_dir);
+    assert_success(&root_help);
+    assert_stdout_not_contains(&root_help, "serve");
+    let test_help = run_deltaforge(["test", "--help"], &project_dir);
+    assert_success(&test_help);
+    assert_stdout_not_contains(&test_help, "--open");
+    assert_stdout_not_contains(&test_help, "--terminal");
+    let overview_help = run_deltaforge(["overview", "--help"], &project_dir);
+    assert_success(&overview_help);
+    assert_stdout_not_contains(&overview_help, "--no-open");
+    assert_stdout_not_contains(&overview_help, "--terminal");
+
     assert!(project_dir.join("Cargo.toml").is_file());
     assert!(project_dir.join("src/main.rs").is_file());
     assert!(project_dir.join(".deltaforge/state.json").is_file());
@@ -192,7 +204,9 @@ fn starter_project_initializes_and_fails_current_stage() {
     assert!(project_readme.contains("## What you are building"));
     assert!(project_readme.contains("## Why this is useful"));
     assert!(project_readme.contains("## Stage Roadmap"));
-    assert!(project_readme.contains("deltaforge overview"));
+    assert!(project_readme.contains("Open the local workbench"));
+    assert!(project_readme.contains("\ndeltaforge\n"));
+    assert!(!project_readme.contains("deltaforge serve"));
 
     let config = fs::read_to_string(project_dir.join(".deltaforge/config.toml")).unwrap();
     assert!(config.contains("timeout_ms = 5000"));
@@ -227,29 +241,13 @@ fn starter_project_initializes_and_fails_current_stage() {
     assert_eq!(parsed_overview["project"], "flashindex");
     assert_eq!(parsed_overview["roadmap"].as_array().unwrap().len(), 14);
 
-    let generated_overview = run_deltaforge(["overview", "--no-open"], &project_dir);
-    assert_success(&generated_overview);
-    assert_stdout_contains(&generated_overview, "Generated learning page:");
-    let learning_page_path = project_dir
-        .join(".deltaforge")
-        .join("ui")
-        .join("learning.html");
-    let learning_page = fs::read_to_string(&learning_page_path).unwrap();
-    assert!(learning_page.contains("Project overview"));
-    assert!(learning_page.contains("The road ahead"));
-    assert!(learning_page.contains("class=\"roadmap-row"));
-    assert!(learning_page.contains("Stage 14"));
-    assert!(!learning_page.contains("https://"));
-
-    let generated_instructions = run_deltaforge(
-        ["instructions", "--stage", "02_filter_files", "--no-open"],
-        &project_dir,
+    let selected_instructions =
+        run_deltaforge(["instructions", "--stage", "02_filter_files"], &project_dir);
+    assert_success(&selected_instructions);
+    assert_stdout_contains(
+        &selected_instructions,
+        "Stage 02_filter_files: Filter source files",
     );
-    assert_success(&generated_instructions);
-    let learning_page = fs::read_to_string(&learning_page_path).unwrap();
-    assert!(learning_page.contains("data-initial-target=\"stage-02_filter_files\""));
-    assert!(learning_page.contains("Choose searchable files"));
-    assert!(learning_page.contains("In this chapter"));
 
     let status = run_deltaforge(["status"], &project_dir);
     assert_success(&status);
@@ -257,7 +255,7 @@ fn starter_project_initializes_and_fails_current_stage() {
 
     let hint = run_deltaforge(["hint"], &project_dir);
     assert_success(&hint);
-    assert_stdout_contains(&hint, "Hint 1/3:");
+    assert_stdout_contains(&hint, "Hint 1/5:");
 
     let next = run_deltaforge(["next"], &project_dir);
     assert_success(&next);
@@ -265,52 +263,19 @@ fn starter_project_initializes_and_fails_current_stage() {
 
     let test = run_deltaforge(["test"], &project_dir);
     assert_failure(&test);
-    assert_stdout_contains(&test, "0 passed, 8 failed");
-    assert_stdout_contains(&test, "Test report:");
+    assert_stdout_contains(&test, "0 passed, 9 failed");
+    assert_stdout_not_contains(&test, "Test report:");
+    assert_stdout_not_contains(&test, "Opened the test report");
     assert_stderr_contains(&test, "error: tests failed");
+    assert!(!project_dir.join(".deltaforge/ui").exists());
 
-    let test_report_path = project_dir
-        .join(".deltaforge")
-        .join("ui")
-        .join("test-report.html");
-    let test_report = fs::read_to_string(&test_report_path).unwrap();
-    assert!(test_report.contains("8 tests need attention"));
-    assert!(test_report.contains("Needs attention"));
-    assert!(test_report.contains("data-tab=\"input\""));
-    assert!(test_report.contains("data-tab=\"output\""));
-    assert!(test_report.contains("event.key==='ArrowRight'"));
-    assert!(test_report.contains("Show whitespace"));
-    assert!(test_report.contains("How this test starts"));
-    assert!(test_report.contains("Starting files"));
-    assert!(test_report.contains("basic_project"));
-    assert!(test_report.contains("README.md"));
-    assert!(test_report.contains("copied into a fresh workspace"));
-    assert!(test_report.contains("deltaforge test --stage 01_scan_files --filter"));
-    assert!(test_report.contains("Read the instructions"));
-    assert!(test_report.contains("{fixture_path}"));
-    assert!(
-        !test_report.contains("deltaforge-"),
-        "test report leaked a temporary path in: {}",
-        test_report
-            .lines()
-            .find(|line| line.contains("deltaforge-"))
-            .unwrap_or("<line unavailable>")
-    );
-    assert!(!test_report.contains("https://"));
-
-    fs::remove_file(&test_report_path).unwrap();
-    let terminal_test = run_deltaforge(
-        [
-            "test",
-            "--terminal",
-            "--filter",
-            "scans files in a basic project",
-        ],
+    let filtered_test = run_deltaforge(
+        ["test", "--filter", "scans files in a basic project"],
         &project_dir,
     );
-    assert_failure(&terminal_test);
-    assert_stdout_contains(&terminal_test, "actual stdout");
-    assert!(!test_report_path.exists());
+    assert_failure(&filtered_test);
+    assert_stdout_contains(&filtered_test, "actual stdout");
+    assert!(!project_dir.join(".deltaforge/ui").exists());
 
     let json_test = run_deltaforge(["test", "--json"], &project_dir);
     assert_failure(&json_test);
@@ -322,10 +287,10 @@ fn starter_project_initializes_and_fails_current_stage() {
         serde_json::from_slice(&json_test.stdout).expect("test --json should emit valid JSON");
     assert_eq!(parsed["summaries"][0]["stage_id"], "01_scan_files");
     assert_eq!(parsed["summaries"][0]["passed"], 0);
-    assert_eq!(parsed["summaries"][0]["failed"], 8);
+    assert_eq!(parsed["summaries"][0]["failed"], 9);
     assert_eq!(
         parsed["summaries"][0]["results"].as_array().unwrap().len(),
-        8
+        9
     );
     let persisted_state: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(project_dir.join(".deltaforge/state.json")).unwrap(),
@@ -840,7 +805,7 @@ fn test_runner_selection_flags_are_user_facing() {
         serde_json::from_slice(&list.stdout).expect("test --list-tests --json is valid JSON");
     assert_eq!(
         listed["summaries"][0]["results"].as_array().unwrap().len(),
-        8
+        9
     );
     assert_stdout_contains(&list, "scans files in a basic project");
 
@@ -1338,9 +1303,9 @@ fn timed_out_benchmark_reports_no_pass_and_preserves_prior_complete_record() {
     let source = fs::read_to_string(project.join("src/main.rs"))
         .unwrap()
         .replace(
-            "fn main() -> ExitCode {",
-            "fn main() -> ExitCode {\n    std::thread::sleep(std::time::Duration::from_millis(500));",
-        );
+        "fn main() -> ExitCode {",
+        "fn main() -> ExitCode {\n    std::thread::sleep(std::time::Duration::from_millis(500));",
+    );
     fs::write(project.join("src/main.rs"), source).unwrap();
     assert_success(&run_deltaforge(
         ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
@@ -1708,7 +1673,7 @@ keep_temp = false
     let timeout = run_deltaforge(["test"], &timeout_project);
     assert_failure(&timeout);
     assert_stdout_contains(&timeout, "command timed out after 1 ms");
-    assert_stdout_contains(&timeout, "0 passed, 8 failed");
+    assert_stdout_contains(&timeout, "0 passed, 9 failed");
     assert_stderr_contains(&timeout, "error: tests failed");
 }
 
@@ -1734,8 +1699,8 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
 
     let stage1 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage1);
-    assert_stdout_contains(&stage1, "Stage 01_scan_files: Scan files");
-    assert_stdout_contains(&stage1, "8 passed");
+    assert_stdout_contains(&stage1, "Checking 01_scan_files");
+    assert_stdout_contains(&stage1, "9 passed");
 
     let next1 = run_deltaforge(["next"], &project_dir);
     assert_success(&next1);
@@ -1746,7 +1711,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
 
     let stage2 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage2);
-    assert_stdout_contains(&stage2, "Stage 02_filter_files: Filter source files");
+    assert_stdout_contains(&stage2, "Checking 02_filter_files");
     assert_stdout_contains(&stage2, "7 passed");
 
     let next2 = run_deltaforge(["next"], &project_dir);
@@ -1755,7 +1720,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
 
     let stage3 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage3);
-    assert_stdout_contains(&stage3, "Stage 03_tokenize: Tokenize files");
+    assert_stdout_contains(&stage3, "Checking 03_tokenize");
     assert_stdout_contains(&stage3, "9 passed");
 
     let next3 = run_deltaforge(["next"], &project_dir);
@@ -1770,9 +1735,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
 
     let all = run_deltaforge(["test", "--all"], &project_dir);
     assert_failure(&all);
-    assert_stdout_contains(&all, "Stage 01_scan_files: Scan files");
-    assert_stdout_contains(&all, "Stage 02_filter_files: Filter source files");
-    assert_stdout_contains(&all, "Stage 03_tokenize: Tokenize files");
+    assert_stdout_contains(&all, "Checking 01_scan_files, 02_filter_files, 03_tokenize");
 
     let state = fs::read_to_string(project_dir.join(".deltaforge/state.json")).unwrap();
     assert!(state.contains(r#""01_scan_files""#));
@@ -1785,7 +1748,7 @@ fn reference_solution_passes_all_flashindex_stages() {
     assert_reference_solution_passes(
         "flashindex",
         "tools/reference_solutions/flashindex_rust/src/main.rs",
-        "Stage 10_stable_ranking: Order ranked results",
+        "10_stable_ranking",
     );
 }
 
@@ -1794,17 +1757,17 @@ fn reference_solutions_pass_all_bundled_packs() {
     assert_reference_solution_passes(
         "minikv",
         "tools/reference_solutions/minikv_rust/src/main.rs",
-        "Stage 06_log_statistics: Log statistics",
+        "06_log_statistics",
     );
     assert_reference_solution_passes(
         "tinyhttp",
         "tools/reference_solutions/tinyhttp_rust/src/main.rs",
-        "Stage 06_invalid_ranges: Reject invalid byte ranges",
+        "06_invalid_ranges",
     );
     assert_reference_solution_passes(
         "byteforgevm",
         "tools/reference_solutions/byteforgevm_rust/src/main.rs",
-        "Stage 06_trace_mode: Trace mode",
+        "06_trace_mode",
     );
 }
 
@@ -2242,7 +2205,7 @@ fn legacy_schema_v1_state_loads_but_requires_a_fresh_completion_proof() {
     let _ = fs::remove_dir_all(project);
 }
 
-fn assert_reference_solution_passes(pack: &str, source_path: &str, final_stage: &str) {
+fn assert_reference_solution_passes(pack: &str, source_path: &str, final_stage_id: &str) {
     let project_dir = temp_project_path(&format!("reference-{pack}"));
     let init = run_deltaforge(
         [
@@ -2266,7 +2229,8 @@ fn assert_reference_solution_passes(pack: &str, source_path: &str, final_stage: 
 
     let all = run_deltaforge(["test", "--all"], &project_dir);
     assert_success(&all);
-    assert_stdout_contains(&all, final_stage);
+    assert_stdout_contains(&all, "Checking ");
+    assert_stdout_contains(&all, final_stage_id);
     assert_stdout_contains(&all, "0 failed");
 }
 

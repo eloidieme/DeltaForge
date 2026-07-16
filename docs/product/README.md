@@ -21,6 +21,10 @@ and historical context.
   and interaction identity.
 - [phase-1-vertical-slice.md](phase-1-vertical-slice.md) -- the first working slice and
   its acceptance and research protocol.
+- [phase-1-observation-protocol.md](phase-1-observation-protocol.md) -- the runnable
+  five-learner session script, recording sheets, pass thresholds, and issue rubric.
+- [phase-1-release-audit.md](phase-1-release-audit.md) -- release gates, resolved audit
+  defects, platform evidence, and the hosted-CI completion boundary.
 
 ## Frozen decisions
 

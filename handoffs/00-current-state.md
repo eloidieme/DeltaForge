@@ -1,6 +1,6 @@
 # DeltaForge — current state (July 2026)
 
-*(Snapshot prompt: read this before any new task for the up-to-date picture. `00-shared-context.md` still describes the core principles and source layout — this file records what has shipped since and what is open. Written 2026-07-15.)*
+*(Snapshot prompt: read this before any new task for the up-to-date picture. `00-shared-context.md` still describes the core principles and source layout — this file records what has shipped since and what is open. Updated 2026-07-16.)*
 
 DeltaForge is a local, CodeCrafters-style learning framework written in Rust (~14k lines,
 lean deps: clap/serde/anyhow/regex/cap-std, no async runtime in the main binary). Learners
@@ -11,9 +11,10 @@ author, direct commits to main).
 
 ## CLI surface
 
-list, pack (list/show/new/add-stage/doctor/check-reference/install), init, validate-pack,
+Bare `deltaforge` opens the workbench. Diagnostic and authoring commands include list,
+pack (list/show/new/add-stage/doctor/check-reference/install), init, validate-pack,
 instructions, overview, test, next, sync-pack, status, hint, config, bench, report,
-portfolio, design, commit, doctor, explain-failure, serve. Plus `deltaforge-pack-mcp`, a
+portfolio, design, commit, doctor, and explain-failure. Plus `deltaforge-pack-mcp`, a
 stdio MCP server for AI-assisted pack authoring (structured ok/blocked reports).
 
 ## Core mechanics
@@ -48,33 +49,25 @@ check-reference against tools/reference_solutions/flashindex_rust. CRLF fixture 
 by .gitattributes -text. Also: MiniKV (10 stages), TinyHTTP (10), ByteForgeVM (11), each
 with reference solutions.
 Content style: docs/content-style.md; each stage doc = Goal/Background/Requirements/
-Example/Edge cases/Success criteria/Non-goals + exactly three hints.
+Example/Edge cases/Success criteria/Non-goals. FlashIndex Stage 1 now has the Phase 1
+five-level progressive-help ladder; untouched catalog stages retain their existing hints.
 
-## Web experience (recent major work)
+## Workbench experience
 
-Architecture (deliberate decision): CLI commands stay authoritative and write static HTML
-to .deltaforge/ui/ (learning.html by learning_web.rs, test-report.html by test_web.rs);
-`deltaforge serve` (src/viewer.rs) is a dependency-free loopback HTTP server with an SSE
-/events stream. One persistent tab follows the terminal: `test` regenerates both pages on
-every human-readable run and bumps a version marker (tab reloads/navigates);
-`instructions`/`overview` navigate the tab. Interactive commands auto-spawn the viewer
-(auto-spawned ones exit after 30 idle minutes); serve --stop/--restart use a token-guarded
-/shutdown endpoint (token in .deltaforge/ui/viewer.json). Stable per-project port. The
-request reader routes on the request line and drains huge cookie headers (127.0.0.1
-cookies are shared across all local ports); idle speculative connections close silently.
-Not-yet-generated pages get a self-updating placeholder. file:// opening remains the
-fallback; --json/--terminal/CI/DELTAFORGE_NO_BROWSER never touch the server.
-Design: src/web_theme.rs is the shared theme both pages embed — warm paper/ember palette,
-light+dark via prefers-color-scheme, shared Learn/Test-report pill nav, serif display
-headings, card shadows/radius, motion (entrance stagger, hover lift, failure-dot pulse,
-cross-document view transitions) gated by prefers-reduced-motion.
+Bare `deltaforge` is the canonical learner entry. It starts or focuses one hidden,
+token-protected loopback workbench service and returns the prompt. The application core
+owns mission content, run coordination, live events, diagnosis, freshness, resumption,
+recovery, help, and capability progression. `overview`, `instructions`, and `test` are
+terminal-only diagnostics; they never generate or open HTML. The retired generated
+learning/test-report pages, live viewer, `serve` command, and warm paper/ember theme were
+removed from the product path. `DELTAFORGE_NO_BROWSER=1` keeps bare launch usable by
+printing the workbench URL and CLI fallback.
 
 ## Verification workflow
 
-cargo test --release (62 lib + 51 cli_flow integration + 4 MCP), clippy clean. cli_flow
-hard-codes per-stage test counts and embeds a passing_flashindex_source() implementation
-that must satisfy pack contracts (it was fixed to count byte columns). UI changes get
-visual verification in both color schemes.
+Use `docs/product/phase-1-checkpoint.md` as the current verification authority. Phase 1
+workbench changes require release check, Clippy, library tests, the failure corpus, the
+real-service workbench suite, and browser/keyboard inspection proportional to the change.
 
 ## Known open threads (prioritized candidates)
 
@@ -86,8 +79,8 @@ visual verification in both color schemes.
    number/name, and commit.rs strips the id prefix so two stages produce "Complete Stage
    05". Fix = renumber ids to 01–14 (or headings to ids) + sync yaml titles; mind
    state/proof migration and the stage-id tags.
-2. Runner/report refinements: word-level diffs for stdout_exact failures, per-test
-   timings in the report, parallel `test --all`, fold explain-failure into failure cards.
-3. Git timeline in the viewer (stage commits/tags, diff-since-last-stage) rendered into
-   learning.html at generation time.
-4. Optional manual light/dark toggle (currently system-preference only).
+2. Phase 1 closeout: native macOS gates and Linux/Windows cross-target release checks
+   pass, stale legacy assertions are replaced, and the observation protocol is ready.
+   Commit/push authorization and passing native GitHub CI jobs on macOS, Linux, and
+   Windows are the only remaining engineering evidence; see
+   `docs/product/phase-1-release-audit.md`.

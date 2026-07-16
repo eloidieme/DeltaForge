@@ -79,9 +79,7 @@ pub fn run(args: InitArgs, options: &GlobalOptions) -> Result<()> {
     println!("Created project.");
     println!("Next:");
     println!("  cd {}", target_directory.display());
-    println!("  deltaforge overview");
-    println!("  deltaforge instructions");
-    println!("  deltaforge test");
+    println!("  deltaforge");
 
     Ok(())
 }
@@ -136,7 +134,7 @@ fn write_readme(
         .collect::<Vec<_>>()
         .join("\n");
     let readme = format!(
-        "# {}\n\n{}\n\n{}\n\n## Current Stage\n\n`{}` - {}\n\n## Stage Roadmap\n\n{}\n\n## DeltaForge Commands\n\n```bash\ndeltaforge overview\ndeltaforge instructions\ndeltaforge test\ndeltaforge hint\ndeltaforge status\ndeltaforge next\n```\n",
+        "# {}\n\n{}\n\n{}\n\n## Current Stage\n\n`{}` - {}\n\n## Stage Roadmap\n\n{}\n\n## DeltaForge\n\nOpen the local workbench from this directory:\n\n```bash\ndeltaforge\n```\n\nFor terminal-only checks and diagnostics:\n\n```bash\ndeltaforge test\ndeltaforge status\ndeltaforge doctor\n```\n",
         manifest.name,
         manifest.description,
         overview.trim(),

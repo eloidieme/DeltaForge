@@ -24,6 +24,15 @@ pub struct RunnerOptions {
     pub no_build: bool,
     pub keep_temp: bool,
     pub capture_details: bool,
+    pub cancellation_path: Option<PathBuf>,
+}
+
+impl RunnerOptions {
+    fn is_cancelled(&self) -> bool {
+        self.cancellation_path
+            .as_ref()
+            .is_some_and(|path| path.exists())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +46,8 @@ pub struct StageTests {
 #[serde(deny_unknown_fields)]
 pub struct TestCase {
     pub name: String,
+    #[serde(default)]
+    pub diagnosis: Option<TestDiagnosis>,
     pub fixture: Option<String>,
     pub stdin: Option<String>,
     #[serde(default)]
@@ -46,7 +57,15 @@ pub struct TestCase {
     pub expect: Expectations,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TestDiagnosis {
+    pub priority: u32,
+    pub headline: String,
+    pub contract: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Expectations {
     pub exit_code: Option<i32>,
@@ -71,7 +90,7 @@ pub struct Expectations {
     pub timeout_ms: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileContainsExpectation {
     pub path: String,
@@ -92,6 +111,8 @@ pub struct TestRunSummary {
 pub struct TestResult {
     pub name: String,
     pub passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnosis: Option<TestDiagnosis>,
     pub failures: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<TestDiagnostic>,
@@ -184,6 +205,9 @@ pub fn run_stage_tests(
     args: &RunnerOptions,
     sink: &mut dyn EventSink,
 ) -> Result<TestRunSummary> {
+    if args.is_cancelled() {
+        bail!("run cancelled");
+    }
     let language = context
         .pack
         .manifest
@@ -238,6 +262,7 @@ pub fn run_stage_tests(
             .map(|test| TestResult {
                 name: test.name.clone(),
                 passed: true,
+                diagnosis: test.diagnosis.clone(),
                 failures: Vec::new(),
                 diagnostics: Vec::new(),
                 expectations: describe_expectations(&test.expect),
@@ -268,6 +293,7 @@ pub fn run_stage_tests(
             build,
             &context.root,
             context.config.runner.build_timeout_ms,
+            args.cancellation_path.as_deref(),
             sink,
         )?;
     }
@@ -276,6 +302,9 @@ pub fn run_stage_tests(
     let selected_count = selected_tests.len();
 
     for (index, test) in selected_tests.into_iter().enumerate() {
+        if args.is_cancelled() {
+            bail!("run cancelled");
+        }
         sink.emit(RunEvent::TestStarted {
             stage_id: stage.id.clone(),
             name: test.name.clone(),
@@ -388,6 +417,7 @@ fn run_build(
     build: &CommandSpec,
     project_root: &Path,
     timeout_ms: u64,
+    cancellation_path: Option<&Path>,
     sink: &mut dyn EventSink,
 ) -> Result<()> {
     if build.command.is_empty() {
@@ -398,19 +428,23 @@ fn run_build(
         command: build.command.clone(),
     });
 
-    let output = run_command(&build.command, project_root, timeout_ms)?;
-    if !output.stdout.is_empty() {
-        sink.emit(RunEvent::BuildOutput {
-            stream: "stdout",
-            text: String::from_utf8_lossy(&output.stdout).to_string(),
-        });
-    }
-    if !output.stderr.is_empty() {
-        sink.emit(RunEvent::BuildOutput {
-            stream: "stderr",
-            text: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
-    }
+    let output = {
+        let mut stream_output = |stream, bytes: &[u8]| {
+            sink.emit(RunEvent::BuildOutput {
+                stream,
+                text: String::from_utf8_lossy(bytes).to_string(),
+            });
+        };
+        process::run_command_cancellable_streaming(
+            &build.command,
+            project_root,
+            timeout_ms,
+            None,
+            &BTreeMap::new(),
+            cancellation_path,
+            &mut stream_output,
+        )?
+    };
     sink.emit(RunEvent::BuildCompleted {
         passed: output.status.success(),
     });
@@ -441,6 +475,7 @@ fn run_test_case(
             Err(error) => TestResult {
                 name: test.name.clone(),
                 passed: false,
+                diagnosis: test.diagnosis.clone(),
                 failures: vec![format!("{error:#}")],
                 diagnostics: vec![TestDiagnostic {
                     kind: "runner",
@@ -556,13 +591,16 @@ fn run_test_case_in_temp(
         timeout_ms,
         stdin.as_deref(),
         &env,
+        args.cancellation_path.as_deref(),
     ) {
         Ok(output) => output,
+        Err(error) if format!("{error:#}").contains("run cancelled") => return Err(error),
         Err(error) => {
             let message = sanitize_report_text(&format!("{error:#}"), &fixture_path, temp_dir);
             return Ok(TestResult {
                 name: test.name.clone(),
                 passed: false,
+                diagnosis: test.diagnosis.clone(),
                 failures: vec![message.clone()],
                 diagnostics: vec![TestDiagnostic {
                     kind: "runner",
@@ -586,9 +624,22 @@ fn run_test_case_in_temp(
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    let mut comparison =
-        compare_expectations(&test.expect, &output.status, &stdout, &stderr, temp_dir);
+    let expanded_expectations = expand_output_expectations(&test.expect, &fixture_path, temp_dir);
+    let mut comparison = compare_expectations(
+        &expanded_expectations,
+        &output.status,
+        &stdout,
+        &stderr,
+        temp_dir,
+    );
+    for failure in &mut comparison.failures {
+        *failure = sanitize_report_text(failure, &fixture_path, temp_dir);
+    }
     for diagnostic in &mut comparison.diagnostics {
+        diagnostic.summary = sanitize_report_text(&diagnostic.summary, &fixture_path, temp_dir);
+        if let Some(expected) = &mut diagnostic.expected {
+            *expected = sanitize_report_text(expected, &fixture_path, temp_dir);
+        }
         if let Some(actual) = &mut diagnostic.actual {
             *actual = sanitize_report_text(actual, &fixture_path, temp_dir);
         }
@@ -599,6 +650,7 @@ fn run_test_case_in_temp(
     Ok(TestResult {
         name: test.name.clone(),
         passed: comparison.failures.is_empty(),
+        diagnosis: test.diagnosis.clone(),
         failures: comparison.failures,
         diagnostics: comparison.diagnostics,
         expectations: describe_expectations(&test.expect),
@@ -611,6 +663,27 @@ fn run_test_case_in_temp(
         input,
         kept_temp_dir: None,
     })
+}
+
+fn expand_output_expectations(
+    expectations: &Expectations,
+    fixture_path: &Path,
+    temp_dir: &Path,
+) -> Expectations {
+    let mut expanded = expectations.clone();
+    expanded.stdout_exact = expanded
+        .stdout_exact
+        .map(|value| expand_variables(&value, fixture_path, temp_dir));
+    for values in [
+        &mut expanded.stdout_contains,
+        &mut expanded.stdout_not_contains,
+        &mut expanded.stderr_contains,
+    ] {
+        for value in values {
+            *value = expand_variables(value, fixture_path, temp_dir);
+        }
+    }
+    expanded
 }
 
 fn should_capture_test_input(args: &RunnerOptions) -> bool {
@@ -1096,18 +1169,15 @@ fn describe_expectations(expect: &Expectations) -> Vec<String> {
     descriptions
 }
 
-fn run_command(command: &[String], cwd: &Path, timeout_ms: u64) -> Result<Output> {
-    run_command_with_input_and_env(command, cwd, timeout_ms, None, &BTreeMap::new())
-}
-
 fn run_command_with_input_and_env(
     command: &[String],
     cwd: &Path,
     timeout_ms: u64,
     stdin: Option<&str>,
     envs: &BTreeMap<String, String>,
+    cancellation_path: Option<&Path>,
 ) -> Result<Output> {
-    process::run_command(command, cwd, timeout_ms, stdin, envs)
+    process::run_command_cancellable(command, cwd, timeout_ms, stdin, envs, cancellation_path)
 }
 
 fn create_temp_dir(stage: &StageSpec, test_name: &str) -> Result<PathBuf> {
@@ -1233,6 +1303,24 @@ tests:
             expand_variables("{fixture_path}/src:{temp_dir}", fixture, temp),
             "/tmp/fixture/src:/tmp/run"
         );
+    }
+
+    #[test]
+    fn expands_fixture_paths_in_output_expectations() {
+        let source = r#"
+exit_code: 0
+stdout_not_contains: ["{fixture_path}"]
+stderr_contains: ["work: {temp_dir}"]
+"#;
+        let expectations: Expectations = serde_yaml::from_str(source).unwrap();
+        let expanded = expand_output_expectations(
+            &expectations,
+            Path::new("/tmp/fixture"),
+            Path::new("/tmp/run"),
+        );
+
+        assert_eq!(expanded.stdout_not_contains, ["/tmp/fixture"]);
+        assert_eq!(expanded.stderr_contains, ["work: /tmp/run"]);
     }
 
     #[test]

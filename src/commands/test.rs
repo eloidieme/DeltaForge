@@ -3,18 +3,11 @@ use anyhow::{Result, bail};
 use crate::application::{self, RunEvent, RunTrigger, TestRunRequest};
 use crate::cli::TestArgs;
 use crate::context::{GlobalOptions, ProjectContext};
-use crate::learning_web::{
-    InitialView, generate_learning_page, open_learning_page, should_use_browser,
-};
-use crate::test_web::generate_test_report;
-use crate::viewer;
 
 pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
     let json = args.json;
     let verbose = args.verbose;
     let list_tests = args.list_tests;
-    let open = args.open;
-    let terminal = args.terminal;
     let all = args.all;
 
     let mut sink = |event: RunEvent| {
@@ -81,7 +74,7 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
             fail_fast: args.fail_fast,
             no_build: args.no_build,
             keep_temp: args.keep_temp,
-            capture_details: !json && !terminal,
+            capture_details: !json,
             trigger: RunTrigger::Cli,
         },
         &mut sink,
@@ -97,50 +90,6 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
     }
 
     let tests_failed = !outcome.is_success();
-    let browser_disabled = std::env::var_os("DELTAFORGE_NO_BROWSER").is_some();
-    let report_capable = !json && !list_tests && !terminal;
-    if report_capable {
-        let context = ProjectContext::load(options)?;
-        let initial_stage = outcome
-            .summaries
-            .iter()
-            .find(|summary| summary.failed > 0)
-            .or_else(|| outcome.summaries.first())
-            .map(|summary| summary.stage_id.as_str())
-            .unwrap_or(&context.state.current_stage);
-        let overview = super::overview::read_pack_overview(&context.pack);
-        generate_learning_page(&context, &overview, InitialView::Stage(initial_stage))?;
-        let report = generate_test_report(&context, &outcome.summaries)?;
-        let ui_dir = context.root.join(".deltaforge/ui");
-        let should_open =
-            !browser_disabled && (open || (tests_failed && should_use_browser(false)));
-        if should_open {
-            match viewer::open_live(&ui_dir, "test-report.html") {
-                Ok(viewer::LiveOpen::OpenedTab(url)) => {
-                    println!("Opened the test report in your browser: {url}");
-                }
-                Ok(viewer::LiveOpen::Updated(url)) => {
-                    println!("Live test report updated: {url}");
-                }
-                Err(_) => match open_learning_page(&report) {
-                    Ok(()) => println!("Opened the test report in your browser."),
-                    Err(error) => {
-                        eprintln!("warning: {error:#}; open the generated report manually");
-                        println!("Test report: {}", report.display());
-                    }
-                },
-            }
-        } else {
-            let _ = viewer::bump_version(&ui_dir, Some("test-report.html"));
-            if open || (tests_failed && !browser_disabled) {
-                println!("Test report: {}", report.display());
-            } else if let Some(status) = viewer::live_status(&ui_dir)
-                && status.clients > 0
-            {
-                println!("Live test report updated: {}test-report.html", status.url);
-            }
-        }
-    }
 
     if outcome.newly_completed_current && !tests_failed {
         let context = ProjectContext::load(options)?;
