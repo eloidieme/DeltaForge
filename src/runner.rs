@@ -728,6 +728,24 @@ fn replace_path_spelling(value: &str, native: &str, replacement: &str) -> String
     }
 }
 
+#[cfg(windows)]
+fn replace_path_prefix_preserving_separators(
+    value: &str,
+    native: &str,
+    replacement: &str,
+) -> String {
+    let escaped = native.replace('\\', "\\\\");
+    let escaped_replacement = replacement.replace('\\', "\\\\");
+    let value = value.replace(&escaped, &escaped_replacement);
+    let value = value.replace(native, replacement);
+    let portable = native.replace('\\', "/");
+    if portable == native {
+        value
+    } else {
+        value.replace(&portable, &replacement.replace('\\', "/"))
+    }
+}
+
 fn equivalent_path_spellings(path: &Path) -> Vec<String> {
     #[cfg(not(windows))]
     {
@@ -764,7 +782,7 @@ fn normalize_windows_path_prefixes(value: &str, path: &Path) -> String {
             })
         })
         .fold(value.to_string(), |value, (short_prefix, long_prefix)| {
-            replace_path_spelling(&value, &short_prefix, &long_prefix)
+            replace_path_prefix_preserving_separators(&value, &short_prefix, &long_prefix)
         })
 }
 
