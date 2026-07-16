@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -38,6 +38,60 @@ impl Drop for ChildGuard {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
+    }
+}
+
+struct CapturedLaunch {
+    child: Child,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+}
+
+struct CapturedLaunchOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn spawn_captured_launch(project: &Path, label: &str) -> CapturedLaunch {
+    let stdout_path = project.join(".deltaforge").join(format!("{label}.stdout"));
+    let stderr_path = project.join(".deltaforge").join(format!("{label}.stderr"));
+    let stdout = fs::File::create(&stdout_path).unwrap();
+    let stderr = fs::File::create(&stderr_path).unwrap();
+    let child = Command::new(deltaforge_bin())
+        .env("DELTAFORGE_NO_BROWSER", "1")
+        .current_dir(project)
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap();
+    CapturedLaunch {
+        child,
+        stdout_path,
+        stderr_path,
+    }
+}
+
+fn wait_for_captured_launch(mut launch: CapturedLaunch) -> CapturedLaunchOutput {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = launch.child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = launch.child.kill();
+            let _ = launch.child.wait();
+            panic!(
+                "workbench launcher did not exit: {}",
+                String::from_utf8_lossy(&fs::read(&launch.stderr_path).unwrap_or_default())
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    CapturedLaunchOutput {
+        status,
+        stdout: fs::read(launch.stdout_path).unwrap(),
+        stderr: fs::read(launch.stderr_path).unwrap(),
     }
 }
 
@@ -1241,22 +1295,10 @@ fn lifecycle_recovers_stale_metadata_and_replaces_an_incompatible_service() {
     let record_path = project.join(".deltaforge/workbench.json");
     fs::write(&record_path, "{ stale lifecycle metadata").unwrap();
 
-    let first_launch = Command::new(deltaforge_bin())
-        .env("DELTAFORGE_NO_BROWSER", "1")
-        .current_dir(&project)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let second_launch = Command::new(deltaforge_bin())
-        .env("DELTAFORGE_NO_BROWSER", "1")
-        .current_dir(&project)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let first_launch = first_launch.wait_with_output().unwrap();
-    let second_launch = second_launch.wait_with_output().unwrap();
+    let first_launch = spawn_captured_launch(&project, "first-launch");
+    let second_launch = spawn_captured_launch(&project, "second-launch");
+    let first_launch = wait_for_captured_launch(first_launch);
+    let second_launch = wait_for_captured_launch(second_launch);
     assert!(
         first_launch.status.success(),
         "{}",
@@ -1290,11 +1332,8 @@ fn lifecycle_recovers_stale_metadata_and_replaces_an_incompatible_service() {
         serde_json::to_vec_pretty(&incompatible).unwrap(),
     )
     .unwrap();
-    let replacement_launch = Command::new(deltaforge_bin())
-        .env("DELTAFORGE_NO_BROWSER", "1")
-        .current_dir(&project)
-        .output()
-        .unwrap();
+    let replacement_launch =
+        wait_for_captured_launch(spawn_captured_launch(&project, "replacement-launch"));
     assert!(
         replacement_launch.status.success(),
         "{}",
