@@ -23,5 +23,19 @@ jobs:
       - run: cargo fmt --check
       - run: cargo check --release
       - run: cargo clippy --release --all-targets -- -D warnings
-      - run: cargo test
+      - name: Run cargo test
+        shell: bash
+        run: |
+          set +e
+          cargo test 2>&1 | tee cargo-test.log
+          test_status=${PIPESTATUS[0]}
+          set -e
+          if [ "$test_status" -ne 0 ]; then
+            details=$(grep -E 'test .* \.\.\. FAILED|panicked at|assertion .* failed|left:|right:' cargo-test.log | tail -n 20 | tr '\r\n' '  ')
+            if [ -z "$details" ]; then
+              details="cargo test failed; inspect the job log"
+            fi
+            echo "::error title=Rust test failure::$details"
+            exit "$test_status"
+          fi
       - run: cargo run -- validate-pack --strict
