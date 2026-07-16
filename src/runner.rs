@@ -705,9 +705,13 @@ fn normalize_comparison_paths(value: &str, fixture_path: &Path, temp_dir: &Path)
 }
 
 fn replace_report_path(value: &str, path: &Path, replacement: &str) -> String {
+    #[cfg(windows)]
+    let value = normalize_windows_path_prefixes(value, path);
+    #[cfg(not(windows))]
+    let value = value.to_string();
     equivalent_path_spellings(path)
         .iter()
-        .fold(value.to_string(), |value, native| {
+        .fold(value, |value, native| {
             replace_path_spelling(&value, native, replacement)
         })
 }
@@ -743,6 +747,25 @@ fn equivalent_path_spellings(path: &Path) -> Vec<String> {
         }
         spellings
     }
+}
+
+#[cfg(windows)]
+fn normalize_windows_path_prefixes(value: &str, path: &Path) -> String {
+    let long_path = windows_long_path(path).unwrap_or_else(|| path.to_path_buf());
+    long_path
+        .ancestors()
+        .filter_map(|long_prefix| {
+            let short_prefix = windows_short_path(long_prefix)?;
+            (short_prefix != long_prefix).then(|| {
+                (
+                    short_prefix.to_string_lossy().to_string(),
+                    long_prefix.to_string_lossy().to_string(),
+                )
+            })
+        })
+        .fold(value.to_string(), |value, (short_prefix, long_prefix)| {
+            replace_path_spelling(&value, &short_prefix, &long_prefix)
+        })
 }
 
 #[cfg(windows)]
@@ -1464,6 +1487,27 @@ stderr_contains: ["work: {temp_dir}"]
             assert_eq!(
                 replace_report_path(&format!(r#"args: ["{alias}"]"#), &root, "{temp_dir}"),
                 r#"args: ["{temp_dir}"]"#
+            );
+        }
+        let long_root = windows_long_path(&root).unwrap_or_else(|| root.clone());
+        if let Some((long_prefix, short_prefix)) =
+            long_root.ancestors().skip(1).find_map(|long_prefix| {
+                let short_prefix = windows_short_path(long_prefix)?;
+                (short_prefix != long_prefix).then(|| {
+                    (
+                        long_prefix.to_string_lossy().to_string(),
+                        short_prefix.to_string_lossy().to_string(),
+                    )
+                })
+            })
+        {
+            let hybrid = long_root
+                .to_string_lossy()
+                .replacen(&long_prefix, &short_prefix, 1)
+                .replace('\\', "/");
+            assert_eq!(
+                replace_report_path(&format!("{hybrid}/file.txt"), &root, "{temp_dir}"),
+                "{temp_dir}/file.txt"
             );
         }
         let _ = std::fs::remove_dir_all(root);
