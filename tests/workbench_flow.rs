@@ -4,9 +4,17 @@ use std::net::{Ipv4Addr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static PROJECT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static WORKBENCH_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn workbench_test_guard() -> MutexGuard<'static, ()> {
+    WORKBENCH_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn deltaforge_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_deltaforge"))
@@ -235,6 +243,7 @@ fn visit(root: &Path, current: &Path, files: &mut Vec<PathBuf>) -> Result<(), St
 
 #[test]
 fn cli_run_reaches_the_open_workbench_event_stream() {
+    let _guard = workbench_test_guard();
     let project = temp_project_path();
     let init = Command::new(deltaforge_bin())
         .args([
@@ -508,6 +517,7 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
 
 #[test]
 fn passing_run_unlocks_retrospective_and_browser_progression() {
+    let _guard = workbench_test_guard();
     let project = temp_project_path();
     let init = Command::new(deltaforge_bin())
         .args([
@@ -653,6 +663,7 @@ fn passing_run_unlocks_retrospective_and_browser_progression() {
 
 #[test]
 fn source_changes_are_durable_filtered_and_recovered_after_restart() {
+    let _guard = workbench_test_guard();
     let project = temp_project_path();
     let init = Command::new(deltaforge_bin())
         .args([
@@ -799,6 +810,7 @@ fn source_changes_are_durable_filtered_and_recovered_after_restart() {
 
 #[test]
 fn unhealthy_project_still_opens_and_supports_bounded_recovery() {
+    let _guard = workbench_test_guard();
     let project = temp_project_path();
     let init = Command::new(deltaforge_bin())
         .args([
@@ -909,6 +921,7 @@ fn unhealthy_project_still_opens_and_supports_bounded_recovery() {
 
 #[test]
 fn stopped_service_restores_an_interrupted_run_without_rerunning_it() {
+    let _guard = workbench_test_guard();
     let project = temp_project_path();
     let init = Command::new(deltaforge_bin())
         .args([
@@ -1081,6 +1094,7 @@ fn stopped_service_restores_an_interrupted_run_without_rerunning_it() {
 
 #[test]
 fn diagnostic_shutdown_is_authenticated_and_never_interrupts_a_run() {
+    let _guard = workbench_test_guard();
     let project = temp_project_path();
     let init = Command::new(deltaforge_bin())
         .args([
@@ -1209,6 +1223,7 @@ fn diagnostic_shutdown_is_authenticated_and_never_interrupts_a_run() {
 
 #[test]
 fn lifecycle_recovers_stale_metadata_and_replaces_an_incompatible_service() {
+    let _guard = workbench_test_guard();
     let project = temp_project_path();
     let init = Command::new(deltaforge_bin())
         .args([
@@ -1315,6 +1330,7 @@ fn lifecycle_recovers_stale_metadata_and_replaces_an_incompatible_service() {
 
 #[test]
 fn idle_service_exits_and_removes_its_discovery_record() {
+    let _guard = workbench_test_guard();
     let project = temp_project_path();
     let init = Command::new(deltaforge_bin())
         .args([
@@ -1364,6 +1380,7 @@ fn idle_service_exits_and_removes_its_discovery_record() {
 
 #[test]
 fn bare_launch_focuses_a_connected_workbench_without_opening_another_tab() {
+    let _guard = workbench_test_guard();
     let project = temp_project_path();
     let init = Command::new(deltaforge_bin())
         .args([
