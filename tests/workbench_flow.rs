@@ -76,6 +76,18 @@ fn wait_for_record(project: &Path) -> serde_json::Value {
     panic!("workbench service record was not created");
 }
 
+fn wait_for_run_lease_release(project: &Path) {
+    let path = project.join(".deltaforge/run.lock");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "workbench run lease was not released"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn wait_for_new_record(project: &Path, previous_pid: u64) -> serde_json::Value {
     let path = project.join(".deltaforge/workbench.json");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -465,6 +477,9 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+    // The terminal state is persisted just before the worker drops its run
+    // lease. Wait for both signals before starting the next CLI-owned run.
+    wait_for_run_lease_release(&project);
 
     fs::write(project.join("src/main.rs"), "fn main( {\n").unwrap();
     let broken_build = Command::new(deltaforge_bin())
