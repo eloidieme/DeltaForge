@@ -31,7 +31,7 @@ jobs:
           test_status=${PIPESTATUS[0]}
           set -e
           if [ "$test_status" -ne 0 ]; then
-            details=$(grep -E 'test .* \.\.\. FAILED|panicked at|assertion .* failed|left:|right:' cargo-test.log | tail -n 20 | tr '\r\n' '  ')
+            details=$(grep -E 'test .* \.\.\. FAILED|panicked at|assertion .* failed|left:|right:|expected stdout|[0-9]+ passed, [0-9]+ failed|timed out|another DeltaForge|error:' cargo-test.log | tail -n 20 | tr '\r\n' '  ')
             if [ -z "$details" ]; then
               details="cargo test failed; inspect the job log"
             fi

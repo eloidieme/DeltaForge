@@ -524,7 +524,13 @@ pub fn run_tests(
     sink: &mut dyn EventSink,
 ) -> Result<TestRunOutcome> {
     let mut context = ProjectContext::load(options)?;
-    let _lease = crate::run_lease::RunLease::acquire(&context.root)?;
+    // A background source-health observation holds this lease only briefly.
+    // Give foreground checks a bounded chance to follow it instead of exposing
+    // a spurious "another run" error to the CLI or workbench.
+    let _lease = crate::run_lease::RunLease::acquire_with_timeout(
+        &context.root,
+        std::time::Duration::from_millis(500),
+    )?;
     // A previous run may have completed after the first load but before this
     // lease was acquired. Never mutate from that stale in-memory snapshot.
     context = ProjectContext::load(options)?;

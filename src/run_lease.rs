@@ -19,6 +19,24 @@ pub struct RunLease {
 
 impl RunLease {
     pub fn acquire(project_root: &Path) -> Result<Self> {
+        Self::try_acquire(project_root)?
+            .ok_or_else(|| anyhow::anyhow!("another DeltaForge check run is already active"))
+    }
+
+    pub fn acquire_with_timeout(project_root: &Path, timeout: std::time::Duration) -> Result<Self> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(lease) = Self::try_acquire(project_root)? {
+                return Ok(lease);
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!("another DeltaForge check run is already active");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn try_acquire(project_root: &Path) -> Result<Option<Self>> {
         let path = lease_path(project_root);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -26,16 +44,17 @@ impl RunLease {
         for _ in 0..2 {
             match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(mut file) => {
+                    let lease = Self { path: path.clone() };
                     let record = serde_json::to_vec(&LeaseRecord {
                         pid: std::process::id(),
                     })?;
                     file.write_all(&record)?;
                     file.sync_all()?;
-                    return Ok(Self { path });
+                    return Ok(Some(lease));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     if active(project_root) {
-                        bail!("another DeltaForge check run is already active");
+                        return Ok(None);
                     }
                 }
                 Err(error) => {
@@ -45,7 +64,7 @@ impl RunLease {
                 }
             }
         }
-        bail!("another DeltaForge check run is already active")
+        Ok(None)
     }
 }
 
@@ -125,9 +144,9 @@ pub(crate) fn process_is_alive(pid: u32) -> bool {
 mod tests {
     use super::*;
 
-    fn temp_root() -> PathBuf {
+    fn temp_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "deltaforge-lease-{}-{}",
+            "deltaforge-lease-{name}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -138,12 +157,28 @@ mod tests {
 
     #[test]
     fn only_one_live_lease_is_allowed() {
-        let root = temp_root();
+        let root = temp_root("exclusive");
         let lease = RunLease::acquire(&root).unwrap();
         assert!(active(&root));
         assert!(RunLease::acquire(&root).is_err());
         drop(lease);
         assert!(!active(&root));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bounded_acquisition_waits_for_a_short_lived_lease() {
+        let root = temp_root("bounded-wait");
+        let lease = RunLease::acquire(&root).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            drop(lease);
+        });
+
+        let next = RunLease::acquire_with_timeout(&root, std::time::Duration::from_secs(1))
+            .expect("the released lease should be acquired before the deadline");
+        release.join().unwrap();
+        drop(next);
         let _ = fs::remove_dir_all(root);
     }
 }

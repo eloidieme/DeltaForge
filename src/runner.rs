@@ -625,11 +625,13 @@ fn run_test_case_in_temp(
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     let expanded_expectations = expand_output_expectations(&test.expect, &fixture_path, temp_dir);
+    let comparison_stdout = normalize_comparison_paths(&stdout, &fixture_path, temp_dir);
+    let comparison_stderr = normalize_comparison_paths(&stderr, &fixture_path, temp_dir);
     let mut comparison = compare_expectations(
         &expanded_expectations,
         &output.status,
-        &stdout,
-        &stderr,
+        &comparison_stdout,
+        &comparison_stderr,
         temp_dir,
     );
     for failure in &mut comparison.failures {
@@ -695,17 +697,113 @@ fn sanitize_report_text(value: &str, fixture_path: &Path, temp_dir: &Path) -> St
     replace_report_path(&value, temp_dir, "{temp_dir}")
 }
 
+fn normalize_comparison_paths(value: &str, fixture_path: &Path, temp_dir: &Path) -> String {
+    let fixture = fixture_path.to_string_lossy();
+    let value = replace_report_path(value, fixture_path, fixture.as_ref());
+    let temp = temp_dir.to_string_lossy();
+    replace_report_path(&value, temp_dir, temp.as_ref())
+}
+
 fn replace_report_path(value: &str, path: &Path, replacement: &str) -> String {
-    let native = path.to_string_lossy();
+    equivalent_path_spellings(path)
+        .iter()
+        .fold(value.to_string(), |value, native| {
+            replace_path_spelling(&value, native, replacement)
+        })
+}
+
+fn replace_path_spelling(value: &str, native: &str, replacement: &str) -> String {
     let escaped = native.replace('\\', "\\\\");
     let value = value.replace(&escaped, replacement);
-    let value = value.replace(native.as_ref(), replacement);
+    let value = value.replace(native, replacement);
     let portable = native.replace('\\', "/");
     if portable == native {
         value
     } else {
         value.replace(&portable, replacement)
     }
+}
+
+fn equivalent_path_spellings(path: &Path) -> Vec<String> {
+    #[cfg(not(windows))]
+    {
+        vec![path.to_string_lossy().to_string()]
+    }
+    #[cfg(windows)]
+    {
+        let mut spellings = vec![path.to_string_lossy().to_string()];
+        for spelling in [windows_long_path(path), windows_short_path(path)]
+            .into_iter()
+            .flatten()
+        {
+            let spelling = spelling.to_string_lossy().to_string();
+            if !spellings.contains(&spelling) {
+                spellings.push(spelling);
+            }
+        }
+        spellings
+    }
+}
+
+#[cfg(windows)]
+fn windows_long_path(path: &Path) -> Option<PathBuf> {
+    windows_path_spelling(path, WindowsPathSpelling::Long)
+}
+
+#[cfg(windows)]
+fn windows_short_path(path: &Path) -> Option<PathBuf> {
+    windows_path_spelling(path, WindowsPathSpelling::Short)
+}
+
+#[cfg(windows)]
+enum WindowsPathSpelling {
+    Long,
+    Short,
+}
+
+#[cfg(windows)]
+fn windows_path_spelling(path: &Path, spelling: WindowsPathSpelling) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetLongPathNameW(short_path: *const u16, long_path: *mut u16, capacity: u32) -> u32;
+        fn GetShortPathNameW(long_path: *const u16, short_path: *mut u16, capacity: u32) -> u32;
+    }
+
+    let input = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let required = unsafe {
+        match spelling {
+            WindowsPathSpelling::Long => GetLongPathNameW(input.as_ptr(), std::ptr::null_mut(), 0),
+            WindowsPathSpelling::Short => {
+                GetShortPathNameW(input.as_ptr(), std::ptr::null_mut(), 0)
+            }
+        }
+    };
+    if required == 0 {
+        return None;
+    }
+    let mut output = vec![0_u16; required as usize + 1];
+    let written = unsafe {
+        match spelling {
+            WindowsPathSpelling::Long => {
+                GetLongPathNameW(input.as_ptr(), output.as_mut_ptr(), output.len() as u32)
+            }
+            WindowsPathSpelling::Short => {
+                GetShortPathNameW(input.as_ptr(), output.as_mut_ptr(), output.len() as u32)
+            }
+        }
+    };
+    if written == 0 || written as usize >= output.len() {
+        return None;
+    }
+    output.truncate(written as usize);
+    Some(PathBuf::from(OsString::from_wide(&output)))
 }
 
 const FIXTURE_ENTRY_LIMIT: usize = 300;
@@ -1344,6 +1442,31 @@ stderr_contains: ["work: {temp_dir}"]
                 "\n{temp_dir}/log.txt",
             )
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalizes_equivalent_windows_path_spellings() {
+        let root = std::env::temp_dir().join(format!(
+            "deltaforge-path-alias-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let original = root.to_string_lossy().to_string();
+        if let Some(alias) = equivalent_path_spellings(&root)
+            .into_iter()
+            .find(|spelling| spelling != &original)
+        {
+            assert_eq!(
+                replace_report_path(&format!(r#"args: ["{alias}"]"#), &root, "{temp_dir}"),
+                r#"args: ["{temp_dir}"]"#
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
