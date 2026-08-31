@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Coherent FlashIndex stage numbering (FlashIndex 2.0.0)
+
+- Renumbered FlashIndex stage IDs to a continuous `01`–`14`. The IDs previously ran `01`–`10` with four doubled pairs (`05_inverted`/`05_canonical`, `06_persist`/`06_query`, `09_indexing`/`09_performance`, `10_ranked`/`10_stable`) while the stage guides numbered themselves `01`–`14`, so the step a learner was told they were on was not the step the tooling recorded.
+- Synced manifest titles to the stage guide headings, which had diverged on ten of fourteen stages. The guide headings are the newer editorial baseline and are verb-led and concrete, so they won: `Filter source files` became `Choose searchable files`, `Benchmark mode` became `Describe a scan as data`, `Preserve results in parallel` became `Build the index with several workers`, and so on.
+- Fixed stage-snapshot commit messages. `commit` derives its message number from the ID prefix, so two different stages both produced `Complete Stage 05`; unique prefixes resolve it.
+- Bumped FlashIndex to `2.0.0`. This is a breaking pack change: stage IDs key every progress map in `state.json` and the `deltaforge-<stage_id>` tags. Existing FlashIndex projects will not load and should be recreated.
+- MiniKV, TinyHTTP, and ByteForgeVM keep their repeating IDs until they are brought to flagship quality.
+
 ### Fixed: Windows project paths leaked into diagnoses
 
 - Stopped persisted failure diagnoses, the workbench event journal, and the browser from showing the learner's absolute project path on Windows. `locate_project_root` canonicalizes, which yields an extended-length path (`\\?\C:\...`), while child processes such as cargo print the ordinary `C:\...` form; the redaction matched only the canonical spelling, so build failures and timeouts embedded the real path. Both spellings are now redacted, longest first, including `\\?\UNC\` network roots.

@@ -251,7 +251,7 @@ fn starter_project_initializes_and_fails_current_stage() {
     assert_success(&selected_instructions);
     assert_stdout_contains(
         &selected_instructions,
-        "Stage 02_filter_files: Filter source files",
+        "Stage 02_filter_files: Choose searchable files",
     );
 
     let status = run_deltaforge(["status"], &project_dir);
@@ -1007,7 +1007,7 @@ fn parallel_indexing_stage_benchmark_matrix_evaluates_gate_per_thread_count() {
         [
             "bench",
             "--stage",
-            "09_parallel_performance",
+            "12_parallel_performance",
             "--iterations",
             "2",
             "--warmup",
@@ -1711,7 +1711,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
     assert_success(&next1);
     assert_stdout_contains(
         &next1,
-        "Unlocked Stage 02_filter_files: Filter source files",
+        "Unlocked Stage 02_filter_files: Choose searchable files",
     );
 
     let stage2 = run_deltaforge(["test"], &project_dir);
@@ -1721,7 +1721,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
 
     let next2 = run_deltaforge(["next"], &project_dir);
     assert_success(&next2);
-    assert_stdout_contains(&next2, "Unlocked Stage 03_tokenize: Tokenize files");
+    assert_stdout_contains(&next2, "Unlocked Stage 03_tokenize: Recognize tokens");
 
     let stage3 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage3);
@@ -1730,13 +1730,16 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
 
     let next3 = run_deltaforge(["next"], &project_dir);
     assert_success(&next3);
-    assert_stdout_contains(&next3, "Unlocked Stage 04_exact_search: Exact token search");
+    assert_stdout_contains(
+        &next3,
+        "Unlocked Stage 04_exact_search: Find an exact token",
+    );
 
     let status = run_deltaforge(["status"], &project_dir);
     assert_success(&status);
     assert_stdout_contains(&status, "✓ 01_scan_files - Scan files");
-    assert_stdout_contains(&status, "✓ 02_filter_files - Filter source files");
-    assert_stdout_contains(&status, "✓ 03_tokenize - Tokenize files");
+    assert_stdout_contains(&status, "✓ 02_filter_files - Choose searchable files");
+    assert_stdout_contains(&status, "✓ 03_tokenize - Recognize tokens");
 
     let all = run_deltaforge(["test", "--all"], &project_dir);
     assert_failure(&all);
@@ -1753,7 +1756,7 @@ fn reference_solution_passes_all_flashindex_stages() {
     assert_reference_solution_passes(
         "flashindex",
         "tools/reference_solutions/flashindex_rust/src/main.rs",
-        "10_stable_ranking",
+        "14_stable_ranking",
     );
 }
 

@@ -1,7 +1,7 @@
 schema_version: 1
 id: flashindex
 name: FlashIndex
-version: 1.1.0
+version: 2.0.0
 description: Local source-code search engine
 topics:
   - indexing
@@ -27,41 +27,41 @@ stages:
     title: Scan files
     path: stages/01_scan_files
   - id: 02_filter_files
-    title: Filter source files
+    title: Choose searchable files
     path: stages/02_filter_files
   - id: 03_tokenize
-    title: Tokenize files
+    title: Recognize tokens
     path: stages/03_tokenize
   - id: 04_exact_search
-    title: Exact token search
+    title: Find an exact token
     path: stages/04_exact_search
   - id: 05_inverted_index
-    title: Build inverted index
+    title: Group files by token
     path: stages/05_inverted_index
-  - id: 05_canonical_index
-    title: Make index output canonical
-    path: stages/05_canonical_index
-  - id: 06_persist_index
-    title: Write index to disk
-    path: stages/06_persist_index
-  - id: 06_query_index
+  - id: 06_canonical_index
+    title: Make the index canonical
+    path: stages/06_canonical_index
+  - id: 07_persist_index
+    title: Write the index to disk
+    path: stages/07_persist_index
+  - id: 08_query_index
     title: Query a saved index
-    path: stages/06_query_index
-  - id: 07_benchmark_mode
-    title: Benchmark mode
-    path: stages/07_benchmark_mode
-  - id: 08_report_summary
-    title: Report summary
-    path: stages/08_report_summary
-  - id: 09_parallel_indexing
-    title: Preserve results in parallel
-    path: stages/09_parallel_indexing
-  - id: 09_parallel_performance
+    path: stages/08_query_index
+  - id: 09_benchmark_mode
+    title: Describe a scan as data
+    path: stages/09_benchmark_mode
+  - id: 10_report_summary
+    title: Summarize the corpus
+    path: stages/10_report_summary
+  - id: 11_parallel_indexing
+    title: Build the index with several workers
+    path: stages/11_parallel_indexing
+  - id: 12_parallel_performance
     title: Measure parallel speedup
-    path: stages/09_parallel_performance
-  - id: 10_ranked_search
+    path: stages/12_parallel_performance
+  - id: 13_ranked_search
     title: Score multi-token matches
-    path: stages/10_ranked_search
-  - id: 10_stable_ranking
-    title: Order ranked results
-    path: stages/10_stable_ranking
+    path: stages/13_ranked_search
+  - id: 14_stable_ranking
+    title: Make ranking stable
+    path: stages/14_stable_ranking

@@ -1,6 +1,8 @@
 # Bundled curriculum map
 
-The bundled packs preserve their original stage IDs and insert follow-up stages after concepts that were previously bundled together. This keeps existing project state loadable while giving new projects a gentler sequence.
+FlashIndex numbers its stages 01–14 in learning order. Its stage IDs, manifest titles, and guide headings all agree, so the step a learner is told they are on is the step the tooling records.
+
+MiniKV, TinyHTTP, and ByteForgeVM still carry their original IDs and insert follow-up stages beside the concepts they separate, which is why their numbers repeat. Those packs will be renumbered when they are brought to flagship quality.
 
 ## FlashIndex
 
@@ -9,15 +11,15 @@ The bundled packs preserve their original stage IDs and insert follow-up stages 
 3. `03_tokenize` — recognize identifier-like tokens and positions.
 4. `04_exact_search` — retrieve complete token matches.
 5. `05_inverted_index` — group tokens by containing file.
-6. `05_canonical_index` — deduplicate and canonically order postings.
-7. `06_persist_index` — write a reusable index artifact.
-8. `06_query_index` — read and query the saved artifact.
-9. `07_benchmark_mode` — expose a machine-readable workload measurement.
-10. `08_report_summary` — report corpus and vocabulary counts.
-11. `09_parallel_indexing` — preserve index bytes across thread counts.
-12. `09_parallel_performance` — measure scaling and meet the speedup gate.
-13. `10_ranked_search` — score multi-token candidates.
-14. `10_stable_ranking` — define ties, repeated terms, and the result limit.
+6. `06_canonical_index` — deduplicate and canonically order postings.
+7. `07_persist_index` — write a reusable index artifact.
+8. `08_query_index` — read and query the saved artifact.
+9. `09_benchmark_mode` — expose a machine-readable workload measurement.
+10. `10_report_summary` — report corpus and vocabulary counts.
+11. `11_parallel_indexing` — preserve index bytes across thread counts.
+12. `12_parallel_performance` — measure scaling and meet the speedup gate.
+13. `13_ranked_search` — score multi-token candidates.
+14. `14_stable_ranking` — define ties, repeated terms, and the result limit.
 
 ## MiniKV
 
