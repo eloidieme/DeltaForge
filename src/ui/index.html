@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DeltaForge</title>
+<style>
+__STYLE__
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="appbar">
+  <div class="appbar-inner">
+    <a class="brand" href="/projects" data-route="/projects" aria-label="DeltaForge projects"><span class="brand-mark" aria-hidden="true">&#916;</span><span>DeltaForge</span></a>
+    <nav class="appnav" aria-label="Main">
+      <a id="projects-nav" href="/projects" data-route="/projects">Projects</a>
+      <a id="catalog-nav" href="/catalog" data-route="/catalog">Catalog</a>
+    </nav>
+    <div class="appbar-end">
+      <span class="local-note">Local &middot; Offline</span>
+      <button class="button small quiet" id="theme-toggle" type="button" aria-live="polite">Theme</button>
+    </div>
+  </div>
+</header>
+
+<div id="main">
+
+<main class="page" id="projects-screen" hidden>
+  <div class="eyebrow">Your workspace</div>
+  <h1>Projects</h1>
+  <p class="lede">Build a substantial developer tool one clear step at a time. Everything runs on this machine and your code stays in your own folders.</p>
+  <div class="project-grid" id="project-grid"></div>
+  <div class="empty-state" id="projects-empty" hidden>
+    <h2>No projects yet</h2>
+    <p>Choose a project from the catalog and DeltaForge will set it up for you.</p>
+    <p style="margin-top:14px"><button class="button primary" id="projects-empty-catalog" type="button">Browse the catalog</button></p>
+  </div>
+</main>
+
+<main class="page" id="catalog-screen" hidden>
+  <div class="eyebrow">Start something</div>
+  <h1>Project catalog</h1>
+  <p class="lede">Each project is a real tool built in stages, checked by black-box tests against a written contract. Pick one and DeltaForge creates the repository for you.</p>
+  <div class="catalog-grid" id="catalog-grid"></div>
+  <div class="notice error" id="catalog-error" hidden><span id="catalog-error-text"></span></div>
+</main>
+
+<main class="page" id="create-screen" hidden>
+  <div class="eyebrow">New project</div>
+  <h1 id="create-title">Create a project</h1>
+  <p class="lede" id="create-lede"></p>
+  <div class="create-layout">
+    <form class="create-form" id="create-form" autocomplete="off">
+      <section class="field">
+        <label id="create-language-label">Language</label>
+        <div class="choice-list" id="create-languages" role="radiogroup" aria-labelledby="create-language-label"></div>
+      </section>
+
+      <section class="field">
+        <label for="create-name">Project folder name</label>
+        <input type="text" id="create-name" spellcheck="false" maxlength="64">
+        <span class="help">Letters, digits, hyphens, and underscores.</span>
+      </section>
+
+      <section class="field">
+        <label for="create-parent">Location</label>
+        <input type="text" id="create-parent" spellcheck="false">
+        <span class="help">Must be an existing folder inside your home directory.</span>
+      </section>
+
+      <label class="checkbox"><input type="checkbox" id="create-git" checked> Start a Git repository, so each completed step can be snapshotted</label>
+
+      <div class="action-row">
+        <button class="button primary" id="create-submit" type="submit">Create project</button>
+        <span class="activity" id="create-activity" aria-live="polite"></span>
+      </div>
+    </form>
+
+    <aside class="panel" id="create-preflight">
+      <div class="eyebrow">Before we start</div>
+      <h2 style="margin:6px 0 12px">Environment</h2>
+      <ul class="preflight-list" id="preflight-tools"></ul>
+      <div class="ruled" id="preflight-location" style="margin-top:16px">
+        <div class="fact-label" id="preflight-location-label">Will be created at</div>
+        <div class="path-preview" id="preflight-path"></div>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<div class="project-shell" id="project-shell" hidden>
+  <div class="projectbar">
+    <div class="projectbar-inner">
+      <div class="project-identity"><strong id="project-name">Loading project&hellip;</strong><span class="project-meta" id="project-meta"></span></div>
+      <nav class="projectnav" aria-label="Project">
+        <a id="overview-nav" href="#">Overview</a>
+        <a id="build-nav" href="#">Build</a>
+        <a id="performance-nav" href="#">Performance</a>
+        <a id="runs-nav" href="#">Runs</a>
+      </nav>
+      <div class="project-tools">
+        <button class="button small" id="open-folder" type="button">Open folder</button>
+        <button class="button small" id="open-editor" type="button">Open editor</button>
+      </div>
+      <div class="open-status" id="project-open-status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <main class="page" id="overview-screen" hidden>
+    <section class="overview-hero">
+      <div>
+        <div class="eyebrow">Project overview</div>
+        <h1 id="overview-name">Loading&hellip;</h1>
+        <p class="lede" id="overview-description" style="margin-top:8px"></p>
+        <div class="catalog-meta" id="overview-topics" style="margin-top:14px"></div>
+      </div>
+      <aside class="overview-continue">
+        <div class="eyebrow">Your progress</div>
+        <strong id="overview-progress">Loading&hellip;</strong>
+        <p id="overview-current" style="color:var(--text-2);font-size:.88rem"></p>
+        <button class="button primary" id="continue-build" type="button">Continue building</button>
+        <button class="button small" id="export-report" type="button">Export the record</button>
+        <span class="activity" id="export-status" aria-live="polite"></span>
+      </aside>
+    </section>
+    <div class="overview-layout">
+      <article class="guide" id="overview-guide"></article>
+      <aside class="plan-panel">
+        <div class="eyebrow">Build plan</div>
+        <h2 id="overview-step-count">Project steps</h2>
+        <ol class="rail" id="overview-rail"></ol>
+      </aside>
+    </div>
+  </main>
+
+  <main id="build-screen" hidden>
+    <div class="build-layout">
+      <aside class="build-rail">
+        <div class="eyebrow">Project steps</div>
+        <ol class="rail" id="build-rail"></ol>
+      </aside>
+
+      <article class="instructions">
+        <div class="step-kicker" id="step-position">Current step</div>
+        <h1 id="instruction-title">Loading instructions&hellip;</h1>
+        <p class="lede" id="instruction-summary"></p>
+
+        <div class="action-row">
+          <button class="button primary" id="primary-action" type="button">Run checks</button>
+          <button class="button" id="snapshot-action" type="button" hidden>Snapshot this step</button>
+          <span class="activity" id="activity" aria-live="polite">Loading project&hellip;</span>
+        </div>
+
+        <div class="notice" id="resumption" hidden><span><strong id="resumption-title"></strong><span id="resumption-detail"></span></span></div>
+        <div class="notice measure" id="gate-notice" hidden><span><strong id="gate-notice-title"></strong><span id="gate-notice-detail"></span></span><button class="button small" id="gate-notice-action" type="button">Open the performance lab</button></div>
+        <div class="notice proven" id="snapshot-notice" hidden><span><strong>Step recorded</strong><span id="snapshot-notice-detail"></span></span></div>
+
+        <section class="instruction-card"><div class="eyebrow">Why this matters</div><h2>Context</h2><p id="why-copy" style="color:var(--text-2)"></p></section>
+        <section class="instruction-card"><div class="eyebrow">Done when</div><h2>Expected behavior</h2><ul id="success-list"></ul></section>
+        <section class="instruction-card"><div class="eyebrow">Requirements</div><h2>What your program must do</h2><ul id="requirements-list"></ul></section>
+        <section class="instruction-card"><div class="eyebrow">Example</div><pre id="example-copy"></pre></section>
+        <section class="instruction-card">
+          <details open><summary>Edge cases</summary><ul id="edge-list"></ul></details>
+          <details><summary>Not included in this step</summary><ul id="non-goals-list"></ul></details>
+        </section>
+      </article>
+
+      <aside class="evidence">
+        <div class="eyebrow">Latest result</div>
+        <div class="result-card" id="result-card">
+          <strong id="result-title">No checks run yet</strong>
+          <p id="result-copy">Run the checks when you are ready.</p>
+          <div class="run-bar" id="run-bar" hidden><span></span></div>
+          <div class="run-meter" id="run-meter"></div>
+          <div><button class="button small" id="focused-rerun" type="button" hidden>Rerun this check</button></div>
+        </div>
+
+        <div class="facts" id="diagnosis" hidden>
+          <div class="fact"><div class="fact-label">Requirement</div><div class="fact-value" id="diagnosis-requirement"></div></div>
+          <div class="fact"><div class="fact-label">Expected</div><div class="fact-value" id="diagnosis-expected"></div></div>
+          <div class="fact"><div class="fact-label">Received</div><div class="fact-value" id="diagnosis-actual"></div></div>
+          <div class="fact" id="diagnosis-fixture-row"><div class="fact-label">Test input</div><div class="fact-value" id="diagnosis-fixture"></div></div>
+        </div>
+
+        <details class="other-failures" id="other-failures" hidden><summary id="other-failures-title">Other failing checks</summary><ul id="other-failures-list"></ul></details>
+
+        <div>
+          <div class="help-head"><div class="eyebrow">Help</div><button class="button small" id="reveal-help" type="button">Show hint 1</button></div>
+          <div class="help-levels" id="help-levels" style="margin-top:12px"></div>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <main class="page" id="performance-screen" hidden>
+    <div class="eyebrow">Performance lab</div>
+    <h1 id="performance-title">Measure this step</h1>
+    <p class="lede" id="performance-lede"></p>
+
+    <div class="action-row" style="margin-top:20px">
+      <button class="button primary" id="benchmark-action" type="button">Run the benchmark</button>
+      <span class="activity" id="benchmark-activity" aria-live="polite"></span>
+    </div>
+    <div class="run-bar" id="benchmark-bar" hidden style="margin-top:14px"><span></span></div>
+
+    <section class="section" id="prediction-section" hidden style="margin-top:30px">
+      <div class="section-head"><h2>Before you measure</h2><span class="tag measure">Optional</span></div>
+      <div class="panel">
+        <p id="prediction-prompt" style="color:var(--text-2);white-space:pre-wrap"></p>
+        <div id="prediction-recorded" hidden style="margin-top:14px">
+          <div class="ruled measure"><div class="fact-label">Your prediction</div><div id="prediction-text" style="white-space:pre-wrap;color:var(--text-2)"></div></div>
+        </div>
+        <div id="prediction-form" style="margin-top:14px">
+          <label class="field"><span class="fact-label">Your answer</span><textarea id="prediction-input" placeholder="What do you expect, and why?"></textarea></label>
+          <div class="action-row" style="margin-top:10px">
+            <button class="button" id="prediction-save" type="button">Save prediction</button>
+            <button class="button quiet" id="prediction-skip" type="button">Skip this</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="gates-section" hidden>
+      <div class="section-head"><h2>Performance target</h2><span class="tag" id="gate-status-tag"></span></div>
+      <div class="panel" id="gates-panel"></div>
+    </section>
+
+    <section class="section" id="measurements-section">
+      <div class="section-head"><h2>Latest measurements</h2><span class="activity" id="measurement-timestamp"></span></div>
+      <div id="measurements"></div>
+    </section>
+
+    <section class="section" id="reflection-section" hidden>
+      <div class="section-head"><h2>After measuring</h2><span class="tag measure">Optional</span></div>
+      <div class="panel">
+        <p style="color:var(--text-2)">Compare what you measured with what you expected. What surprised you?</p>
+        <div id="reflection-recorded" hidden style="margin-top:14px">
+          <div class="ruled measure"><div class="fact-label">Your reflection</div><div id="reflection-text" style="white-space:pre-wrap;color:var(--text-2)"></div></div>
+        </div>
+        <div id="reflection-form" style="margin-top:14px">
+          <label class="field"><span class="fact-label">Your answer</span><textarea id="reflection-input" placeholder="What did the numbers actually show?"></textarea></label>
+          <div class="action-row" style="margin-top:10px">
+            <button class="button" id="reflection-save" type="button">Save reflection</button>
+            <button class="button quiet" id="reflection-skip" type="button">Skip this</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="performance-roadmap-section" hidden>
+      <div class="section-head"><h2>Steps that are measured</h2></div>
+      <ol class="rail" id="performance-roadmap"></ol>
+    </section>
+  </main>
+
+  <main class="page" id="runs-screen" hidden>
+    <div class="eyebrow">History</div>
+    <h1>Runs</h1>
+    <p class="lede">Every check and benchmark run on this project, most recent first.</p>
+    <div class="runs-list" id="runs-list"></div>
+  </main>
+
+  <main class="health-screen" id="health-screen" hidden>
+    <div class="eyebrow">Project needs attention</div>
+    <h1 id="health-title">DeltaForge cannot load this project</h1>
+    <p class="lede" id="health-guidance"></p>
+    <pre id="health-detail"></pre>
+    <div class="health-actions">
+      <button class="button primary" id="health-recheck" type="button">Check again</button>
+      <button class="button" id="health-repin" type="button" hidden>Use updated project definition</button>
+      <button class="button" id="health-editor" type="button">Open editor</button>
+      <button class="button" id="health-folder" type="button">Open folder</button>
+    </div>
+  </main>
+</div>
+
+<script>
+__SCRIPT__
+</script>
+</body>
+</html>

@@ -2051,8 +2051,15 @@ fn capability_token(root: &Path) -> String {
     }
     format!("{hash:016x}{nanos:x}")
 }
+/// The single-page workbench, assembled at compile time from three source
+/// files. It is served inline rather than as separate assets so the page
+/// carries no subresource requests and the capability token stays in exactly
+/// one place.
 fn workbench_html(token: &str) -> String {
-    include_str!("workbench.html").replace("__TOKEN_JSON__", &serde_json::json!(token).to_string())
+    include_str!("ui/index.html")
+        .replace("__STYLE__", include_str!("ui/app.css"))
+        .replace("__SCRIPT__", include_str!("ui/app.js"))
+        .replace("__TOKEN_JSON__", &serde_json::json!(token).to_string())
 }
 
 #[cfg(test)]
@@ -2219,34 +2226,70 @@ mod tests {
     }
 
     #[test]
-    fn shell_uses_the_new_workbench_surface() {
+    fn the_shell_carries_every_surface_and_its_api() {
         let html = workbench_html("secret-token");
-        assert!(html.contains("Your workspace"));
-        assert!(html.contains("Project overview"));
-        assert!(html.contains("Test results"));
-        assert!(html.contains("/api/v1/projects"));
-        assert!(html.contains("/api/v1/state"));
-        assert!(html.contains("/api/v1/capability"));
-        assert!(html.contains("/api/v1/runs"));
-        assert!(html.contains("/api/v1/hints"));
-        assert!(html.contains("/api/v1/capabilities/next"));
-        assert!(html.contains("/api/v1/project-health"));
-        assert!(html.contains("/api/v1/project/open-editor"));
-        assert!(html.contains("/api/v1/project/open-folder"));
-        assert!(html.contains("id=\"health-screen\""));
-        assert!(html.contains("id=\"primary-action\""));
-        assert!(html.contains("id=\"overview-screen\""));
-        assert!(html.contains("id=\"overview-step-list\""));
-        assert!(html.contains("overview.sections"));
-        assert!(html.contains("content.roadmap"));
-        assert!(html.contains("id=\"diagnosis-expected\""));
-        assert!(html.contains("id=\"help-levels\""));
-        assert!(html.contains("Step complete"));
-        assert!(html.contains("Failing check"));
-        assert!(html.contains("Local · Offline"));
-        assert!(html.contains("Fix this first · "));
-        assert!(!html.contains("Make file discovery deterministic:"));
-        assert!(!html.contains("warm"));
+        // Composition: all three source files reached the page.
+        assert!(html.contains("--accent"), "stylesheet is missing");
+        assert!(html.contains("renderRoute()"), "script is missing");
+        assert!(html.contains(r#"const token = "secret-token";"#));
+        assert!(!html.contains("__TOKEN_JSON__"));
+        assert!(!html.contains("__STYLE__"));
+        assert!(!html.contains("__SCRIPT__"));
+
+        // Every screen the 1.0 journey needs.
+        for id in [
+            "projects-screen",
+            "catalog-screen",
+            "create-screen",
+            "overview-screen",
+            "build-screen",
+            "performance-screen",
+            "runs-screen",
+            "health-screen",
+        ] {
+            assert!(
+                html.contains(&format!("id=\"{id}\"")),
+                "missing screen {id}"
+            );
+        }
+
+        // Every route the page calls must exist in the router above.
+        for route in [
+            "/api/v1/projects",
+            "/api/v1/catalog",
+            "/api/v1/workspace",
+            "/api/v1/projects/preflight",
+            "/api/v1/state",
+            "/api/v1/capability",
+            "/api/v1/project-health",
+            "/api/v1/runs",
+            "/api/v1/runs/cancel",
+            "/api/v1/runs/rerun",
+            "/api/v1/benchmarks",
+            "/api/v1/predictions",
+            "/api/v1/reflections",
+            "/api/v1/snapshots",
+            "/api/v1/snapshots/preview",
+            "/api/v1/reports",
+            "/api/v1/hints",
+            "/api/v1/capabilities/next",
+            "/api/v1/project/open-editor",
+            "/api/v1/project/open-folder",
+        ] {
+            assert!(html.contains(route), "page never calls {route}");
+        }
+
+        // Light and dark are both first-class, and motion respects the
+        // learner's preference.
+        assert!(html.contains("prefers-color-scheme: dark"));
+        assert!(html.contains("[data-theme=\"dark\"]"));
+        assert!(html.contains("prefers-reduced-motion: reduce"));
+        assert!(html.contains("skip-link"));
+
+        // No surface tells the learner to open a terminal.
+        assert!(!html.contains("deltaforge init"));
+        assert!(!html.contains("deltaforge bench"));
+        assert!(!html.contains("deltaforge test"));
     }
 
     #[test]

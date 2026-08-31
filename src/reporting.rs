@@ -21,6 +21,23 @@ pub enum ReportFormat {
     Json,
 }
 
+impl ReportFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Markdown => "md",
+            Self::Html => "html",
+            Self::Json => "json",
+        }
+    }
+
+    /// File name the browser export writes into the project. These names are
+    /// excluded from the project digest by `ProjectContext::project_digest`;
+    /// changing one means changing both.
+    pub fn export_file_name(self) -> String {
+        format!("deltaforge-report.{}", self.extension())
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectReport {
     pub project: String,

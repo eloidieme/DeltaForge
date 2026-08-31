@@ -107,6 +107,12 @@ impl ProjectContext {
             "__pycache__",
             ".venv",
             ".DS_Store",
+            // Exports DeltaForge itself writes into the project. They are
+            // evidence about the project, not part of it, so producing one must
+            // not invalidate the completion proof it describes.
+            "deltaforge-report.md",
+            "deltaforge-report.html",
+            "deltaforge-report.json",
         ];
         for ignored in &self.pack.manifest.ignored_paths {
             if !excluded.contains(&ignored.as_str()) {

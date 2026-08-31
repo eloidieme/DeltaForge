@@ -1098,13 +1098,8 @@ pub fn export_report(
 ) -> Result<ExportedReport> {
     let context = ProjectContext::load(options)?;
     let report = crate::reporting::build(&context)?;
-    let extension = match format {
-        crate::reporting::ReportFormat::Markdown => "md",
-        crate::reporting::ReportFormat::Html => "html",
-        crate::reporting::ReportFormat::Json => "json",
-    };
     let content = crate::reporting::render(&report, format)?;
-    let path = context.root.join(format!("deltaforge-report.{extension}"));
+    let path = context.root.join(format.export_file_name());
     crate::fs_util::atomic_write(&path, &content)?;
     Ok(ExportedReport {
         path: path.display().to_string(),
