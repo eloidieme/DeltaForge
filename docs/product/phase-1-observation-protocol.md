@@ -1,6 +1,13 @@
 # Phase 1 external learner observation protocol
 
-Status: **Ready for participant scheduling**
+Status: **Not executed — retained as design, not as evidence**
+
+> DeltaForge 1.0 ships without external learner research (decision 15 in
+> [release-1-0-contract.md](release-1-0-contract.md)). The scripted cold dogfood,
+> agent-as-learner content sufficiency runs, and expanded failure corpus in that
+> contract replace this protocol. Nothing below has been run with participants, and no
+> product claim may cite it. It is kept because it stays valid if participants ever
+> become available.
 
 Prepared: 2026-07-16
 

@@ -1,6 +1,7 @@
 # DeltaForge product direction
 
-Status: **Phase 1 complete; Phase 2 application-shell milestone implemented**
+Status: **Phase 1 and Phase 2 complete; 1.0 scope frozen in
+[release-1-0-contract.md](release-1-0-contract.md)**
 Drafted: 2026-07-15  
 Branch: `codex/product-workbench`
 
@@ -28,6 +29,9 @@ and historical context.
 - [phase-2-application-shell.md](phase-2-application-shell.md) -- the user-level project
   registry, Projects hub, dedicated Overview and Build routes, global navigation, and
   simplified interface vocabulary.
+- [release-1-0-contract.md](release-1-0-contract.md) -- the frozen 1.0 scope: what
+  ships, what is deliberately cut, how it is validated without external learner
+  research, and the success measures that replace the observed-participant ones.
 
 ## Frozen decisions
 
@@ -51,6 +55,12 @@ The following decisions are binding for Phase 1:
     useful and cheap, but it may not distort the new product.
 12. The current warm paper/ember visual language is retired. The workbench receives a
     new identity designed from first principles.
+
+These twelve decisions remain binding. The sixteen scope decisions that turn them into
+a shippable 1.0 -- catalog breadth, language count, where the performance lab lives,
+what is cut, and how the product is validated -- are frozen separately in
+[release-1-0-contract.md](release-1-0-contract.md), which wins on scope wherever these
+documents disagree.
 
 ## Amendment procedure
 

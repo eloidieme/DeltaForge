@@ -195,6 +195,11 @@ treatment. Other packs follow only after the core FlashIndex loop is convincing.
 
 ## Product success measures
 
+> **Superseded for 1.0.** The measures below assume observed participants. DeltaForge
+> 1.0 ships without external learner research, so they are retained here as design
+> intents only. The measures that actually gate 1.0, and the evidence each one requires,
+> are in [release-1-0-contract.md](release-1-0-contract.md).
+
 ### Activation
 
 A new user with a working language toolchain reaches the first behavioral run within
