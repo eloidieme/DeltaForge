@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::process::Command;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -9,11 +8,36 @@ use crate::context::{GlobalOptions, ProjectContext};
 use crate::pack::{PackSearchOptions, discover_packs_with_options, validate_pack};
 
 pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
-    let cargo = tool_version("cargo");
-    let git = tool_version("git");
     let discovery = discover_packs_with_options(&PackSearchOptions {
         packs_dir: options.packs_dir.clone(),
     })?;
+    // Tools come from what the discovered packs declare, so adding a language
+    // does not require changing this command. Git is checked separately:
+    // DeltaForge itself uses it for stage snapshots.
+    let mut tools: Vec<crate::creation::ToolStatus> = Vec::new();
+    for pack in &discovery.packs {
+        for language in pack.manifest.languages.values() {
+            for tool in crate::creation::language_tools(language) {
+                if !tools.iter().any(|seen| seen.program == tool.program) {
+                    tools.push(tool);
+                }
+            }
+        }
+    }
+    if !tools.iter().any(|tool| tool.program == "git") {
+        tools.push(crate::creation::ToolStatus {
+            program: "git".to_string(),
+            label: "Git".to_string(),
+            found: crate::creation::tool_version("git").is_some(),
+            version: crate::creation::tool_version("git"),
+            install_url: Some("https://git-scm.com/downloads".to_string()),
+            required: false,
+        });
+    }
+    tools.sort_by(|left, right| left.program.cmp(&right.program));
+    let workspace = crate::creation::default_workspace()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|error| format!("unavailable: {error:#}"));
     let mut pack_results = discovery
         .packs
         .iter()
@@ -48,8 +72,8 @@ pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
     };
 
     let report = DoctorReport {
-        cargo,
-        git,
+        tools,
+        workspace,
         pack_count: pack_results.len(),
         packs: pack_results,
         project,
@@ -61,8 +85,14 @@ pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
     } else {
         println!("DeltaForge doctor");
         println!();
-        print_tool("cargo", &report.cargo);
-        print_tool("git", &report.git);
+        for tool in &report.tools {
+            match &tool.version {
+                Some(version) => println!("{}: {version}", tool.program),
+                None if tool.required => println!("{}: not found (required)", tool.program),
+                None => println!("{}: not found", tool.program),
+            }
+        }
+        println!("new projects: {}", report.workspace);
         println!("packs: {}", report.pack_count);
         for pack in &report.packs {
             let marker = if pack.valid { "ok" } else { "invalid" };
@@ -98,26 +128,11 @@ fn project_state_exists(options: &GlobalOptions) -> bool {
         .any(|path| path.join(".deltaforge/state.json").is_file())
 }
 
-fn tool_version(tool: &str) -> Option<String> {
-    let output = Command::new(tool).arg("--version").output().ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
-}
-
-fn print_tool(name: &str, value: &Option<String>) {
-    match value {
-        Some(version) => println!("{name}: {version}"),
-        None => println!("{name}: not found"),
-    }
-}
-
 #[derive(Debug, Serialize)]
 struct DoctorReport {
-    cargo: Option<String>,
-    git: Option<String>,
+    tools: Vec<crate::creation::ToolStatus>,
+    /// Where the browser creation flow puts new projects by default.
+    workspace: String,
     pack_count: usize,
     packs: Vec<DoctorPack>,
     project: Option<DoctorProject>,

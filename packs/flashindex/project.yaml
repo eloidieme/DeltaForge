@@ -8,8 +8,18 @@ topics:
   - data structures
   - cli
   - performance
+tier: flagship
+difficulty: advanced
+estimated_hours:
+  low: 18
+  high: 30
 languages:
   rust:
+    display_name: Rust
+    requires:
+      - program: cargo
+        label: Rust toolchain (cargo)
+        install_url: https://www.rust-lang.org/tools/install
     template: templates/rust
     build:
       command: ["cargo", "build", "--release"]

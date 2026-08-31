@@ -7,8 +7,18 @@ topics:
   - interpreters
   - virtual-machines
   - bytecode
+tier: preview
+difficulty: advanced
+estimated_hours:
+  low: 10
+  high: 16
 languages:
   rust:
+    display_name: Rust
+    requires:
+      - program: cargo
+        label: Rust toolchain (cargo)
+        install_url: https://www.rust-lang.org/tools/install
     template: templates/rust
     build:
       command: ["cargo", "build", "--release"]

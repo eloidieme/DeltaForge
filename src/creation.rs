@@ -94,11 +94,12 @@ pub fn validate_name(name: &str) -> Result<&str> {
     {
         bail!("the project name must start with a letter or a digit");
     }
-    if let Some(bad) = name
-        .chars()
-        .find(|character| !character.is_ascii_alphanumeric() && *character != '-' && *character != '_')
-    {
-        bail!("the project name cannot contain {bad:?}; use letters, digits, hyphens, or underscores");
+    if let Some(bad) = name.chars().find(|character| {
+        !character.is_ascii_alphanumeric() && *character != '-' && *character != '_'
+    }) {
+        bail!(
+            "the project name cannot contain {bad:?}; use letters, digits, hyphens, or underscores"
+        );
     }
     if RESERVED_NAMES.contains(&name.to_ascii_lowercase().as_str()) {
         bail!("{name} is a reserved name on Windows; choose another");
@@ -129,7 +130,10 @@ pub fn resolve_target(parent: Option<&Path>, name: &str) -> Result<PathBuf> {
         None => {
             let workspace = default_workspace()?;
             fs::create_dir_all(&workspace).with_context(|| {
-                format!("failed to create workspace directory {}", workspace.display())
+                format!(
+                    "failed to create workspace directory {}",
+                    workspace.display()
+                )
             })?;
             workspace
         }
@@ -495,8 +499,7 @@ mod tests {
         let inner = outer.join("nested");
         fs::create_dir_all(&inner).unwrap();
 
-        let refusal =
-            resolve_target(Some(&inner), "project").expect_err("nesting must be refused");
+        let refusal = resolve_target(Some(&inner), "project").expect_err("nesting must be refused");
         assert!(format!("{refusal:#}").contains("inside the DeltaForge project"));
 
         let _ = fs::remove_dir_all(&outer);

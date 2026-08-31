@@ -243,18 +243,11 @@ pub struct BenchArgs {
     pub compare: bool,
 }
 
-#[derive(Debug, Clone, clap::ValueEnum)]
-pub enum ReportFormat {
-    Markdown,
-    Html,
-    Json,
-}
-
 #[derive(Debug, Args)]
 pub struct ReportArgs {
     /// Report output format.
-    #[arg(long, value_enum, default_value_t = ReportFormat::Markdown)]
-    pub format: ReportFormat,
+    #[arg(long, value_enum, default_value_t = crate::reporting::ReportFormat::Markdown)]
+    pub format: crate::reporting::ReportFormat,
 
     /// Output path. Defaults to report.md.
     #[arg(long, default_value = "report.md")]

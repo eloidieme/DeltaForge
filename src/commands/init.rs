@@ -1,76 +1,68 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+//! `deltaforge init`: the automation form of project creation.
+//!
+//! The browser creation flow and this command share one engine
+//! ([`crate::creation`], driven through [`crate::application::create_project`]),
+//! so a project scripted into existence is identical to one created from the
+//! catalog. This command keeps its historical freedom to write anywhere the
+//! shell can reach: it is invoked by a person at a prompt or by CI, not by a
+//! web page.
+
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
 use crate::cli::InitArgs;
-use crate::config::ProjectConfig;
 use crate::context::GlobalOptions;
-use crate::integrity::digest_pack_tree;
-use crate::pack::{LoadedPack, PackSearchOptions, StageSpec, load_pack, pack_source_label};
-use crate::state::ProjectState;
+use crate::creation;
+use crate::pack::{PackSearchOptions, load_pack};
 
 use super::default_project_directory;
-use super::overview::read_pack_overview;
 
 pub fn run(args: InitArgs, options: &GlobalOptions) -> Result<()> {
-    let loaded_pack = load_pack(
+    let pack = load_pack(
         &args.project,
         &PackSearchOptions {
             packs_dir: options.packs_dir.clone(),
         },
     )?;
-    let language = loaded_pack.manifest.language(&args.lang).with_context(|| {
+    let language = pack.manifest.language(&args.lang).with_context(|| {
         format!(
             "pack {} does not support language {}",
             args.project, args.lang
         )
     })?;
+    for tool in creation::language_tools(language) {
+        if tool.required && !tool.found {
+            bail!(
+                "{} is required to build this project and was not found on PATH",
+                tool.label
+            );
+        }
+    }
 
-    let current_stage = match args.stage.as_deref() {
-        Some(stage_id) => loaded_pack
+    let stage = match args.stage.as_deref() {
+        Some(stage_id) => pack
             .manifest
             .stage(stage_id)
             .with_context(|| format!("pack {} does not contain stage {stage_id}", args.project))?,
-        None => loaded_pack
+        None => pack
             .manifest
             .first_stage()
             .with_context(|| format!("pack {} does not define any stages", args.project))?,
     };
 
-    let target_directory = PathBuf::from(default_project_directory(&args));
-    if target_directory.exists() {
-        bail!(
-            "target directory already exists: {}",
-            target_directory.display()
-        );
+    let target = PathBuf::from(default_project_directory(&args));
+    if target.exists() {
+        bail!("target directory already exists: {}", target.display());
     }
 
-    let template_root = loaded_pack.root.join(&language.template);
-    copy_dir_recursive(&template_root, &target_directory).with_context(|| {
-        format!(
-            "failed to copy template {} to {}",
-            template_root.display(),
-            target_directory.display()
-        )
-    })?;
-
-    write_deltaforge_metadata(&target_directory, &loaded_pack, &args, current_stage)?;
-    write_readme(&target_directory, &loaded_pack, current_stage)?;
-
-    if !args.no_git {
-        initialize_git(&target_directory)?;
-    }
+    creation::create(&pack, &args.lang, &target, stage, !args.no_git)?;
 
     println!("deltaforge init");
     println!("Project: {}", args.project);
     println!("Language: {}", args.lang);
-    println!("Target directory: {}", target_directory.display());
-    println!(
-        "Current stage: {} - {}",
-        current_stage.id, current_stage.title
-    );
+    println!("Target directory: {}", target.display());
+    println!("Current stage: {} - {}", stage.id, stage.title);
     println!(
         "Git initialization: {}",
         if args.no_git { "disabled" } else { "enabled" }
@@ -78,129 +70,8 @@ pub fn run(args: InitArgs, options: &GlobalOptions) -> Result<()> {
     println!();
     println!("Created project.");
     println!("Next:");
-    println!("  cd {}", target_directory.display());
+    println!("  cd {}", target.display());
     println!("  deltaforge");
-
-    Ok(())
-}
-
-fn write_deltaforge_metadata(
-    target_directory: &Path,
-    loaded_pack: &LoadedPack,
-    args: &InitArgs,
-    current_stage: &StageSpec,
-) -> Result<()> {
-    let deltaforge_dir = target_directory.join(".deltaforge");
-    fs::create_dir_all(&deltaforge_dir).with_context(|| {
-        format!(
-            "failed to create DeltaForge metadata directory {}",
-            deltaforge_dir.display()
-        )
-    })?;
-
-    let mut state = ProjectState::new(
-        args.project.clone(),
-        args.lang.clone(),
-        current_stage.id.clone(),
-    )?;
-    state.pack_version = loaded_pack.manifest.version.clone();
-    state.pack_source = pack_source_label(&loaded_pack.root);
-    state.pack_digest = digest_pack_tree(&loaded_pack.root)?;
-    state.write_to(&deltaforge_dir.join("state.json"))?;
-
-    ProjectConfig::default().write_to(&deltaforge_dir.join("config.toml"))?;
-
-    Ok(())
-}
-
-fn write_readme(
-    target_directory: &Path,
-    loaded_pack: &LoadedPack,
-    current_stage: &StageSpec,
-) -> Result<()> {
-    let manifest = &loaded_pack.manifest;
-    let overview = read_pack_overview(loaded_pack);
-    let roadmap = manifest
-        .stages
-        .iter()
-        .map(|stage| {
-            let marker = if stage.id == current_stage.id {
-                "→"
-            } else {
-                "○"
-            };
-            format!("{marker} `{}` - {}", stage.id, stage.title)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let readme = format!(
-        "# {}\n\n{}\n\n{}\n\n## Current Stage\n\n`{}` - {}\n\n## Stage Roadmap\n\n{}\n\n## DeltaForge\n\nOpen the local workbench from this directory:\n\n```bash\ndeltaforge\n```\n\nFor terminal-only checks and diagnostics:\n\n```bash\ndeltaforge test\ndeltaforge status\ndeltaforge doctor\n```\n",
-        manifest.name,
-        manifest.description,
-        overview.trim(),
-        current_stage.id,
-        current_stage.title,
-        roadmap
-    );
-
-    fs::write(target_directory.join("README.md"), readme).with_context(|| {
-        format!(
-            "failed to write project README {}",
-            target_directory.join("README.md").display()
-        )
-    })?;
-
-    Ok(())
-}
-
-fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
-    if !source.is_dir() {
-        bail!("template directory does not exist: {}", source.display());
-    }
-
-    fs::create_dir_all(destination)
-        .with_context(|| format!("failed to create directory {}", destination.display()))?;
-
-    for entry in fs::read_dir(source)
-        .with_context(|| format!("failed to read directory {}", source.display()))?
-    {
-        let entry = entry
-            .with_context(|| format!("failed to read directory entry in {}", source.display()))?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("failed to inspect {}", source_path.display()))?;
-
-        if file_type.is_dir() {
-            copy_dir_recursive(&source_path, &destination_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&source_path, &destination_path).with_context(|| {
-                format!(
-                    "failed to copy {} to {}",
-                    source_path.display(),
-                    destination_path.display()
-                )
-            })?;
-        }
-    }
-
-    Ok(())
-}
-
-fn initialize_git(target_directory: &Path) -> Result<()> {
-    let output = Command::new("git")
-        .arg("init")
-        .current_dir(target_directory)
-        .output()
-        .with_context(|| format!("failed to run git init in {}", target_directory.display()))?;
-
-    if !output.status.success() {
-        bail!(
-            "git init failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
 
     Ok(())
 }

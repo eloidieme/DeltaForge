@@ -163,6 +163,24 @@ fn default_true() -> bool {
     true
 }
 
+/// Creation request from the browser. `parent_directory` is the one path a
+/// browser request may supply; `crate::creation::resolve_target` decides
+/// whether it is acceptable.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateProjectBody {
+    #[serde(default)]
+    pack: String,
+    #[serde(default)]
+    language: String,
+    #[serde(default)]
+    parent_directory: Option<String>,
+    #[serde(default)]
+    name: String,
+    #[serde(default = "default_true")]
+    git: bool,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LearnerNoteBody {
@@ -175,6 +193,32 @@ struct LearnerNoteBody {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EmptyBody {}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportReportBody {
+    #[serde(default)]
+    format: ExportFormat,
+}
+
+#[derive(Debug, Default, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ExportFormat {
+    #[default]
+    Markdown,
+    Html,
+    Json,
+}
+
+impl From<ExportFormat> for crate::reporting::ReportFormat {
+    fn from(format: ExportFormat) -> Self {
+        match format {
+            ExportFormat::Markdown => Self::Markdown,
+            ExportFormat::Html => Self::Html,
+            ExportFormat::Json => Self::Json,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 enum ProjectOpenKind {
@@ -597,6 +641,9 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
             | "/api/v1/benchmarks"
             | "/api/v1/predictions"
             | "/api/v1/reflections"
+            | "/api/v1/snapshots"
+            | "/api/v1/snapshots/preview"
+            | "/api/v1/reports"
             | "/api/v1/hints"
             | "/api/v1/capabilities/next"
             | "/api/v1/project/repin-pack"
@@ -613,7 +660,7 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
     }
 
     match (request.method.as_str(), path) {
-        ("GET", "/") | ("GET", "/projects") => respond(
+        ("GET", "/") | ("GET", "/projects") | ("GET", "/catalog") | ("GET", "/create") => respond(
             &mut stream,
             "200 OK",
             "text/html; charset=utf-8",
@@ -661,6 +708,44 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                 "application/json",
                 &serde_json::to_string(&health)?,
             )
+        }
+        ("GET", "/api/v1/catalog") => {
+            let catalog = application::load_catalog(&GlobalOptions::default())?;
+            respond(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                &serde_json::to_string(&catalog)?,
+            )
+        }
+        ("GET", "/api/v1/workspace") => {
+            let body = match crate::creation::default_workspace() {
+                Ok(path) => serde_json::json!({"default_directory": path.display().to_string()}),
+                Err(error) => serde_json::json!({"error": format!("{error:#}")}),
+            };
+            respond(&mut stream, "200 OK", "application/json", &body.to_string())
+        }
+        ("POST", "/api/v1/projects/preflight") | ("POST", "/api/v1/projects") => {
+            if !authorized_mutation(&request, shared) {
+                return respond(
+                    &mut stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"forbidden"}"#,
+                );
+            }
+            let body: CreateProjectBody = match parse_json_body(&request) {
+                Ok(body) => body,
+                Err(_) => {
+                    return respond(
+                        &mut stream,
+                        "400 Bad Request",
+                        "application/json",
+                        r#"{"error":"invalid_json"}"#,
+                    );
+                }
+            };
+            create_project(&mut stream, shared, path, body)
         }
         ("GET", "/api/v1/projects") => {
             let projects = load_project_summaries()?;
@@ -824,6 +909,85 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                     "200 OK",
                     "application/json",
                     &serde_json::to_string(&state)?,
+                ),
+                Err(error) => respond(
+                    &mut stream,
+                    "409 Conflict",
+                    "application/json",
+                    &serde_json::json!({"error": format!("{error:#}")}).to_string(),
+                ),
+            }
+        }
+        ("GET", "/api/v1/snapshots/preview") => {
+            let (_, options) = project_request(shared, &request)?;
+            let preview = application::preview_stage_snapshot(&options)?;
+            respond(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                &serde_json::to_string(&preview)?,
+            )
+        }
+        ("POST", "/api/v1/snapshots") => {
+            if !authorized_mutation(&request, shared) {
+                return respond(
+                    &mut stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"forbidden"}"#,
+                );
+            }
+            if parse_json_body::<EmptyBody>(&request).is_err() {
+                return respond(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    r#"{"error":"invalid_json"}"#,
+                );
+            }
+            let (_, options) = project_request(shared, &request)?;
+            match application::create_stage_snapshot(&options, false) {
+                Ok(outcome) => respond(
+                    &mut stream,
+                    "201 Created",
+                    "application/json",
+                    &serde_json::to_string(&outcome)?,
+                ),
+                Err(error) => respond(
+                    &mut stream,
+                    "409 Conflict",
+                    "application/json",
+                    &serde_json::json!({"error": format!("{error:#}")}).to_string(),
+                ),
+            }
+        }
+        ("POST", "/api/v1/reports") => {
+            if !authorized_mutation(&request, shared) {
+                return respond(
+                    &mut stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"forbidden"}"#,
+                );
+            }
+            let body: ExportReportBody = match parse_json_body(&request) {
+                Ok(body) => body,
+                Err(_) => {
+                    return respond(
+                        &mut stream,
+                        "400 Bad Request",
+                        "application/json",
+                        r#"{"error":"invalid_json"}"#,
+                    );
+                }
+            };
+            let (_, options) = project_request(shared, &request)?;
+            match application::export_report(&options, body.format.into()) {
+                Ok(exported) => respond(
+                    &mut stream,
+                    "200 OK",
+                    "application/json",
+                    &serde_json::to_string(&exported)?,
                 ),
                 Err(error) => respond(
                     &mut stream,
@@ -1155,6 +1319,91 @@ fn start_run(
         "application/json",
         r#"{"status":"accepted"}"#,
     )
+}
+
+/// Serve both halves of the creation flow. `preflight` reports what is wrong
+/// without changing anything; `create` writes the project and registers it.
+/// Both resolve the target through the same guarded function, so the browser's
+/// earlier preflight is a convenience and never the authority.
+fn create_project(
+    stream: &mut TcpStream,
+    shared: &Shared,
+    path: &str,
+    body: CreateProjectBody,
+) -> Result<()> {
+    // Creation is the only browser operation that names a filesystem location.
+    // Refuse an oversized field before it reaches path resolution.
+    if body.pack.len() > 128
+        || body.language.len() > 64
+        || body.name.len() > 128
+        || body
+            .parent_directory
+            .as_ref()
+            .is_some_and(|parent| parent.len() > 4096)
+    {
+        return respond(
+            stream,
+            "400 Bad Request",
+            "application/json",
+            r#"{"error":"invalid_request"}"#,
+        );
+    }
+    let parent = body.parent_directory.as_deref().map(Path::new);
+    let options = GlobalOptions::default();
+
+    if path.ends_with("/preflight") {
+        return match application::preflight_project(
+            &options,
+            &body.pack,
+            &body.language,
+            parent,
+            &body.name,
+        ) {
+            Ok(preflight) => respond(
+                stream,
+                "200 OK",
+                "application/json",
+                &serde_json::to_string(&preflight)?,
+            ),
+            Err(error) => respond(
+                stream,
+                "400 Bad Request",
+                "application/json",
+                &serde_json::json!({"error": format!("{error:#}")}).to_string(),
+            ),
+        };
+    }
+
+    if shared.shutting_down.load(Ordering::SeqCst) {
+        return respond(
+            stream,
+            "409 Conflict",
+            "application/json",
+            r#"{"error":"service_stopping"}"#,
+        );
+    }
+    let request = application::CreateProjectRequest {
+        pack: body.pack,
+        language: body.language,
+        parent_directory: parent.map(Path::to_path_buf),
+        name: body.name,
+        git: body.git,
+        stage: None,
+    };
+    match application::create_project(&options, request) {
+        Ok(created) => respond(
+            stream,
+            "201 Created",
+            "application/json",
+            &serde_json::to_string(&created)?,
+        ),
+        Err(error) => respond(
+            stream,
+            "409 Conflict",
+            "application/json",
+            &serde_json::json!({"error": format!("{error:#}")}).to_string(),
+        ),
+    }
 }
 
 /// Start a benchmark job on the same guard rails as a test run: one job per

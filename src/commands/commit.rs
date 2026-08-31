@@ -1,112 +1,34 @@
-use std::path::Path;
-use std::process::Command;
+//! `deltaforge commit`: the terminal form of a stage snapshot.
+//!
+//! The snapshot the browser offers at the pass moment and this command share
+//! one engine ([`crate::snapshot`]), so the commit and tag are identical
+//! whichever surface asked for them.
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 
+use crate::application;
 use crate::cli::CommitArgs;
-use crate::context::{GlobalOptions, ProjectContext};
+use crate::context::GlobalOptions;
 
 pub fn run(args: CommitArgs, options: &GlobalOptions) -> Result<()> {
-    run_impl(args, options, false)
+    run_impl(args.force, options, false)
 }
 
 pub fn run_automatic(options: &GlobalOptions, quiet: bool) -> Result<()> {
-    run_impl(CommitArgs { force: false }, options, quiet)
+    run_impl(false, options, quiet)
 }
 
-fn run_impl(args: CommitArgs, options: &GlobalOptions, quiet: bool) -> Result<()> {
-    let context = ProjectContext::load(options)?;
-    ensure_git_repo(&context.root)?;
-
-    let stage = context
-        .pack
-        .manifest
-        .stage(&context.state.current_stage)
-        .with_context(|| {
-            format!(
-                "pack does not contain current stage {}",
-                context.state.current_stage
-            )
-        })?;
-
-    if !args.force && !context.state.is_completed(&stage.id) {
-        bail!(
-            "refusing to commit because current stage {} has not passed; run `deltaforge test` or use `deltaforge commit --force`",
-            stage.id
-        );
-    }
-    if !args.force {
-        context.verify_completion_proof(&stage.id)?;
-    }
-
-    run_git(&context.root, &["add", "-A"])?;
-    let message = format!(
-        "Complete Stage {}: {}",
-        stage_number(&stage.id),
-        stage.title
-    );
-    run_git(&context.root, &["commit", "-m", &message])?;
-    let hash = git_stdout(&context.root, &["rev-parse", "HEAD"])?;
-
-    if context.config.git.auto_tag {
-        let tag = format!("deltaforge-{}", stage.id);
-        run_git(&context.root, &["tag", &tag])?;
-    }
-
+fn run_impl(force: bool, options: &GlobalOptions, quiet: bool) -> Result<()> {
+    let outcome = application::create_stage_snapshot(options, force)?;
     if !quiet {
-        println!("Created commit: {}", hash.trim());
-        println!("{message}");
+        println!("Created commit: {}", outcome.commit);
+        println!("{}", outcome.message);
+        if let Some(tag) = &outcome.tag {
+            println!("Tagged: {tag}");
+        }
+        if let Some(tag) = &outcome.existing_tag {
+            println!("Tag {tag} already exists and was left unchanged.");
+        }
     }
     Ok(())
-}
-
-fn ensure_git_repo(root: &Path) -> Result<()> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(root)
-        .output()
-        .with_context(|| format!("failed to run git in {}", root.display()))?;
-    if !output.status.success() {
-        bail!("not a git repository: {}", root.display());
-    }
-    Ok(())
-}
-
-fn run_git(root: &Path, args: &[&str]) -> Result<()> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .with_context(|| format!("failed to run git {}", args.join(" ")))?;
-    if !output.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(())
-}
-
-fn git_stdout(root: &Path, args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
-        .with_context(|| format!("failed to run git {}", args.join(" ")))?;
-    if !output.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-fn stage_number(stage_id: &str) -> String {
-    stage_id
-        .split_once('_')
-        .map_or(stage_id, |(number, _)| number)
-        .to_string()
 }

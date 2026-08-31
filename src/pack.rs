@@ -24,6 +24,16 @@ pub struct ProjectPack {
     pub description: String,
     #[serde(default)]
     pub topics: Vec<String>,
+    /// How finished this pack is. The catalog presents flagship packs and
+    /// preview packs differently rather than as equals.
+    #[serde(default)]
+    pub tier: PackTier,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<PackDifficulty>,
+    /// Rough hours of work, shown in the catalog so a learner can judge the
+    /// commitment before starting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_hours: Option<HourEstimate>,
     #[serde(default)]
     pub languages: BTreeMap<String, LanguageSpec>,
     #[serde(default)]
@@ -32,16 +42,85 @@ pub struct ProjectPack {
     pub stages: Vec<StageSpec>,
 }
 
+/// How complete a pack is relative to the flagship. Packs default to
+/// `Preview` so a pack that never says otherwise is never presented as
+/// finished.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackTier {
+    /// Complete content: full help ladder, diagnosis metadata on every check,
+    /// and a proven reference solution.
+    Flagship,
+    /// Playable and correct, but not held to the flagship content bar.
+    #[default]
+    Preview,
+}
+
+impl PackTier {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Flagship => "Flagship",
+            Self::Preview => "Preview",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackDifficulty {
+    Introductory,
+    Intermediate,
+    Advanced,
+}
+
+impl PackDifficulty {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Introductory => "Introductory",
+            Self::Intermediate => "Intermediate",
+            Self::Advanced => "Advanced",
+        }
+    }
+}
+
+/// An inclusive range of hours, e.g. 12 to 20.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HourEstimate {
+    pub low: u32,
+    pub high: u32,
+}
+
+/// An executable a language's build and run commands need on PATH. Declared
+/// by the pack rather than hardcoded, so adding a language does not require
+/// changing the environment preflight.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolRequirement {
+    pub program: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LanguageSpec {
     pub template: PathBuf,
     pub build: Option<CommandSpec>,
     pub run: CommandSpec,
-    /// Command used by `deltaforge bench` after the build step. Falls back to
-    /// `run` when absent so existing packs stay valid at schema_version 1.
+    /// Command benchmarks time, after the build step. Falls back to `run` when
+    /// absent so existing packs stay valid at schema_version 1.
     #[serde(default)]
     pub bench_run: Option<CommandSpec>,
+    /// Human name for the language, e.g. `Rust` for the key `rust`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Executables the creation preflight must find before this language can
+    /// be chosen.
+    #[serde(default)]
+    pub requires: Vec<ToolRequirement>,
 }
 
 impl LanguageSpec {

@@ -422,6 +422,185 @@ pub enum ProjectHealthActionKind {
     OpenFolder,
 }
 
+/// One pack as the catalog presents it: enough to choose between projects
+/// without opening any of them.
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogEntry {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub topics: Vec<String>,
+    pub tier: crate::pack::PackTier,
+    pub tier_label: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_hours: Option<crate::pack::HourEstimate>,
+    pub step_count: usize,
+    pub languages: Vec<CatalogLanguage>,
+    /// The pack's own overview prose, so the catalog can show what the
+    /// finished project does before the learner commits to it.
+    pub overview: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogLanguage {
+    pub id: String,
+    pub name: String,
+    /// Whether every tool this language declares was found on PATH.
+    pub available: bool,
+    pub tools: Vec<crate::creation::ToolStatus>,
+}
+
+/// Every discovered pack, flagship first, with each language's toolchain
+/// already checked so the catalog can say what is installable right now.
+pub fn load_catalog(options: &GlobalOptions) -> Result<Vec<CatalogEntry>> {
+    let discovery = crate::pack::discover_packs_with_options(&crate::pack::PackSearchOptions {
+        packs_dir: options.packs_dir.clone(),
+    })?;
+    let mut entries = discovery
+        .packs
+        .iter()
+        .map(|pack| {
+            let languages = pack
+                .manifest
+                .languages
+                .iter()
+                .map(|(id, language)| {
+                    let tools = crate::creation::language_tools(language);
+                    CatalogLanguage {
+                        id: id.clone(),
+                        name: language.display_name.clone().unwrap_or_else(|| id.clone()),
+                        available: tools.iter().all(|tool| tool.found || !tool.required),
+                        tools,
+                    }
+                })
+                .collect();
+            CatalogEntry {
+                id: pack.manifest.id.clone(),
+                name: pack.manifest.name.clone(),
+                description: pack.manifest.description.clone(),
+                topics: pack.manifest.topics.clone(),
+                tier: pack.manifest.tier,
+                tier_label: pack.manifest.tier.label(),
+                difficulty: pack
+                    .manifest
+                    .difficulty
+                    .map(crate::pack::PackDifficulty::label),
+                estimated_hours: pack.manifest.estimated_hours,
+                step_count: pack.manifest.stages.len(),
+                languages,
+                overview: crate::commands::overview::read_pack_overview(pack),
+            }
+        })
+        .collect::<Vec<_>>();
+    // Flagship packs first, then alphabetically, so the catalog's first card is
+    // always the one held to the full content bar.
+    entries.sort_by(|left, right| {
+        let rank = |entry: &CatalogEntry| u8::from(entry.tier != crate::pack::PackTier::Flagship);
+        rank(left)
+            .cmp(&rank(right))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(entries)
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateProjectRequest {
+    pub pack: String,
+    pub language: String,
+    /// Directory the project is created inside. `None` uses the default
+    /// workspace. Validated by [`crate::creation::resolve_target`].
+    pub parent_directory: Option<PathBuf>,
+    pub name: String,
+    pub git: bool,
+    pub stage: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreatedProject {
+    /// Registry identifier; every later browser request names this, never the
+    /// path.
+    pub project_id: String,
+    pub path: String,
+    pub pack: String,
+    pub language: String,
+    pub stage_id: String,
+    pub stage_title: String,
+}
+
+/// Check the environment for one pack, language, and proposed location
+/// without creating anything.
+pub fn preflight_project(
+    options: &GlobalOptions,
+    pack_id: &str,
+    language: &str,
+    parent: Option<&Path>,
+    name: &str,
+) -> Result<crate::creation::Preflight> {
+    let pack = crate::pack::load_pack(
+        pack_id,
+        &crate::pack::PackSearchOptions {
+            packs_dir: options.packs_dir.clone(),
+        },
+    )?;
+    crate::creation::preflight(&pack, language, parent, name)
+}
+
+/// Create a project and register it, so the caller can open it immediately by
+/// identifier. The preflight runs again here: the browser's earlier check is a
+/// convenience, not the authority.
+pub fn create_project(
+    options: &GlobalOptions,
+    request: CreateProjectRequest,
+) -> Result<CreatedProject> {
+    let pack = crate::pack::load_pack(
+        &request.pack,
+        &crate::pack::PackSearchOptions {
+            packs_dir: options.packs_dir.clone(),
+        },
+    )?;
+    let language = pack.manifest.language(&request.language).with_context(|| {
+        format!(
+            "pack {} does not support language {}",
+            request.pack, request.language
+        )
+    })?;
+    for tool in crate::creation::language_tools(language) {
+        if tool.required && !tool.found {
+            bail!(
+                "{} is required to build this project and was not found",
+                tool.label
+            );
+        }
+    }
+    let stage = match request.stage.as_deref() {
+        Some(stage_id) => pack
+            .manifest
+            .stage(stage_id)
+            .with_context(|| format!("pack {} does not contain stage {stage_id}", request.pack))?,
+        None => pack
+            .manifest
+            .first_stage()
+            .with_context(|| format!("pack {} does not define any stages", request.pack))?,
+    }
+    .clone();
+
+    let target =
+        crate::creation::resolve_target(request.parent_directory.as_deref(), &request.name)?;
+    crate::creation::create(&pack, &request.language, &target, &stage, request.git)?;
+    let registered = crate::project_registry::register(&target, options.packs_dir.as_deref())?;
+
+    Ok(CreatedProject {
+        project_id: registered.id,
+        path: target.display().to_string(),
+        pack: request.pack,
+        language: request.language,
+        stage_id: stage.id.clone(),
+        stage_title: stage.title,
+    })
+}
+
 pub fn load_project_health(options: &GlobalOptions) -> Result<ProjectHealth> {
     let root = crate::context::locate_project_root(options)?;
     match ProjectContext::load(options) {
@@ -910,6 +1089,139 @@ pub fn run_tests(
 /// journal, cancellation path, and event stream as `run_tests`. A benchmark
 /// started from the CLI and one started from the browser are indistinguishable
 /// to project state and to the event stream; only `trigger` differs.
+/// Export the engineering record into the project's own directory and return
+/// both the path and the rendered document, so the browser can show it
+/// immediately and the learner still has a file.
+pub fn export_report(
+    options: &GlobalOptions,
+    format: crate::reporting::ReportFormat,
+) -> Result<ExportedReport> {
+    let context = ProjectContext::load(options)?;
+    let report = crate::reporting::build(&context)?;
+    let extension = match format {
+        crate::reporting::ReportFormat::Markdown => "md",
+        crate::reporting::ReportFormat::Html => "html",
+        crate::reporting::ReportFormat::Json => "json",
+    };
+    let content = crate::reporting::render(&report, format)?;
+    let path = context.root.join(format!("deltaforge-report.{extension}"));
+    crate::fs_util::atomic_write(&path, &content)?;
+    Ok(ExportedReport {
+        path: path.display().to_string(),
+        markdown: crate::reporting::render_markdown(&report),
+        content,
+        report,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportedReport {
+    pub path: String,
+    /// The record as Markdown, whatever `format` was requested, so the browser
+    /// always has something it can render.
+    pub markdown: String,
+    /// The document actually written to `path`.
+    pub content: String,
+    pub report: crate::reporting::ProjectReport,
+}
+
+/// What a stage snapshot would record right now: the message, the tag, and
+/// the files it would include. Computed without touching the repository, so
+/// the pass moment can show the change before offering to commit it.
+pub fn preview_stage_snapshot(options: &GlobalOptions) -> Result<crate::snapshot::SnapshotPreview> {
+    let context = ProjectContext::load(options)?;
+    let stage = context
+        .pack
+        .manifest
+        .stage(&context.state.current_stage)
+        .with_context(|| {
+            format!(
+                "pack does not contain current stage {}",
+                context.state.current_stage
+            )
+        })?;
+    let message = crate::snapshot::snapshot_message(&stage.id, &stage.title);
+    let tag = context
+        .config
+        .git
+        .auto_tag
+        .then(|| crate::snapshot::snapshot_tag(&stage.id));
+
+    if !crate::snapshot::is_git_repository(&context.root) {
+        return Ok(crate::snapshot::SnapshotPreview {
+            available: false,
+            blocked_reason: Some(
+                "This project is not a Git repository, so there is nothing to snapshot into."
+                    .to_string(),
+            ),
+            message,
+            tag,
+            changed_files: Vec::new(),
+            tag_exists: false,
+        });
+    }
+    let changed_files = crate::snapshot::changed_files(&context.root)?;
+    let blocked_reason = if !context.state.is_completed(&stage.id) {
+        Some("This step has not passed its checks yet.".to_string())
+    } else if changed_files.is_empty() {
+        Some("Every change is already recorded; there is nothing new to snapshot.".to_string())
+    } else {
+        None
+    };
+    let tag_exists = tag
+        .as_deref()
+        .is_some_and(|tag| crate::snapshot::tag_exists(&context.root, tag));
+    Ok(crate::snapshot::SnapshotPreview {
+        available: blocked_reason.is_none(),
+        blocked_reason,
+        message,
+        tag,
+        changed_files,
+        tag_exists,
+    })
+}
+
+/// Record a stage snapshot. Never automatic: a caller reaches this only
+/// because the learner asked, from either surface.
+pub fn create_stage_snapshot(
+    options: &GlobalOptions,
+    force: bool,
+) -> Result<crate::snapshot::SnapshotOutcome> {
+    let context = ProjectContext::load(options)?;
+    crate::snapshot::ensure_git_repository(&context.root)?;
+    let _lease = crate::run_lease::RunLease::acquire(&context.root)
+        .context("could not snapshot while checks are running")?;
+    let context = ProjectContext::load(options)?;
+    let stage = context
+        .pack
+        .manifest
+        .stage(&context.state.current_stage)
+        .with_context(|| {
+            format!(
+                "pack does not contain current stage {}",
+                context.state.current_stage
+            )
+        })?;
+    if !force {
+        if !context.state.is_completed(&stage.id) {
+            bail!(
+                "refusing to snapshot because step {} has not passed its checks yet",
+                stage.id
+            );
+        }
+        context.verify_completion_proof(&stage.id)?;
+    }
+    let message = crate::snapshot::snapshot_message(&stage.id, &stage.title);
+    let tag = context
+        .config
+        .git
+        .auto_tag
+        .then(|| crate::snapshot::snapshot_tag(&stage.id));
+    let outcome = crate::snapshot::take(&context.root, &message, tag.as_deref())?;
+    let _ = crate::run_journal::append(&context.root, &RunEvent::ProjectStateChanged);
+    Ok(outcome)
+}
+
 pub fn run_benchmarks(
     options: &GlobalOptions,
     request: BenchmarkRunRequest,

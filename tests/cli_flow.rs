@@ -894,8 +894,13 @@ fn bench_report_and_portfolio_generate_project_artifacts() {
     );
     assert_success(&markdown_report);
     let report = fs::read_to_string(project_dir.join("report.md")).unwrap();
-    assert!(report.contains("## Project Metadata"));
-    assert!(report.contains("## Benchmark History"));
+    assert!(report.contains("## What is proven"));
+    assert!(report.contains("## Measurements"));
+    assert!(report.contains("scan_basic_project"));
+    // Every claim traces to something recorded; the old fixed advisory text
+    // appeared whatever had actually happened.
+    assert!(!report.contains("Profile benchmark hot paths"));
+    assert!(!report.contains("Broaden correctness coverage"));
 
     let html_report = run_deltaforge(
         ["report", "--format", "html", "--output", "report.html"],
@@ -908,8 +913,10 @@ fn bench_report_and_portfolio_generate_project_artifacts() {
     let portfolio = run_deltaforge(["portfolio", "--output", "PORTFOLIO.md"], &project_dir);
     assert_success(&portfolio);
     let portfolio_text = fs::read_to_string(project_dir.join("PORTFOLIO.md")).unwrap();
-    assert!(portfolio_text.contains("## Project Summary"));
+    assert!(portfolio_text.contains("## Evidence"));
     assert!(portfolio_text.contains("scan_basic_project"));
+    assert!(portfolio_text.contains("iterations"));
+    assert!(!portfolio_text.contains("Future Improvements"));
 }
 
 #[test]
@@ -2028,7 +2035,7 @@ fn mcp_recovers_after_malformed_messages_and_negotiates_protocols() {
 }
 
 #[test]
-fn auto_commit_preserves_json_stdout_and_git_tag_errors_are_reported() {
+fn auto_commit_preserves_json_stdout_and_reports_an_existing_tag() {
     let project = temp_project_path("auto-commit");
     assert_success(&run_deltaforge(
         [
@@ -2074,9 +2081,16 @@ fn auto_commit_preserves_json_stdout_and_git_tag_errors_are_reported() {
     )
     .unwrap();
     fs::write(project.join("design.txt"), "force another commit\n").unwrap();
+    // A second snapshot of the same step is a legitimate action: the commit is
+    // recorded and the existing tag is reported rather than treated as an error.
     let commit = run_deltaforge(["commit", "--force"], &project);
-    assert_failure(&commit);
-    assert_stderr_contains(&commit, "git tag deltaforge-01_scan_files failed");
+    assert_success(&commit);
+    assert_stdout_contains(
+        &commit,
+        "Tag deltaforge-01_scan_files already exists and was left unchanged.",
+    );
+    let log = run_git(["log", "-1", "--pretty=%s"], &project);
+    assert_stdout_contains(&log, "Complete Stage 01: Scan files");
     let _ = fs::remove_dir_all(project);
 }
 
