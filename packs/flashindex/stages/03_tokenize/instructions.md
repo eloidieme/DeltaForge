@@ -101,3 +101,7 @@ After measuring, record the fixture size, occurrence count, median, and p95. The
 - Removing comments or string literals.
 - Unicode identifiers or human-language word breaking.
 - Lowercasing, stemming, or removing duplicate occurrences.
+- Deciding what a file containing invalid UTF-8 should do. Every corpus in this
+  project is valid UTF-8, so reading a file as text and reading it as bytes are
+  both acceptable here; the tradeoff is worth thinking about, and neither answer
+  is checked.

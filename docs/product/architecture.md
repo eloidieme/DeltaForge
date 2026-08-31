@@ -145,10 +145,12 @@ The service:
 Service management may have a diagnostic command, but it is not normal product
 navigation.
 
-The implemented application routes are `/projects`,
-`/projects/<project-id>/overview`, `/projects/<project-id>/build`, and
-`/projects/<project-id>/runs`. Browser requests resolve only opaque identifiers already
-present in the user-level registry; they never provide a project filesystem path.
+The implemented application routes are `/projects`, `/catalog`, `/create`,
+`/projects/<project-id>/overview`, `/projects/<project-id>/build`,
+`/projects/<project-id>/performance`, and `/projects/<project-id>/runs`. Browser
+requests resolve only opaque identifiers already present in the user-level registry;
+they never provide a project filesystem path. **Project creation is the single
+amended exception; see below.**
 
 ## Local security boundary
 
@@ -168,6 +170,47 @@ Required controls:
 - bounded request bodies and output;
 - no serving arbitrary repository files;
 - protection against drive-by requests from unrelated webpages.
+
+### Amendment: project creation accepts a location
+
+*Adopted 2026-09-01, for the 1.0 creation loop.*
+
+Frozen decision 5 puts project creation in the browser, and a learner choosing where
+their own code lives is the point of the feature. Creation therefore breaks the rule
+above: it is the one endpoint that accepts a filesystem path from the browser, in a
+service that then executes pack-defined build commands inside the result. The exception
+is bounded rather than general.
+
+`POST /api/v1/projects` and `POST /api/v1/projects/preflight` accept a **parent
+directory** and a **leaf name**, never a full path. Every request passes through
+`creation::CreationPolicy::resolve_target`, which is the only place in the service
+where a browser-supplied string becomes a path, and which refuses unless all of the
+following hold:
+
+- the leaf is a single component of at most 64 characters, starting with an ASCII
+  alphanumeric and otherwise limited to alphanumerics, `-`, and `_`, so no request can
+  traverse with `..` or an embedded separator, and not a name Windows reserves;
+- the parent is absolute, already exists, and is a directory — creation never brings a
+  parent into being on a request's say-so;
+- the parent canonicalizes, and the containment check below runs on the *canonical*
+  path, so a symlink cannot be used to step outside afterwards;
+- the canonical parent lies inside the learner's home directory, or inside an
+  explicitly configured `$DELTAFORGE_WORKSPACE`;
+- no path component below that root is hidden, keeping creation out of `~/.ssh`,
+  `~/.config`, and every other dotted directory;
+- the parent is not, and is not inside, an existing DeltaForge project, so a project can
+  never be nested in another project's source tree;
+- the leaf does not already exist, so creation never overwrites.
+
+The preflight endpoint runs exactly the same resolution and reports what it refused;
+the browser's earlier check is a convenience and never the authority. Every refusal
+above is covered by a unit test in `creation.rs` and by
+`creation_refuses_every_location_it_should` in `tests/browser_journey.rs`.
+
+`deltaforge init` keeps its historical freedom to write anywhere the shell can reach.
+It is invoked by a person at a prompt or by CI, not by a web page, and the threat the
+policy addresses — a request induced by some other page in the learner's browser — does
+not apply to it.
 
 ## Canonical application operations
 
@@ -214,18 +257,29 @@ Tests, builds, benchmarks, and final challenges are jobs with:
 Representative events include:
 
 ```text
+JobStarted
 BuildStarted
 BuildOutput
 BuildCompleted
 TestStarted
 TestPassed
 TestFailed
-BenchmarkSampleRecorded
 RunCompleted
+BenchmarkStarted
+BenchmarkPointStarted
+BenchmarkSampleRecorded
+BenchmarkPointCompleted
+BenchmarkCompleted
+GateEvaluated
+BenchmarkRunCompleted
 SourceChanged
 ProjectStateChanged
 JobInterrupted
 ```
+
+`JobStarted` carries the job kind, and every attempt in the project's history records
+the kind that produced it, so a benchmark and a check run are the same kind of thing to
+state, to the journal, and to the run lease.
 
 A job started from the CLI and one started from the browser are indistinguishable to the
 project state and workbench event stream.

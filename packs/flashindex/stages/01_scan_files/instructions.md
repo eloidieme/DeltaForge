@@ -72,7 +72,7 @@ This is FlashIndex's default ignore policy, not a complete or universal list. It
 - Do not print directory paths.
 - Never enter a directory named `.git`, `target`, `build`, or `node_modules`, wherever it appears in the tree.
 - Succeed with empty output when the root contains no included regular files.
-- Return a non-zero exit code when the supplied root is missing or unreadable.
+- Return a non-zero exit code when the supplied root is missing, unreadable, or is not a directory.
 
 ## Example
 
@@ -116,6 +116,10 @@ After measuring, write down the file count, fixture size, median time, and p95 t
 - Reading or understanding file contents.
 - Watching for later changes or scanning remote storage.
 - Making the ignore list configurable.
+- Following symbolic links. No corpus in this project contains one, and their
+  treatment is left open.
+- Recovering from an error encountered part-way down the tree. Only the supplied
+  root has a stated error contract.
 
 ## Capability acquired
 

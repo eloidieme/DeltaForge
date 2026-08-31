@@ -43,6 +43,8 @@ flashindex index <path> --threads <N>
 
 The worker count is an execution choice only. Do not print it in the index. Reject zero and non-numeric values with a non-zero exit and an error containing `positive integer`.
 
+`--threads` combines with `--out`: the worker count decides how the index is computed, and `--out` decides where it goes.
+
 ## Example
 
 These commands must print exactly the same bytes:

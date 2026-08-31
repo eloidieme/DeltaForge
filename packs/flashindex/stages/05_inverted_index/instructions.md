@@ -83,7 +83,10 @@ Every check for this stage passes and every token/file relationship in the outpu
 
 ## Non-goals
 
-- Guaranteeing final token and path ordering.
+- Guaranteeing final token and path ordering. The examples here are shown in
+  sorted order because that is easier to read, not because this step requires
+  it; a canonical order becomes a contract in the next step. Any order that
+  expresses the same token-to-file relationships is accepted here.
 - Recording occurrence counts or line and column positions.
 - Saving the index to disk for another process.
 - Ranking documents.

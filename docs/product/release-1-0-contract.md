@@ -1,7 +1,7 @@
 # DeltaForge 1.0 product contract
 
-Status: **Frozen**
-Date: 2026-08-31
+Status: **Frozen**, with recorded amendments
+Date: 2026-08-31 (amended 2026-09-01)
 Branch: `codex/product-workbench`
 
 This document is the authoritative scope for DeltaForge 1.0. Where it conflicts with
@@ -181,3 +181,62 @@ seconds.
 Changing anything above requires an explicit amendment naming the decision, the reason,
 and the consequences for active work. Adding scope back from the deferred list requires
 the same.
+
+## Amendments
+
+### A1. Prediction content gets its own file (decision 9)
+
+*2026-09-01.* Decision 9 said prediction prompts reuse the existing `design_prompt.md`
+files. Measured against the pack, prompts and benchmarks overlapped on exactly one
+stage, and that stage carried no gate: the reuse was empty. Prediction now has its own
+`prediction.md`, authored for each of the four benchmark-carrying FlashIndex stages
+(01, 03, 06, 12). `design_prompt.md` keeps its separate purpose.
+
+Consequence: `prediction.md` is an optional per-stage pack file. A stage without one
+offers no prediction, which is correct for a stage with nothing to measure.
+
+### A2. The performance lab stays a four-stage surface (decision 7)
+
+*2026-09-01.* Four of FlashIndex's fourteen stages carry benchmarks and one carries a
+gate. Adding benchmarks to more stages was considered and rejected: a benchmark on a
+stage with nothing interesting to measure teaches nothing and costs CI time on every
+run. The lab is small on purpose, and the Performance surface says so on a stage that
+has no measurement rather than hiding.
+
+### A3. Creation accepts a location (decision 5)
+
+*2026-09-01.* `architecture.md` states that browser requests resolve only opaque
+identifiers and never carry a filesystem path. In-browser creation necessarily breaks
+that. The exception, its exact refusals, and the reasoning are recorded as an amendment
+in `architecture.md` under *Local security boundary*. Creation accepts a parent
+directory and a leaf name, never a full path, and both are resolved by one guarded
+function.
+
+### A4. Gate enforcement is on (decision 8)
+
+*2026-09-01.* Decision 8 said gates block progression only once a learner can measure
+them without leaving the browser, and warn until then. Benchmarks now run from the
+browser on the same run lease, journal, and cancellation path as checks, and a gate's
+status is visible on the step before the learner reaches it. Enforcement is therefore
+active, which is `gates.enforce = true`, the default it already had. A project may still
+turn it off in `.deltaforge/config.toml`.
+
+## Status at 1.0
+
+| Contract item | State |
+|---|---|
+| Creation loop in the browser | Shipped |
+| Correctness loop | Shipped in Phase 1 |
+| Performance loop in the browser | Shipped |
+| Prediction and reflection | Shipped, offered and skippable |
+| Gate visibility and enforcement | Shipped |
+| Stage snapshot from the browser | Shipped |
+| Record export with traced claims | Shipped |
+| FlashIndex renumber | Shipped |
+| Five help levels on fourteen stages | Shipped |
+| Lighter tier presentation | Shipped as `tier: preview` |
+| Visual design pass | Shipped |
+| Release binaries | Shipped as a tagged workflow |
+| Validation A (cold dogfood) | See `cold-dogfood.md` |
+| Validation B (content sufficiency) | See `content-sufficiency.md` |
+| Validation C (failure corpus) | See `phase1_failure_corpus.rs` |

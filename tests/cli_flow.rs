@@ -268,7 +268,7 @@ fn starter_project_initializes_and_fails_current_stage() {
 
     let test = run_deltaforge(["test"], &project_dir);
     assert_failure(&test);
-    assert_stdout_contains(&test, "0 passed, 9 failed");
+    assert_stdout_contains(&test, "0 passed, 10 failed");
     assert_stdout_not_contains(&test, "Test report:");
     assert_stdout_not_contains(&test, "Opened the test report");
     assert_stderr_contains(&test, "error: tests failed");
@@ -292,10 +292,10 @@ fn starter_project_initializes_and_fails_current_stage() {
         serde_json::from_slice(&json_test.stdout).expect("test --json should emit valid JSON");
     assert_eq!(parsed["summaries"][0]["stage_id"], "01_scan_files");
     assert_eq!(parsed["summaries"][0]["passed"], 0);
-    assert_eq!(parsed["summaries"][0]["failed"], 9);
+    assert_eq!(parsed["summaries"][0]["failed"], 10);
     assert_eq!(
         parsed["summaries"][0]["results"].as_array().unwrap().len(),
-        9
+        10
     );
     let persisted_state: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(project_dir.join(".deltaforge/state.json")).unwrap(),
@@ -810,7 +810,7 @@ fn test_runner_selection_flags_are_user_facing() {
         serde_json::from_slice(&list.stdout).expect("test --list-tests --json is valid JSON");
     assert_eq!(
         listed["summaries"][0]["results"].as_array().unwrap().len(),
-        9
+        10
     );
     assert_stdout_contains(&list, "scans files in a basic project");
 
@@ -1685,7 +1685,7 @@ keep_temp = false
     let timeout = run_deltaforge(["test"], &timeout_project);
     assert_failure(&timeout);
     assert_stdout_contains(&timeout, "command timed out after 1 ms");
-    assert_stdout_contains(&timeout, "0 passed, 9 failed");
+    assert_stdout_contains(&timeout, "0 passed, 10 failed");
     assert_stderr_contains(&timeout, "error: tests failed");
 }
 
@@ -1712,7 +1712,7 @@ fn learner_can_pass_all_mvp_stages_and_unlock_progress() {
     let stage1 = run_deltaforge(["test"], &project_dir);
     assert_success(&stage1);
     assert_stdout_contains(&stage1, "Checking 01_scan_files");
-    assert_stdout_contains(&stage1, "9 passed");
+    assert_stdout_contains(&stage1, "10 passed");
 
     let next1 = run_deltaforge(["next"], &project_dir);
     assert_success(&next1);

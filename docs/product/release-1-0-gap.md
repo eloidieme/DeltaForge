@@ -1,6 +1,9 @@
 # DeltaForge 1.0 implementation gap
 
-Status: **Analysis — not an approved plan**
+Status: **Historical.** This analysis is closed; the work it describes is done.
+Read [release-1-0-contract.md](release-1-0-contract.md) for the contract and its
+status table, and [release-1-0-closeout.md](release-1-0-closeout.md) for what shipped
+against each item and what the work turned up along the way.
 Date: 2026-08-31
 Measured against: [release-1-0-contract.md](release-1-0-contract.md)
 

@@ -35,6 +35,8 @@ Write the complete canonical index to `<index-file>`. Each line must contain one
 
 Create missing parent directories and replace all stale destination contents. On success, exit 0 and print a line containing `wrote`.
 
+Without `--out`, `flashindex index <path>` keeps printing the canonical index to standard output exactly as before. This step adds a destination; it does not replace one.
+
 ## Example
 
 ```console

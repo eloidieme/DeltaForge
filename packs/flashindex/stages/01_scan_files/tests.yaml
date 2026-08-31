@@ -116,3 +116,14 @@ tests:
     expect:
       exit_code: 1
       stdout_exact: ""
+
+  - name: a file given as the root is an error
+    diagnosis:
+      priority: 72
+      headline: A file was accepted as a scan root
+      contract: A root that is not a directory must return a non-zero exit code and no standard output.
+    fixture: basic_project
+    command: ["scan", "{fixture_path}/README.md"]
+    expect:
+      exit_code: 1
+      stdout_exact: ""
