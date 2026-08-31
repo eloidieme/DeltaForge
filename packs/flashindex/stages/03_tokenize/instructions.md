@@ -84,11 +84,11 @@ Punctuation is absent. The leading digits are absent too, but `alpha` keeps the 
 
 ## Success criteria
 
-All `deltaforge test` cases pass, every printed position identifies the first byte of its token, and the tokenizer benchmark completes.
+Every check for this stage passes, every printed position identifies the first byte of its token, and the tokenizer benchmark completes.
 
 ### Reading the benchmark
 
-After `deltaforge bench`, record the fixture size, occurrence count, median, and p95. Then consider:
+After measuring, record the fixture size, occurrence count, median, and p95. Then consider:
 
 1. How much work belongs to reading bytes, and how much belongs to formatting output?
 2. Would a few very long tokens behave like many short tokens with the same total byte count?

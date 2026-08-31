@@ -56,7 +56,7 @@ Reversing file creation or discovery order must not reverse these lines.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and every pair of candidates has a deterministic comparison under the complete ordering.
+Every check for this stage passes and every pair of candidates has a deterministic comparison under the complete ordering.
 
 ## Non-goals
 

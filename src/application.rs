@@ -8,8 +8,8 @@ use crate::context::{GlobalOptions, ProjectContext};
 use crate::pack::pack_source_label;
 use crate::runner::{self, RunnerOptions, TestResult, TestRunSummary};
 use crate::state::{
-    ActiveJob, AttemptStatus, FailureDiagnosis, LastFailedTest, LastTestRunSummary,
-    SourceChangeRecord, TestAttempt,
+    ActiveJob, AttemptStatus, FailureDiagnosis, JobAttempt, JobKind, LastFailedTest,
+    LastTestRunSummary, SourceChangeRecord,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -24,6 +24,7 @@ pub enum RunTrigger {
 pub enum RunEvent {
     JobStarted {
         job_id: String,
+        kind: JobKind,
         stage_ids: Vec<String>,
         trigger: RunTrigger,
     },
@@ -56,6 +57,54 @@ pub enum RunEvent {
         passed: bool,
         passed_tests: usize,
         failed_tests: usize,
+    },
+    BenchmarkStarted {
+        stage_id: String,
+        name: String,
+        index: usize,
+        total: usize,
+    },
+    BenchmarkPointStarted {
+        stage_id: String,
+        name: String,
+        params_label: String,
+        index: usize,
+        total: usize,
+    },
+    BenchmarkSampleRecorded {
+        stage_id: String,
+        name: String,
+        params_label: String,
+        iteration: u64,
+        iterations: u64,
+        duration_ms: f64,
+    },
+    BenchmarkPointCompleted {
+        stage_id: String,
+        name: String,
+        params_label: String,
+        success: bool,
+        runtime_median_ms: Option<f64>,
+        throughput_mb_s: Option<f64>,
+        peak_memory_mb: Option<f64>,
+        error: Option<String>,
+    },
+    BenchmarkCompleted {
+        stage_id: String,
+        name: String,
+        success: bool,
+    },
+    GateEvaluated {
+        stage_id: String,
+        status: crate::context::GateStatus,
+        passed: usize,
+        total: usize,
+    },
+    BenchmarkRunCompleted {
+        job_id: String,
+        passed: bool,
+        benchmarks: usize,
+        failed_points: usize,
     },
     SourceChanged {
         revision: u64,
@@ -126,6 +175,59 @@ impl TestRunOutcome {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct BenchmarkRunRequest {
+    pub stage: Option<String>,
+    pub all: bool,
+    pub iterations: Option<u64>,
+    pub warmup: Option<u64>,
+    pub save: bool,
+    pub compare: bool,
+    pub trigger: RunTrigger,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BenchmarkRunOutcome {
+    pub job_id: String,
+    pub records: Vec<crate::benchmarks::BenchmarkRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparisons: Option<Vec<crate::benchmarks::BenchmarkComparison>>,
+    pub gates: Vec<StageGateReport>,
+    pub saved: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_error: Option<String>,
+}
+
+impl BenchmarkRunOutcome {
+    /// A benchmark run succeeds when it completed and every measured point
+    /// produced a result. Failing a *gate* is a learner outcome, not a run
+    /// failure, and never reported here.
+    pub fn is_success(&self) -> bool {
+        self.execution_error.is_none()
+            && self
+                .records
+                .iter()
+                .all(|record| record.points.iter().all(|point| point.success))
+    }
+
+    pub fn failed_points(&self) -> usize {
+        self.records
+            .iter()
+            .flat_map(|record| &record.points)
+            .filter(|point| !point.success)
+            .count()
+    }
+}
+
+/// One stage's gate outcome after a benchmark run, in the shape both the CLI
+/// and the browser consume.
+#[derive(Debug, Clone, Serialize)]
+pub struct StageGateReport {
+    pub stage_id: String,
+    pub status: crate::context::GateStatus,
+    pub gates: Vec<crate::benchmarks::EvaluatedGate>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResultFreshness {
@@ -155,13 +257,84 @@ pub struct WorkbenchState {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resumption: Option<ResumptionSummary>,
     pub active_job: Option<ActiveJob>,
-    pub latest_attempt: Option<TestAttempt>,
-    pub attempt_history: Vec<TestAttempt>,
+    pub latest_attempt: Option<JobAttempt>,
+    pub attempt_history: Vec<JobAttempt>,
     pub latest_run: Option<LastTestRunSummary>,
     pub primary_failure: Option<LastFailedTest>,
     pub source_revision: u64,
     pub last_source_change: Option<SourceChangeRecord>,
     pub event_cursor: u64,
+    /// The performance picture for the current step: what it measures, what it
+    /// last measured, and whether its gates are met. Present on every step, so
+    /// the browser can show a gate before the learner reaches it.
+    pub performance: PerformanceState,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PerformanceState {
+    /// Whether the current step declares any benchmarks at all.
+    pub has_benchmarks: bool,
+    /// Gate status for the current step. `None` when the step declares no
+    /// gates, which is the common case.
+    pub gate_status: Option<crate::context::GateStatus>,
+    /// Whether a failing or unmeasured gate currently blocks progression.
+    /// False while `gates.enforce` is off, even when the gate is unmet.
+    pub gate_blocks_progress: bool,
+    pub gates: Vec<GateView>,
+    /// The most recent saved measurement for each of the step's benchmarks.
+    pub latest: Vec<BenchmarkView>,
+    /// The step's prediction prompt, when it declares one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction: Option<crate::state::LearnerNote>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reflection: Option<crate::state::LearnerNote>,
+    /// Gate status for every step of the journey, so the roadmap can mark
+    /// which steps carry a measurement before the learner arrives.
+    pub roadmap: Vec<StageGateMarker>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GateView {
+    pub name: String,
+    pub benchmark: String,
+    pub metric: &'static str,
+    pub comparison: &'static str,
+    pub bound: f64,
+    pub params_label: String,
+    pub measured: Option<f64>,
+    pub passed: bool,
+    pub advice: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BenchmarkView {
+    pub name: String,
+    pub timestamp: String,
+    pub points: Vec<BenchmarkPointView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BenchmarkPointView {
+    pub params_label: String,
+    pub success: bool,
+    pub runtime_median_ms: Option<f64>,
+    pub runtime_p95_ms: Option<f64>,
+    pub throughput_mb_s: Option<f64>,
+    pub peak_memory_mb: Option<f64>,
+    /// Percent change in median runtime against the previous saved run of the
+    /// same benchmark and point on this machine. Negative is faster.
+    pub median_percent_delta: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StageGateMarker {
+    pub stage_id: String,
+    pub has_benchmarks: bool,
+    pub status: Option<crate::context::GateStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -409,9 +582,9 @@ pub fn cancel_active_run(options: &GlobalOptions) -> Result<String> {
         .state
         .active_job
         .as_ref()
-        .context("there is no active check run to cancel")?;
+        .context("there is no active run to cancel")?;
     if !crate::run_lease::active(&context.root) {
-        bail!("the active check run has already stopped");
+        bail!("the active run has already stopped");
     }
     let path = cancellation_path(&context.root, &active.id)?;
     crate::fs_util::atomic_write(&path, b"cancel")?;
@@ -569,7 +742,7 @@ pub fn run_tests(
         .iter()
         .map(|stage| stage.id.clone())
         .collect::<Vec<_>>();
-    let job_id = context.state.start_test_job(stage_ids.clone())?;
+    let job_id = context.state.start_job(JobKind::Tests, stage_ids.clone())?;
     context.save_state()?;
     let project_root = context.root.clone();
     let mut sink = JournalSink {
@@ -578,6 +751,7 @@ pub fn run_tests(
     };
     sink.emit(RunEvent::JobStarted {
         job_id: job_id.clone(),
+        kind: JobKind::Tests,
         stage_ids,
         trigger: request.trigger,
     });
@@ -680,7 +854,7 @@ pub fn run_tests(
         .as_deref()
         .is_some_and(|error| error.contains("run cancelled"));
     if !runner_options.list_tests {
-        context.state.finish_test_job(
+        context.state.finish_job(
             &job_id,
             if cancelled {
                 AttemptStatus::Cancelled
@@ -730,6 +904,243 @@ pub fn run_tests(
         newly_completed_current,
         execution_error,
     })
+}
+
+/// Run the current or selected stage's benchmarks under the same run lease,
+/// journal, cancellation path, and event stream as `run_tests`. A benchmark
+/// started from the CLI and one started from the browser are indistinguishable
+/// to project state and to the event stream; only `trigger` differs.
+pub fn run_benchmarks(
+    options: &GlobalOptions,
+    request: BenchmarkRunRequest,
+    sink: &mut dyn EventSink,
+) -> Result<BenchmarkRunOutcome> {
+    let mut context = ProjectContext::load(options)?;
+    let _lease = crate::run_lease::RunLease::acquire_with_timeout(
+        &context.root,
+        std::time::Duration::from_millis(500),
+    )?;
+    context = ProjectContext::load(options)?;
+    if context.state.active_job.is_some() {
+        context.state.recover_interrupted_job()?;
+        context.save_state()?;
+    }
+
+    let stages = if request.all {
+        context.pack.manifest.stages.clone()
+    } else {
+        let stage_id = request
+            .stage
+            .as_deref()
+            .unwrap_or(&context.state.current_stage);
+        vec![
+            context
+                .pack
+                .manifest
+                .stage(stage_id)
+                .with_context(|| format!("pack does not contain stage {stage_id}"))?
+                .clone(),
+        ]
+    };
+    let stage_ids = stages
+        .iter()
+        .map(|stage| stage.id.clone())
+        .collect::<Vec<_>>();
+    let job_id = context
+        .state
+        .start_job(JobKind::Benchmarks, stage_ids.clone())?;
+    context.save_state()?;
+    let project_root = context.root.clone();
+    let mut sink = JournalSink {
+        project_root: &project_root,
+        downstream: sink,
+    };
+    sink.emit(RunEvent::JobStarted {
+        job_id: job_id.clone(),
+        kind: JobKind::Benchmarks,
+        stage_ids,
+        trigger: request.trigger,
+    });
+
+    let cancellation_path = cancellation_path(&context.root, &job_id)?;
+    let _ = fs::remove_file(&cancellation_path);
+    let benchmark_options = crate::benchmarks::BenchmarkOptions {
+        iterations: request.iterations,
+        warmup: request.warmup,
+        cancellation_path: Some(cancellation_path.clone()),
+    };
+
+    let mut records = Vec::new();
+    let mut execution_error = None;
+    for stage in &stages {
+        match crate::benchmarks::run_stage_benchmarks(
+            &context,
+            stage,
+            &benchmark_options,
+            &mut sink,
+        ) {
+            Ok(stage_records) => records.extend(stage_records),
+            Err(error) => {
+                execution_error = Some(bounded_text(
+                    &sanitize_project_text(&format!("{error:#}"), &context.root),
+                    16 * 1024,
+                ));
+                break;
+            }
+        }
+    }
+
+    let evaluations = stages
+        .iter()
+        .map(|stage| crate::benchmarks::evaluate_stage_gates(&context, stage, &records))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Read history before appending so a saved run is compared with a genuinely
+    // prior result, never with itself.
+    let comparisons = if request.compare {
+        let history = crate::benchmarks::read_history(&crate::benchmarks::history_path(&context))?;
+        Some(crate::benchmarks::compare_records(&records, &history))
+    } else {
+        None
+    };
+
+    let saved = request.save && !records.is_empty() && execution_error.is_none();
+    if saved {
+        crate::benchmarks::append_history(&context, &records)?;
+    }
+
+    // Gate records are written after history so a history write failure can
+    // never forge a progression proof without its measurement.
+    let mut changed_gate_state = false;
+    for evaluation in &evaluations {
+        if let Some(record) = evaluation.record(&context)? {
+            context
+                .state
+                .gate_results
+                .insert(evaluation.stage.clone(), record);
+            changed_gate_state = true;
+        }
+    }
+    if changed_gate_state {
+        context.state.touch()?;
+        context.save_state()?;
+    }
+
+    let gates = evaluations
+        .iter()
+        .filter(|evaluation| !evaluation.gates.is_empty())
+        .map(|evaluation| StageGateReport {
+            stage_id: evaluation.stage.clone(),
+            status: evaluation.status(),
+            gates: evaluation.gates.clone(),
+        })
+        .collect::<Vec<_>>();
+    for report in &gates {
+        sink.emit(RunEvent::GateEvaluated {
+            stage_id: report.stage_id.clone(),
+            status: report.status,
+            passed: report.gates.iter().filter(|gate| gate.passed).count(),
+            total: report.gates.len(),
+        });
+    }
+
+    let outcome = BenchmarkRunOutcome {
+        job_id: job_id.clone(),
+        records,
+        comparisons,
+        gates,
+        saved,
+        execution_error,
+    };
+    let cancelled = outcome
+        .execution_error
+        .as_deref()
+        .is_some_and(|error| error.contains("run cancelled"));
+    let successful = outcome.is_success();
+    context.state.finish_job(
+        &job_id,
+        if cancelled {
+            AttemptStatus::Cancelled
+        } else if successful {
+            AttemptStatus::Passed
+        } else {
+            AttemptStatus::Failed
+        },
+        outcome.records.len() - outcome.failed_points().min(outcome.records.len()),
+        outcome.failed_points(),
+        outcome.execution_error.clone(),
+    )?;
+    context.save_state()?;
+
+    if cancelled {
+        sink.emit(RunEvent::JobInterrupted {
+            job_id: job_id.clone(),
+            reason: "Run cancelled by the learner".to_string(),
+        });
+    } else {
+        sink.emit(RunEvent::BenchmarkRunCompleted {
+            job_id: job_id.clone(),
+            passed: successful,
+            benchmarks: outcome.records.len(),
+            failed_points: outcome.failed_points(),
+        });
+    }
+    sink.emit(RunEvent::ProjectStateChanged);
+    let _ = fs::remove_file(cancellation_path);
+
+    Ok(outcome)
+}
+
+/// Record the learner's prediction for the current step. `skipped` marks that
+/// the prompt was offered and declined, which is not the same as never asked.
+pub fn record_prediction(
+    options: &GlobalOptions,
+    text: String,
+    skipped: bool,
+) -> Result<WorkbenchState> {
+    record_learner_note(options, text, skipped, NoteKind::Prediction)
+}
+
+/// Record the learner's reflection for the current step.
+pub fn record_reflection(
+    options: &GlobalOptions,
+    text: String,
+    skipped: bool,
+) -> Result<WorkbenchState> {
+    record_learner_note(options, text, skipped, NoteKind::Reflection)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum NoteKind {
+    Prediction,
+    Reflection,
+}
+
+fn record_learner_note(
+    options: &GlobalOptions,
+    text: String,
+    skipped: bool,
+    kind: NoteKind,
+) -> Result<WorkbenchState> {
+    if text.len() > 4 * 1024 {
+        bail!("the note is longer than DeltaForge stores for one step");
+    }
+    let text = text.trim().to_string();
+    if text.is_empty() && !skipped {
+        bail!("write a prediction or skip it");
+    }
+    let context = ProjectContext::load(options)?;
+    let _lease = crate::run_lease::RunLease::acquire(&context.root)
+        .context("could not save the note while checks are running")?;
+    let mut context = ProjectContext::load(options)?;
+    let stage_id = context.state.current_stage.clone();
+    match kind {
+        NoteKind::Prediction => context.state.record_prediction(&stage_id, text, skipped)?,
+        NoteKind::Reflection => context.state.record_reflection(&stage_id, text, skipped)?,
+    }
+    context.save_state()?;
+    let _ = crate::run_journal::append(&context.root, &RunEvent::ProjectStateChanged);
+    workbench_state(&context, false, None)
 }
 
 fn observe_source_in_context(
@@ -1015,7 +1426,164 @@ fn workbench_state(
         source_revision: context.state.source_revision,
         last_source_change: context.state.last_source_change.clone(),
         event_cursor,
+        performance: performance_state(context, &current.id)?,
     })
+}
+
+/// Assemble the performance picture for one step: its gates, its most recent
+/// saved measurements, its prediction prompt and recorded notes, and a
+/// gate marker for every step of the journey.
+fn performance_state(context: &ProjectContext, stage_id: &str) -> Result<PerformanceState> {
+    let stage = context
+        .pack
+        .manifest
+        .stage(stage_id)
+        .with_context(|| format!("pack does not contain stage {stage_id}"))?;
+    let benchmarks = context.pack.benchmarks_path(stage).is_file();
+    let declared = context.stage_gates(stage_id)?;
+    let status = context.gate_status(stage_id)?;
+    let record = context.state.gate_results.get(stage_id);
+    let gates = declared
+        .iter()
+        .map(|gate| {
+            let bound = gate.bound();
+            let recorded = record.and_then(|record| {
+                record.results.iter().find(|result| {
+                    result.benchmark == gate.benchmark
+                        && result.metric == gate.metric
+                        && result.params == gate.params
+                })
+            });
+            let measured = recorded.map(|result| result.measured);
+            GateView {
+                name: gate.name.clone(),
+                benchmark: gate.benchmark.clone(),
+                metric: crate::benchmarks::metric_name(gate.metric),
+                comparison: match bound {
+                    Some(crate::pack::GateBound::Min(_)) => "at least",
+                    _ => "at most",
+                },
+                bound: match bound {
+                    Some(
+                        crate::pack::GateBound::Min(value) | crate::pack::GateBound::Max(value),
+                    ) => value,
+                    None => f64::NAN,
+                },
+                params_label: gate
+                    .params
+                    .iter()
+                    .map(|(name, value)| format!("{name}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                measured,
+                // Only a gate whose measurement is current counts as passing;
+                // `gate_status` already applied the digest checks.
+                passed: status == Some(crate::context::GateStatus::Passed)
+                    || recorded.is_some_and(|result| {
+                        result.passed && status != Some(crate::context::GateStatus::NotMeasured)
+                    }),
+                advice: gate.advice.clone(),
+            }
+        })
+        .collect();
+
+    let history = crate::benchmarks::read_history(&crate::benchmarks::history_path(context))
+        .unwrap_or_default();
+    let latest = latest_benchmark_views(&history, stage_id);
+
+    let mut roadmap = Vec::new();
+    for stage in &context.pack.manifest.stages {
+        let has_benchmarks = context.pack.benchmarks_path(stage).is_file();
+        let status = context.gate_status(&stage.id).unwrap_or(None);
+        if has_benchmarks || status.is_some() {
+            roadmap.push(StageGateMarker {
+                stage_id: stage.id.clone(),
+                has_benchmarks,
+                status,
+            });
+        }
+    }
+
+    Ok(PerformanceState {
+        has_benchmarks: benchmarks,
+        gate_status: status,
+        gate_blocks_progress: context.config.gates.enforce
+            && matches!(
+                status,
+                Some(crate::context::GateStatus::NotYet | crate::context::GateStatus::NotMeasured)
+            ),
+        gates,
+        latest,
+        prediction_prompt: crate::capability::read_prediction_prompt(context, stage),
+        prediction: context.state.predictions.get(stage_id).cloned(),
+        reflection: context.state.reflections.get(stage_id).cloned(),
+        roadmap,
+    })
+}
+
+/// The most recent saved run of each benchmark for one stage, with each point
+/// compared against the run before it on the same machine.
+fn latest_benchmark_views(
+    history: &[crate::benchmarks::BenchmarkRecord],
+    stage_id: &str,
+) -> Vec<BenchmarkView> {
+    let stage_records: Vec<&crate::benchmarks::BenchmarkRecord> = history
+        .iter()
+        .filter(|record| record.stage == stage_id)
+        .collect();
+    let mut names: Vec<&str> = stage_records
+        .iter()
+        .map(|record| record.benchmark.as_str())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let mut runs = stage_records
+                .iter()
+                .filter(|record| record.benchmark == name)
+                .rev();
+            let current = runs.next()?;
+            let previous = runs.next();
+            Some(BenchmarkView {
+                name: name.to_string(),
+                timestamp: current.timestamp.clone(),
+                points: current
+                    .points
+                    .iter()
+                    .map(|point| {
+                        let prior = previous.and_then(|previous| {
+                            previous
+                                .points
+                                .iter()
+                                .find(|candidate| candidate.params == point.params)
+                        });
+                        BenchmarkPointView {
+                            params_label: point.params_label(),
+                            success: point.success,
+                            runtime_median_ms: point.runtime_median_ms,
+                            runtime_p95_ms: point.runtime_p95_ms,
+                            throughput_mb_s: point.throughput_mb_s,
+                            peak_memory_mb: point.peak_memory_mb,
+                            median_percent_delta: percent_delta(
+                                prior.and_then(|prior| prior.runtime_median_ms),
+                                point.runtime_median_ms,
+                            ),
+                            error: point.error.clone(),
+                        }
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+fn percent_delta(previous: Option<f64>, current: Option<f64>) -> Option<f64> {
+    let (previous, current) = (previous?, current?);
+    (previous.is_finite() && current.is_finite() && previous != 0.0)
+        .then(|| (current - previous) / previous * 100.0)
 }
 
 struct JournalSink<'a> {

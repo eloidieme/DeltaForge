@@ -103,7 +103,7 @@ The paths are relative to `project`, they use `/`, and they appear in sorted ord
 
 ### Reading the benchmark
 
-After `deltaforge bench`, write down the file count, fixture size, median time, and p95 time. Then consider:
+After measuring, write down the file count, fixture size, median time, and p95 time. Then consider:
 
 1. Is the fixture large enough to measure scanning rather than mostly measuring program startup?
 2. How might a warm filesystem cache change a second run?

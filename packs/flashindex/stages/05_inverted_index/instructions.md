@@ -79,7 +79,7 @@ The command now begins each record with the value a future lookup will know: the
 
 ## Success criteria
 
-All `deltaforge test` cases pass and every token/file relationship in the output can be traced back to a token occurrence.
+Every check for this stage passes and every token/file relationship in the output can be traced back to a token occurrence.
 
 ## Non-goals
 

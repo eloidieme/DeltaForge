@@ -1,5 +1,9 @@
 tests:
   - name: writes persisted index file
+    diagnosis:
+      priority: 10
+      headline: The index is not written to the requested output file
+      contract: Write the complete canonical index to <index-file>, and on success print a line containing wrote.
     fixture: persist_project
     command: ["index", "{fixture_path}", "--out", "{temp_dir}/index.fi"]
     expect:
@@ -10,6 +14,10 @@ tests:
         - "{temp_dir}/index.fi"
 
   - name: persisted index records token and path fields
+    diagnosis:
+      priority: 22
+      headline: A persisted record is missing its token or path field
+      contract: Each line must contain one token followed by its sorted, deduplicated relative paths, with every field separated by one tab byte.
     fixture: persist_project
     command: ["index", "{fixture_path}", "--out", "{temp_dir}/index.fi"]
     expect:
@@ -19,6 +27,10 @@ tests:
           contains: "durable_token\tsrc/main.rs"
 
   - name: creates nested output parents
+    diagnosis:
+      priority: 50
+      headline: Writing to a missing parent directory fails
+      contract: Create missing parent directories and replace all stale destination contents.
     fixture: persist_project
     command: ["index", "{fixture_path}", "--out", "{temp_dir}/cache/nested/index.fi"]
     expect:
@@ -27,6 +39,10 @@ tests:
         - "{temp_dir}/cache/nested/index.fi"
 
   - name: rebuilding replaces a stale index artifact
+    diagnosis:
+      priority: 32
+      headline: A rebuilt index still contains stale content
+      contract: Rebuilding over an older, longer file removes every stale trailing byte.
     fixture: stale_index
     command: ["index", "{fixture_path}/project", "--out", "{fixture_path}/index.fi"]
     expect:
@@ -39,6 +55,10 @@ tests:
           contains: "stale_token"
 
   - name: empty corpus still creates an artifact
+    diagnosis:
+      priority: 55
+      headline: An empty corpus does not produce an index artifact
+      contract: An empty corpus still produces a valid readable file.
     fixture: empty_project
     command: ["index", "{fixture_path}", "--out", "{temp_dir}/empty.fi"]
     expect:
@@ -49,6 +69,10 @@ tests:
         - "{temp_dir}/empty.fi"
 
   - name: multi path records are tab separated in sorted order
+    diagnosis:
+      priority: 44
+      headline: Multi-path records are not tab separated in sorted order
+      contract: Separate every field with one tab byte, and list sorted, deduplicated relative paths.
     fixture: multi_path_persist
     command: ["index", "{fixture_path}", "--out", "{temp_dir}/pair.fi"]
     expect:
@@ -58,6 +82,10 @@ tests:
           contains: "pair\tsrc/a.rs\tsrc/b.rs"
 
   - name: missing source root writes nothing
+    diagnosis:
+      priority: 65
+      headline: A missing source root still writes an output file
+      contract: Only a successful rebuild may write the destination file, so a missing source root must not produce an index artifact.
     fixture: persist_project
     command: ["index", "{fixture_path}/does_not_exist", "--out", "{temp_dir}/never.fi"]
     expect:

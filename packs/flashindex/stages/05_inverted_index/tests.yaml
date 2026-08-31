@@ -1,5 +1,9 @@
 tests:
   - name: builds token to file mapping
+    diagnosis:
+      priority: 10
+      headline: Tokens are not mapped to the files containing them
+      contract: Build an inverted index from token occurrences, with one posting per distinct token.
     fixture: index_project
     command: ["index", "{fixture_path}"]
     expect:
@@ -11,6 +15,10 @@ tests:
         - "gamma src/b.rs"
 
   - name: keeps output searchable by line
+    diagnosis:
+      priority: 25
+      headline: A token's posting does not list all its containing files
+      contract: Print one line for each distinct token, containing the token followed by its file paths.
     fixture: index_project
     command: ["index", "{fixture_path}"]
     expect:
@@ -20,6 +28,10 @@ tests:
         - "(?m)^alpha .*src/b\\.rs"
 
   - name: preserves case and underscores in tokens
+    diagnosis:
+      priority: 22
+      headline: Case and underscore variants collapse into one token
+      contract: Complete token text is preserved, including case and underscores.
     fixture: token_variety
     command: ["index", "{fixture_path}"]
     expect:
@@ -30,6 +42,10 @@ tests:
         - "_value src/v.rs"
 
   - name: every line is one token followed by its paths
+    diagnosis:
+      priority: 42
+      headline: An index line does not follow the token-then-paths shape
+      contract: Every line must begin with the complete case-sensitive token and contain the root-relative paths in which it appears.
     fixture: index_project
     command: ["index", "{fixture_path}"]
     expect:

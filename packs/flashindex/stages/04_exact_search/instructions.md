@@ -73,7 +73,7 @@ src/main.rs:1:4 main
 
 ## Success criteria
 
-All `deltaforge test` cases pass and every search occurrence is identical to an occurrence that `tokenize` would print for the same corpus.
+Every check for this stage passes and every search occurrence is identical to an occurrence that `tokenize` would print for the same corpus.
 
 ## Non-goals
 

@@ -1,5 +1,9 @@
 tests:
   - name: finds exact token matches
+    diagnosis:
+      priority: 10
+      headline: An exact token query returns no matches
+      contract: Print only occurrences whose complete token is byte-for-byte equal to the query token.
     fixture: search_project
     command: ["search", "{fixture_path}", "main"]
     expect:
@@ -10,6 +14,10 @@ tests:
         - "main_index"
 
   - name: preserves token boundaries
+    diagnosis:
+      priority: 32
+      headline: A query matches part of a longer token
+      contract: A query never matches a substring inside a larger token.
     fixture: search_project
     command: ["search", "{fixture_path}", "main_index"]
     expect:
@@ -20,6 +28,10 @@ tests:
         - "src/main.rs:1:4 main"
 
   - name: reports no matches cleanly
+    diagnosis:
+      priority: 55
+      headline: A token absent from the corpus produces output
+      contract: A token absent from the corpus produces empty stdout and status 0.
     fixture: search_project
     command: ["search", "{fixture_path}", "missing_token"]
     expect:
@@ -27,6 +39,10 @@ tests:
       stdout_exact: ""
 
   - name: matching is case sensitive
+    diagnosis:
+      priority: 50
+      headline: Search results ignore letter case
+      contract: Case is part of the token text, so Request, request, and REQUEST remain different names.
     fixture: search_project
     command: ["search", "{fixture_path}", "Main"]
     expect:
@@ -34,6 +50,10 @@ tests:
       stdout_exact: ""
 
   - name: multiple matches keep path and source order
+    diagnosis:
+      priority: 40
+      headline: Multiple matches are not printed in sorted order
+      contract: Multiple matches retain sorted path order and source order.
     fixture: ordered_search
     command: ["search", "{fixture_path}", "needle"]
     expect:
@@ -44,6 +64,10 @@ tests:
         src/b.rs:1:8 needle
 
   - name: underscore prefixed query matches the whole token only
+    diagnosis:
+      priority: 34
+      headline: An underscore-prefixed query matches a different token
+      contract: Reuse the established corpus and token rules, including boundaries, case, positions, portable paths, and ordering.
     fixture: underscore_search
     command: ["search", "{fixture_path}", "_cache"]
     expect:
@@ -52,6 +76,10 @@ tests:
         src/us.rs:1:1 _cache
 
   - name: missing token argument is an error
+    diagnosis:
+      priority: 60
+      headline: A missing query token argument does not raise an error
+      contract: Missing arguments must exit non-zero.
     fixture: search_project
     command: ["search", "{fixture_path}"]
     expect:
@@ -59,6 +87,10 @@ tests:
       stdout_exact: ""
 
   - name: unreadable root is an error
+    diagnosis:
+      priority: 65
+      headline: An unreadable project root does not raise an error
+      contract: An unreadable root must exit non-zero.
     fixture: search_project
     command: ["search", "{fixture_path}/does_not_exist", "main"]
     expect:

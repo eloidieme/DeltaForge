@@ -1,5 +1,9 @@
 tests:
   - name: prints file and token counts
+    diagnosis:
+      priority: 10
+      headline: The summary omits required file or token counts
+      contract: Print exactly three labelled lines, in order, for files, tokens, and unique_tokens.
     fixture: summary_project
     command: ["summary", "{fixture_path}"]
     expect:
@@ -10,6 +14,10 @@ tests:
         - "unique_tokens:"
 
   - name: summary ignores non-source assets
+    diagnosis:
+      priority: 32
+      headline: Non-source assets are counted in the summary
+      contract: Non-source assets do not contribute to any counter.
     fixture: summary_project
     command: ["summary", "{fixture_path}"]
     expect:
@@ -18,6 +26,10 @@ tests:
         - "files: 3"
 
   - name: summary format is line oriented
+    diagnosis:
+      priority: 40
+      headline: Summary output is not cleanly line oriented
+      contract: The labels and order are fixed so a person can scan the report and a simple script can still read it line by line.
     fixture: summary_project
     command: ["summary", "{fixture_path}"]
     expect:
@@ -26,6 +38,10 @@ tests:
         - "(?m)^unique_tokens: [0-9]+$"
 
   - name: summary counts occurrences and unique tokens exactly
+    diagnosis:
+      priority: 44
+      headline: Reported token and unique-token counts are inexact
+      contract: The tokens counter counts every occurrence, and unique_tokens counts distinct case-sensitive token strings across the entire corpus.
     fixture: summary_project
     command: ["summary", "{fixture_path}"]
     expect:
@@ -36,6 +52,10 @@ tests:
         unique_tokens: 7
 
   - name: empty corpus reports zero counters
+    diagnosis:
+      priority: 60
+      headline: An empty corpus does not report zero for every counter
+      contract: An empty corpus reports zero for all three counters.
     fixture: empty_summary
     command: ["summary", "{fixture_path}"]
     expect:
@@ -46,6 +66,10 @@ tests:
         unique_tokens: 0
 
   - name: unique token counting is case sensitive
+    diagnosis:
+      priority: 50
+      headline: Unique token counting folds differing letter case together
+      contract: Two spellings that differ only in case, such as Token and token, count as two unique token texts.
     fixture: case_summary
     command: ["summary", "{fixture_path}"]
     expect:
@@ -56,6 +80,10 @@ tests:
         unique_tokens: 2
 
   - name: repeated spellings grow tokens but not vocabulary
+    diagnosis:
+      priority: 26
+      headline: Repeated token spellings inflate the unique-token count
+      contract: Repeated occurrences increase the tokens counter but not unique_tokens after the first spelling.
     fixture: vocab_summary
     command: ["summary", "{fixture_path}"]
     expect:
@@ -66,6 +94,10 @@ tests:
         unique_tokens: 2
 
   - name: missing root is an error
+    diagnosis:
+      priority: 65
+      headline: A missing project root does not raise an error
+      contract: A missing or unreadable project root must not produce a summary.
     fixture: summary_project
     command: ["summary", "{fixture_path}/does_not_exist"]
     expect:

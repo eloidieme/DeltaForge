@@ -61,7 +61,7 @@ Zero milliseconds is valid for a very small or very fast workload; it does not m
 
 ## Success criteria
 
-All `deltaforge test` cases pass and the complete stdout stream parses as the required JSON object.
+Every check for this stage passes and the complete stdout stream parses as the required JSON object.
 
 ## Non-goals
 

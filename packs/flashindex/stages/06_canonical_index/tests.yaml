@@ -1,5 +1,9 @@
 tests:
   - name: deduplicates repeated file entries
+    diagnosis:
+      priority: 30
+      headline: A file path appears more than once in one posting
+      contract: List each containing path exactly once per token.
     fixture: index_project
     command: ["index", "{fixture_path}"]
     expect:
@@ -8,6 +12,10 @@ tests:
         - "beta src/a.rs src/a.rs"
 
   - name: token and path ordering is canonical
+    diagnosis:
+      priority: 40
+      headline: The index output is not in canonical sorted form
+      contract: The result depends only on the corpus, never on discovery order or worker timing.
     fixture: index_project
     command: ["index", "{fixture_path}"]
     expect:
@@ -20,6 +28,10 @@ tests:
         let src/a.rs src/b.rs
 
   - name: empty source corpus prints nothing
+    diagnosis:
+      priority: 60
+      headline: An empty corpus produces unexpected output
+      contract: Succeed with empty stdout when the source corpus contains no tokens.
     fixture: empty_index
     command: ["index", "{fixture_path}"]
     expect:
@@ -27,6 +39,10 @@ tests:
       stdout_exact: ""
 
   - name: many occurrences in one file produce one posting path
+    diagnosis:
+      priority: 32
+      headline: Repeated occurrences in a file produce repeated paths
+      contract: Repeated occurrences in one file produce one path in that token's posting.
     fixture: dedup_heavy
     command: ["index", "{fixture_path}"]
     expect:
@@ -35,6 +51,10 @@ tests:
         echo src/other.rs src/rep.rs
 
   - name: tokens sort by ascending byte order
+    diagnosis:
+      priority: 42
+      headline: Tokens are sorted alphabetically instead of by byte value
+      contract: Sort distinct tokens in ascending bytewise order.
     fixture: byte_order
     command: ["index", "{fixture_path}"]
     expect:
@@ -45,6 +65,10 @@ tests:
         alpha src/m.rs
 
   - name: paths within a posting sort ascending
+    diagnosis:
+      priority: 44
+      headline: Paths inside a posting are not sorted ascending
+      contract: Sort paths within each token in ascending order.
     fixture: path_order
     command: ["index", "{fixture_path}"]
     expect:

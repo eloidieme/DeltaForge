@@ -1,7 +1,7 @@
 use anyhow::Result;
 
+use crate::benchmarks::{BenchmarkRecord, history_path, read_history};
 use crate::cli::PortfolioArgs;
-use crate::commands::bench::{history_path, read_history};
 use crate::context::{GlobalOptions, ProjectContext};
 use crate::fs_util::atomic_write;
 
@@ -14,7 +14,7 @@ pub fn run(args: PortfolioArgs, options: &GlobalOptions) -> Result<()> {
     Ok(())
 }
 
-fn render(context: &ProjectContext, history: &[crate::commands::bench::BenchmarkRecord]) -> String {
+fn render(context: &ProjectContext, history: &[BenchmarkRecord]) -> String {
     let mut out = String::new();
     out.push_str(&format!("# {}\n\n", context.pack.manifest.name));
     out.push_str("## Project Summary\n\n");

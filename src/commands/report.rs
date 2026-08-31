@@ -3,8 +3,8 @@ use std::fs;
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::benchmarks::{BenchmarkRecord, history_path, read_history};
 use crate::cli::{ReportArgs, ReportFormat};
-use crate::commands::bench::{history_path, read_history};
 use crate::context::{GlobalOptions, ProjectContext};
 use crate::fs_util::atomic_write;
 
@@ -28,7 +28,7 @@ pub fn run(args: ReportArgs, options: &GlobalOptions) -> Result<()> {
 
 fn render_markdown(
     context: &ProjectContext,
-    history: &[crate::commands::bench::BenchmarkRecord],
+    history: &[BenchmarkRecord],
     design_notes: &[(String, String)],
 ) -> String {
     let mut out = String::new();
@@ -121,7 +121,7 @@ fn render_markdown(
 
 fn render_html(
     context: &ProjectContext,
-    history: &[crate::commands::bench::BenchmarkRecord],
+    history: &[BenchmarkRecord],
     design_notes: &[(String, String)],
 ) -> String {
     let markdown = render_markdown(context, history, design_notes);
@@ -134,7 +134,7 @@ fn render_html(
 
 fn render_json(
     context: &ProjectContext,
-    history: &[crate::commands::bench::BenchmarkRecord],
+    history: &[BenchmarkRecord],
     design_notes: &[(String, String)],
 ) -> JsonReport {
     JsonReport {
@@ -167,7 +167,7 @@ struct JsonReport {
     current_stage: String,
     completed_stages: Vec<String>,
     latest_test_runs: Vec<crate::state::LastTestRunSummary>,
-    benchmark_history: Vec<crate::commands::bench::BenchmarkRecord>,
+    benchmark_history: Vec<BenchmarkRecord>,
     design_notes: Vec<JsonDesignNote>,
     environment: JsonEnvironment,
 }

@@ -66,7 +66,7 @@ The summary does not list the tokens themselves. It describes the collection tha
 
 ## Success criteria
 
-All `deltaforge test` cases pass and the counts agree with the corpus and occurrence stream for the same input.
+Every check for this stage passes and the counts agree with the corpus and occurrence stream for the same input.
 
 ## Non-goals
 

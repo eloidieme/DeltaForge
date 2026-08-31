@@ -65,7 +65,7 @@ The number and discovery order of occurrences cannot change that line.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and repeated indexing of unchanged input produces byte-identical stdout.
+Every check for this stage passes and repeated indexing of unchanged input produces byte-identical stdout.
 
 ### Reading the benchmark
 

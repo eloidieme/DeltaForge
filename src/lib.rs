@@ -1,5 +1,6 @@
 pub mod application;
 pub mod authoring;
+pub mod benchmarks;
 pub mod capability;
 pub mod cli;
 pub mod commands;

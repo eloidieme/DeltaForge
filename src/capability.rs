@@ -307,6 +307,24 @@ fn load_roadmap(context: &ProjectContext) -> Result<Vec<RoadmapCapability>> {
         .collect()
 }
 
+/// The stage's prediction prompt, with its leading `#` heading removed.
+/// `None` when the stage declares none, which is every stage without
+/// benchmarks.
+pub fn read_prediction_prompt(
+    context: &ProjectContext,
+    stage: &crate::pack::StageSpec,
+) -> Option<String> {
+    let source = std::fs::read_to_string(context.pack.prediction_prompt_path(stage)).ok()?;
+    let body = source
+        .lines()
+        .skip_while(|line| line.trim_start().starts_with('#') || line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    (!body.is_empty()).then_some(body)
+}
+
 pub fn load_help(context: &ProjectContext) -> Result<Vec<HelpLevel>> {
     let stage = context
         .pack

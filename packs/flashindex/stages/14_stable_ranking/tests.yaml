@@ -1,5 +1,9 @@
 tests:
   - name: single token orders by occurrences then path
+    diagnosis:
+      priority: 10
+      headline: Occurrence and path tie-breaks do not fully order results
+      contract: Complete the ordering with total matching occurrences descending, then relative path ascending.
     fixture: rank_project
     command: ["rank", "{fixture_path}", "alpha"]
     expect:
@@ -11,6 +15,10 @@ tests:
         4. src/two_lo.rs (matched 1/1 tokens, 1 occurrences)
 
   - name: exact ties break by ascending path
+    diagnosis:
+      priority: 15
+      headline: Exact score ties are not broken by ascending path
+      contract: Exact score ties break by ascending portable path.
     fixture: tie_project
     command: ["rank", "{fixture_path}", "gamma"]
     expect:
@@ -20,6 +28,10 @@ tests:
         2. src/tie_b.rs (matched 1/1 tokens, 1 occurrences)
 
   - name: ranked output is limited to top ten
+    diagnosis:
+      priority: 20
+      headline: More than ten results are printed
+      contract: Print only the first ten results after applying the complete order.
     fixture: top_twelve
     command: ["rank", "{fixture_path}", "token"]
     expect:
@@ -32,6 +44,10 @@ tests:
         - "file12.rs"
 
   - name: limit applies after the complete sort
+    diagnosis:
+      priority: 22
+      headline: The result limit is applied before the final sort
+      contract: Apply the ten-result limit only after the complete coverage, occurrence, and path ordering is known.
     fixture: late_winner
     command: ["rank", "{fixture_path}", "token"]
     expect:
@@ -49,6 +65,10 @@ tests:
         10. src/file09.rs (matched 1/1 tokens, 1 occurrences)
 
   - name: exactly ten candidates all print with consecutive ranks
+    diagnosis:
+      priority: 42
+      headline: Rank numbers are inconsistent when exactly ten results match
+      contract: Number the printed rows from 1 through at most 10, assigned only after the final order is known.
     fixture: exactly_ten
     command: ["rank", "{fixture_path}", "token"]
     expect:

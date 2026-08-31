@@ -1,5 +1,9 @@
 tests:
   - name: ranks by coverage then density
+    diagnosis:
+      priority: 10
+      headline: Multi-token queries are not ranked by coverage and occurrences
+      contract: Score coverage first, as the number of distinct query tokens matched, then total occurrences, for every file containing at least one query token.
     fixture: rank_project
     command: ["rank", "{fixture_path}", "alpha beta gamma"]
     expect:
@@ -11,6 +15,10 @@ tests:
         4. src/one.rs (matched 1/3 tokens, 1 occurrences)
 
   - name: token absent from every file prints nothing
+    diagnosis:
+      priority: 55
+      headline: A token absent from every file still produces output
+      contract: A token absent from every file produces empty stdout and status 0.
     fixture: rank_project
     command: ["rank", "{fixture_path}", "nonexistent_token"]
     expect:
@@ -18,6 +26,10 @@ tests:
       stdout_exact: ""
 
   - name: empty query is an error
+    diagnosis:
+      priority: 60
+      headline: An empty query does not raise an error
+      contract: Reject a query containing no tokens.
     fixture: rank_project
     command: ["rank", "{fixture_path}", ""]
     expect:
@@ -27,6 +39,10 @@ tests:
         - "non-empty query"
 
   - name: repeated query tokens count once
+    diagnosis:
+      priority: 25
+      headline: Repeated query tokens inflate the coverage denominator
+      contract: Repeated query tokens count once in the coverage denominator.
     fixture: rank_project
     command: ["rank", "{fixture_path}", "alpha alpha"]
     expect:
@@ -35,6 +51,10 @@ tests:
         - "matched 1/1 tokens"
 
   - name: ranking uses exact case sensitive tokens
+    diagnosis:
+      priority: 50
+      headline: Ranking treats differing letter case as a match
+      contract: Matching remains exact and case-sensitive.
     fixture: rank_project
     command: ["rank", "{fixture_path}", "Alpha"]
     expect:
@@ -42,6 +62,10 @@ tests:
       stdout_exact: ""
 
   - name: whitespace only query is rejected
+    diagnosis:
+      priority: 62
+      headline: A whitespace-only query is accepted instead of rejected
+      contract: A query containing only whitespace is an error.
     fixture: rank_project
     command: ["rank", "{fixture_path}", "   "]
     expect:
@@ -51,6 +75,10 @@ tests:
         - "non-empty query"
 
   - name: highest occurrence count wins a duplicate token query
+    diagnosis:
+      priority: 27
+      headline: Occurrence counts miscount a duplicated query token
+      contract: Split the query into distinct, case-sensitive query tokens, then total the occurrences of those tokens in the file.
     fixture: rank_project
     command: ["rank", "{fixture_path}", "alpha alpha"]
     expect:
@@ -61,6 +89,10 @@ tests:
         - "1/2 tokens"
 
   - name: files without any query token are absent
+    diagnosis:
+      priority: 32
+      headline: Files with no matching query token appear in results
+      contract: A file matching no query token is absent from the result set.
     fixture: rank_project
     command: ["rank", "{fixture_path}", "gamma"]
     expect:

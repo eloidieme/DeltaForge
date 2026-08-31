@@ -1,5 +1,9 @@
 tests:
   - name: prints benchmark json
+    diagnosis:
+      priority: 10
+      headline: No JSON object is printed for a benchmark run
+      contract: Scan the searchable corpus and print exactly one valid JSON object followed by a trailing newline.
     fixture: bench_project
     command: ["bench", "{fixture_path}"]
     expect:
@@ -11,6 +15,10 @@ tests:
         - "\\{.*\\}"
 
   - name: benchmark json includes source file count
+    diagnosis:
+      priority: 20
+      headline: The reported file count does not match the corpus
+      contract: The files field must equal the number of selected source-like files.
     fixture: bench_project
     command: ["bench", "{fixture_path}"]
     expect:
@@ -19,6 +27,10 @@ tests:
         - "\"files\":2"
 
   - name: benchmark ignores assets
+    diagnosis:
+      priority: 30
+      headline: Non-source assets are counted in the file total
+      contract: Non-source assets must not contribute to the files count.
     fixture: bench_project
     command: ["bench", "{fixture_path}"]
     expect:
@@ -27,6 +39,10 @@ tests:
         - "\"files\":3"
 
   - name: benchmark reports non negative integer runtime
+    diagnosis:
+      priority: 42
+      headline: The runtime field is not a plain non-negative integer
+      contract: The runtime_ms field is the elapsed scan duration measured with a monotonic clock, and it is always a non-negative integer.
     fixture: bench_project
     command: ["bench", "{fixture_path}"]
     expect:
@@ -35,6 +51,10 @@ tests:
         - '^\{"files":2,"runtime_ms":[0-9]+\}\n$'
 
   - name: empty corpus reports zero files
+    diagnosis:
+      priority: 55
+      headline: An empty corpus does not report zero files
+      contract: An empty corpus must report the files count as zero.
     fixture: empty_bench
     command: ["bench", "{fixture_path}"]
     expect:
@@ -43,6 +63,10 @@ tests:
         - '^\{"files":0,"runtime_ms":[0-9]+\}\n$'
 
   - name: unreadable root fails
+    diagnosis:
+      priority: 65
+      headline: An unreadable root does not fail the benchmark
+      contract: An invalid or unreadable root must exit non-zero without printing a success-shaped object.
     fixture: bench_project
     command: ["bench", "{fixture_path}/missing"]
     expect:

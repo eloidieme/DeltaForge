@@ -1,5 +1,9 @@
 tests:
   - name: tokenizes simple Rust identifiers
+    diagnosis:
+      priority: 10
+      headline: Basic identifiers are not recognized as tokens
+      contract: Recognize the longest runs that begin with an ASCII letter or _ and continue through ASCII letters, digits, or _.
     fixture: simple_tokens
     command: ["tokenize", "{fixture_path}"]
     expect:
@@ -11,6 +15,10 @@ tests:
         - "src/main.rs:2:20 value_32"
 
   - name: ignores punctuation while preserving underscores
+    diagnosis:
+      priority: 30
+      headline: Punctuation characters appear in the token stream
+      contract: Punctuation separates tokens and is never emitted.
     fixture: punctuation_project
     command: ["tokenize", "{fixture_path}"]
     expect:
@@ -25,6 +33,10 @@ tests:
         - "("
 
   - name: tokenizes nested source files in stable relative paths
+    diagnosis:
+      priority: 20
+      headline: Tokenization stops before nested source files
+      contract: Nested files and occurrences retain stable path and source order.
     fixture: nested_sources
     command: ["tokenize", "{fixture_path}"]
     expect:
@@ -34,6 +46,10 @@ tests:
         - "src/nested/mod.rs:1:5 beta_token"
 
   - name: skips leading digits and preserves actual columns
+    diagnosis:
+      priority: 42
+      headline: A token's column does not point to its first byte
+      contract: In 123abc, only abc is emitted, at the column where a appears.
     fixture: edge_tokens
     command: ["tokenize", "{fixture_path}"]
     expect:
@@ -43,6 +59,10 @@ tests:
         src/digits.rs:1:11 _beta2
 
   - name: empty source file produces no occurrences
+    diagnosis:
+      priority: 60
+      headline: An empty source file produces spurious output
+      contract: An empty source file produces no occurrences.
     fixture: empty_source
     command: ["tokenize", "{fixture_path}"]
     expect:
@@ -50,6 +70,10 @@ tests:
       stdout_exact: ""
 
   - name: last token is emitted without a trailing newline
+    diagnosis:
+      priority: 24
+      headline: The last token in a file goes unreported
+      contract: Every identifier-like token in a file must be recognized, including the final token when the file has no trailing newline.
     fixture: no_trailing_newline
     command: ["tokenize", "{fixture_path}"]
     expect:
@@ -59,6 +83,10 @@ tests:
         src/tail.rs:1:7 beta
 
   - name: columns count bytes and lone underscore is a token
+    diagnosis:
+      priority: 26
+      headline: Byte columns and lone underscore tokens are mishandled
+      contract: Columns count bytes rather than displayed glyphs, and a lone _ still begins a valid token.
     fixture: byte_columns
     command: ["tokenize", "{fixture_path}"]
     expect:
@@ -69,6 +97,10 @@ tests:
         src/unicode.rs:2:1 _
 
   - name: carriage return line endings keep one based positions
+    diagnosis:
+      priority: 55
+      headline: Windows line endings shift reported line numbers
+      contract: Use one-based line and byte-column positions for every recognized token.
     fixture: crlf_lines
     command: ["tokenize", "{fixture_path}"]
     expect:
@@ -79,6 +111,10 @@ tests:
         - "src/win.rs:2:6 gamma"
 
   - name: files are processed in sorted portable path order
+    diagnosis:
+      priority: 40
+      headline: Multiple files are tokenized out of sorted order
+      contract: Process files in sorted portable-path order, then print occurrences in their source order within each file.
     fixture: two_files_order
     command: ["tokenize", "{fixture_path}"]
     expect:

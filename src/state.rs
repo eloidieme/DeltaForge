@@ -35,8 +35,15 @@ pub struct ProjectState {
     pub hint_state: BTreeMap<String, usize>,
     #[serde(default)]
     pub gate_results: BTreeMap<String, GateRecord>,
+    /// Per-stage performance prediction, recorded before the stage's first
+    /// benchmark run. Present and `skipped` when the learner declined.
     #[serde(default)]
-    pub attempt_history: Vec<TestAttempt>,
+    pub predictions: BTreeMap<String, LearnerNote>,
+    /// Per-stage reflection, offered once measurements exist.
+    #[serde(default)]
+    pub reflections: BTreeMap<String, LearnerNote>,
+    #[serde(default)]
+    pub attempt_history: Vec<JobAttempt>,
     #[serde(default)]
     pub active_job: Option<ActiveJob>,
     #[serde(default)]
@@ -138,10 +145,45 @@ fn default_diagnosis_priority() -> u32 {
     1_000
 }
 
+/// What a run lease is being held for. Tests and benchmarks share the lease,
+/// the journal, the cancellation path, and the attempt history, so every
+/// record carries the kind that produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    #[default]
+    Tests,
+    Benchmarks,
+}
+
+impl JobKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tests => "checks",
+            Self::Benchmarks => "benchmarks",
+        }
+    }
+}
+
+/// A learner-authored note attached to one stage. `skipped` records that the
+/// learner was offered the prompt and declined, which is different from never
+/// having been asked.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LearnerNote {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub skipped: bool,
+    pub recorded_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActiveJob {
     pub id: String,
+    #[serde(default)]
+    pub kind: JobKind,
     pub stage_ids: Vec<String>,
     pub started_at: String,
 }
@@ -158,8 +200,10 @@ pub enum AttemptStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TestAttempt {
+pub struct JobAttempt {
     pub job_id: String,
+    #[serde(default)]
+    pub kind: JobKind,
     pub stage_ids: Vec<String>,
     pub started_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -214,6 +258,8 @@ impl ProjectState {
             last_test_runs: BTreeMap::new(),
             hint_state: BTreeMap::new(),
             gate_results: BTreeMap::new(),
+            predictions: BTreeMap::new(),
+            reflections: BTreeMap::new(),
             attempt_history: Vec::new(),
             active_job: None,
             observed_project_digest: String::new(),
@@ -364,7 +410,7 @@ impl ProjectState {
         Ok(())
     }
 
-    pub fn start_test_job(&mut self, stage_ids: Vec<String>) -> Result<String> {
+    pub fn start_job(&mut self, kind: JobKind, stage_ids: Vec<String>) -> Result<String> {
         let now = current_timestamp()?;
         let job_id = format!(
             "{}-{}",
@@ -373,11 +419,13 @@ impl ProjectState {
         );
         self.active_job = Some(ActiveJob {
             id: job_id.clone(),
+            kind,
             stage_ids: stage_ids.clone(),
             started_at: now.clone(),
         });
-        self.attempt_history.push(TestAttempt {
+        self.attempt_history.push(JobAttempt {
             job_id: job_id.clone(),
+            kind,
             stage_ids,
             started_at: now.clone(),
             finished_at: None,
@@ -395,7 +443,7 @@ impl ProjectState {
         Ok(job_id)
     }
 
-    pub fn finish_test_job(
+    pub fn finish_job(
         &mut self,
         job_id: &str,
         status: AttemptStatus,
@@ -408,7 +456,7 @@ impl ProjectState {
             .attempt_history
             .iter_mut()
             .find(|attempt| attempt.job_id == job_id)
-            .with_context(|| format!("test job {job_id} is missing from attempt history"))?;
+            .with_context(|| format!("job {job_id} is missing from attempt history"))?;
         attempt.finished_at = Some(now.clone());
         attempt.status = status;
         attempt.passed = passed;
@@ -453,8 +501,9 @@ impl ProjectState {
             attempt.status = AttemptStatus::Interrupted;
             attempt.error = Some("DeltaForge stopped before this run finished".to_string());
         } else {
-            self.attempt_history.push(TestAttempt {
+            self.attempt_history.push(JobAttempt {
                 job_id: active.id,
+                kind: active.kind,
                 stage_ids: active.stage_ids,
                 started_at: active.started_at,
                 finished_at: Some(now.clone()),
@@ -495,6 +544,30 @@ impl ProjectState {
         Ok(true)
     }
 
+    /// Record (or replace) the learner's prediction for one stage.
+    pub fn record_prediction(&mut self, stage_id: &str, text: String, skipped: bool) -> Result<()> {
+        let note = LearnerNote {
+            text,
+            skipped,
+            recorded_at: current_timestamp()?,
+        };
+        self.predictions.insert(stage_id.to_string(), note);
+        self.updated_at = current_timestamp()?;
+        Ok(())
+    }
+
+    /// Record (or replace) the learner's reflection for one stage.
+    pub fn record_reflection(&mut self, stage_id: &str, text: String, skipped: bool) -> Result<()> {
+        let note = LearnerNote {
+            text,
+            skipped,
+            recorded_at: current_timestamp()?,
+        };
+        self.reflections.insert(stage_id.to_string(), note);
+        self.updated_at = current_timestamp()?;
+        Ok(())
+    }
+
     pub fn touch(&mut self) -> Result<()> {
         self.updated_at = current_timestamp()?;
         Ok(())
@@ -502,7 +575,7 @@ impl ProjectState {
 }
 
 fn current_state_schema_version() -> u32 {
-    1
+    2
 }
 
 fn current_timestamp() -> Result<String> {
@@ -595,7 +668,7 @@ mod tests {
         )
         .unwrap();
         let job_id = state
-            .start_test_job(vec!["01_scan_files".to_string()])
+            .start_job(JobKind::Tests, vec!["01_scan_files".to_string()])
             .unwrap();
 
         assert!(state.recover_interrupted_job().unwrap());
@@ -664,10 +737,10 @@ mod tests {
 
         for _ in 0..25 {
             let job_id = state
-                .start_test_job(vec!["01_scan_files".to_string()])
+                .start_job(JobKind::Tests, vec!["01_scan_files".to_string()])
                 .unwrap();
             state
-                .finish_test_job(&job_id, AttemptStatus::Failed, 1, 1, None)
+                .finish_job(&job_id, AttemptStatus::Failed, 1, 1, None)
                 .unwrap();
         }
 

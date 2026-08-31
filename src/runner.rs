@@ -313,30 +313,6 @@ pub fn run_stage_tests(
         });
         let result = run_test_case(context, stage, &language.run, test, args)?;
         let failed = !result.passed;
-        if false {
-            if result.passed {
-                println!("✓ {}", test.name);
-            } else {
-                println!("✗ {}", test.name);
-                if false {
-                    for failure in &result.failures {
-                        println!("  {failure}");
-                    }
-                }
-                if false {
-                    print_actual_output(&result);
-                }
-            }
-            if false {
-                if !result.stdout.is_empty() {
-                    println!("stdout:\n{}", result.stdout);
-                }
-                if !result.stderr.is_empty() {
-                    println!("stderr:\n{}", result.stderr);
-                }
-                println!();
-            }
-        }
         results.push(result.clone());
         sink.emit(if result.passed {
             RunEvent::TestPassed {
@@ -368,49 +344,6 @@ pub fn run_stage_tests(
             && passed == total_defined
             && failed == 0,
     })
-}
-
-const ACTUAL_OUTPUT_MAX_LINES: usize = 30;
-const ACTUAL_OUTPUT_MAX_CHARS: usize = 2000;
-
-fn print_actual_output(result: &TestResult) {
-    print_actual_stream("stdout", &result.stdout);
-    if !result.stderr.trim().is_empty() {
-        print_actual_stream("stderr", &result.stderr);
-    }
-}
-
-fn print_actual_stream(label: &str, output: &str) {
-    if output.is_empty() {
-        println!("  actual {label}: (empty)");
-        return;
-    }
-
-    let (body, truncated) = truncate_output(output);
-    println!("  actual {label} (first {ACTUAL_OUTPUT_MAX_LINES} lines):");
-    for line in body.lines() {
-        println!("    {line}");
-    }
-    if truncated {
-        println!("    … truncated, run with --verbose");
-    }
-}
-
-fn truncate_output(output: &str) -> (String, bool) {
-    let mut truncated = false;
-    let mut body: String = output
-        .lines()
-        .take(ACTUAL_OUTPUT_MAX_LINES)
-        .collect::<Vec<_>>()
-        .join("\n");
-    if output.lines().count() > ACTUAL_OUTPUT_MAX_LINES {
-        truncated = true;
-    }
-    if body.chars().count() > ACTUAL_OUTPUT_MAX_CHARS {
-        body = body.chars().take(ACTUAL_OUTPUT_MAX_CHARS).collect();
-        truncated = true;
-    }
-    (body, truncated)
 }
 
 fn run_build(

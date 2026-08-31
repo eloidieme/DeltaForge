@@ -1,5 +1,9 @@
 tests:
   - name: includes source-like files
+    diagnosis:
+      priority: 10
+      headline: Allowed source files are missing from scan output
+      contract: Only print regular files whose extension is one of .c, .cpp, .h, .hpp, .rs, .py, .md, .txt, or .cmake.
     fixture: mixed_files
     command: ["scan", "{fixture_path}"]
     expect:
@@ -14,6 +18,10 @@ tests:
         - "src/search.cpp"
 
   - name: excludes unrelated assets
+    diagnosis:
+      priority: 30
+      headline: Non-source assets leak into the searchable corpus
+      contract: Exclude every other extension, including .bin, .dat, and .csv, even when a file happens to contain readable characters.
     fixture: mixed_files
     command: ["scan", "{fixture_path}"]
     expect:
@@ -24,6 +32,10 @@ tests:
         - "src/generated.bin"
 
   - name: ignores binary-looking files
+    diagnosis:
+      priority: 32
+      headline: Binary-looking files are treated as part of the corpus
+      contract: A readable file with a disallowed extension remains excluded because this stage examines names, not contents.
     fixture: binaryish_files
     command: ["scan", "{fixture_path}"]
     expect:
@@ -35,6 +47,10 @@ tests:
         - "data/archive.dat"
 
   - name: source files inside ignored directories stay excluded
+    diagnosis:
+      priority: 34
+      headline: A source file inside an ignored directory is not excluded
+      contract: A source file inside .git, target, build, or node_modules remains excluded because the scanner never enters that directory.
     fixture: mixed_files
     command: ["scan", "{fixture_path}"]
     expect:
@@ -43,6 +59,10 @@ tests:
         - "target/generated.rs"
 
   - name: accepts every allowed extension
+    diagnosis:
+      priority: 20
+      headline: One or more allowed extensions are missing from the corpus
+      contract: .cmake, .md, and .txt files are accepted alongside programming-language files.
     fixture: allowed_extensions
     command: ["scan", "{fixture_path}"]
     expect:
@@ -59,6 +79,10 @@ tests:
         i.cmake
 
   - name: extension matching is case sensitive
+    diagnosis:
+      priority: 50
+      headline: Extension matching ignores letter case
+      contract: The corpus extension list matches case-sensitively, so .RS and .MD are not equivalent to .rs and .md.
     fixture: tricky_names
     command: ["scan", "{fixture_path}"]
     expect:
@@ -70,6 +94,10 @@ tests:
         - "readme.MD"
 
   - name: names without an allowed suffix are excluded
+    diagnosis:
+      priority: 45
+      headline: A filename is matched by substring instead of exact suffix
+      contract: Exclude every other extension; a filename without one of the allowed extensions must not be printed.
     fixture: tricky_names
     command: ["scan", "{fixture_path}"]
     expect:

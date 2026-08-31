@@ -113,6 +113,7 @@ pub fn run_command_measured(
     timeout_ms: u64,
     stdin: Option<&str>,
     envs: &BTreeMap<String, String>,
+    cancel_path: Option<&Path>,
 ) -> Result<MeasuredOutput> {
     run_command_impl(
         command,
@@ -122,7 +123,7 @@ pub fn run_command_measured(
             stdin,
             envs,
             measure: true,
-            cancel_path: None,
+            cancel_path,
             output_sink: None,
         },
     )
@@ -441,6 +442,7 @@ mod tests {
             5_000,
             None,
             &BTreeMap::new(),
+            None,
         )
         .unwrap();
         assert!(measured.output.status.success());
@@ -464,6 +466,7 @@ mod tests {
             10_000,
             None,
             &BTreeMap::new(),
+            None,
         )
         .unwrap();
         assert!(measured.output.status.success());

@@ -65,7 +65,7 @@ Only the way the work is scheduled may differ.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and repeated runs across several valid thread counts remain byte-identical.
+Every check for this stage passes and repeated runs across several valid thread counts remain byte-identical.
 
 ## Non-goals
 

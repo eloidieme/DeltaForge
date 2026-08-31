@@ -222,7 +222,7 @@ fn starter_project_initializes_and_fails_current_stage() {
     assert!(state.contains(r#""project": "flashindex""#));
     assert!(state.contains(r#""current_stage": "01_scan_files""#));
     let state_json: serde_json::Value = serde_json::from_str(&state).unwrap();
-    assert_eq!(state_json["schema_version"], 1);
+    assert_eq!(state_json["schema_version"], 2);
     let created_at = state_json["created_at"].as_str().unwrap();
     assert!(!created_at.starts_with("unix:"));
     assert!(created_at.ends_with('Z'));
@@ -1078,7 +1078,7 @@ performance_gates:
     ));
     let blocked = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
     assert_failure(&blocked);
-    assert_stderr_contains(&blocked, "Run: deltaforge bench");
+    assert_stderr_contains(&blocked, "has not been measured against the current source");
 
     let bench = run_deltaforge(
         [
@@ -1153,8 +1153,8 @@ fn failing_performance_gate_blocks_with_advice_and_enforcement_can_be_skipped() 
 
     let blocked = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
     assert_failure(&blocked);
-    assert_stderr_contains(&blocked, "performance gates are not passing");
-    assert_stderr_contains(&blocked, "Run: deltaforge bench");
+    assert_stderr_contains(&blocked, "performance target");
+    assert_stderr_contains(&blocked, "is not met yet");
 
     fs::write(
         project.join(".deltaforge/config.toml"),

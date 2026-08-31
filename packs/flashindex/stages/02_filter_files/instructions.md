@@ -68,7 +68,7 @@ The PNG and binary-data files still exist. They are absent only because they do 
 
 ## Success criteria
 
-All `deltaforge test` cases pass and repeated scans of the same tree produce the same selected corpus.
+Every check for this stage passes and repeated scans of the same tree produce the same selected corpus.
 
 ## Non-goals
 

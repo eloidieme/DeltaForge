@@ -1,5 +1,9 @@
 tests:
   - name: single thread matches the canonical index
+    diagnosis:
+      priority: 10
+      headline: Threaded indexing does not match the canonical single-run index
+      contract: For every valid thread count, stdout must be byte-identical to flashindex index for the same corpus.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "1"]
     expect:
@@ -15,6 +19,10 @@ tests:
         struct lib/core.rs
 
   - name: four threads produce byte-identical output
+    diagnosis:
+      priority: 22
+      headline: Four worker threads produce non-identical index output
+      contract: The observable requirement is that scheduling never changes the bytes.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "4"]
     expect:
@@ -30,6 +38,10 @@ tests:
         struct lib/core.rs
 
   - name: more threads than files still indexes everything
+    diagnosis:
+      priority: 25
+      headline: Excess worker threads leave some files unindexed
+      contract: More workers than files still indexes every file exactly once.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "16"]
     expect:
@@ -39,6 +51,10 @@ tests:
         - "struct lib/core.rs"
 
   - name: zero threads is rejected
+    diagnosis:
+      priority: 60
+      headline: A zero thread count is accepted instead of rejected
+      contract: A worker count of N must be a positive integer, and zero describes no possible workforce.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "0"]
     expect:
@@ -48,6 +64,10 @@ tests:
         - "positive integer"
 
   - name: non-numeric thread count is rejected
+    diagnosis:
+      priority: 62
+      headline: A non-numeric thread count is accepted instead of rejected
+      contract: Reject a non-numeric worker count with a non-zero exit and an error containing positive integer.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "abc"]
     expect:
@@ -57,6 +77,10 @@ tests:
         - "positive integer"
 
   - name: negative thread count is rejected
+    diagnosis:
+      priority: 64
+      headline: A negative thread count is accepted instead of rejected
+      contract: Reject a negative worker count with a non-zero exit and an error containing positive integer.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "-1"]
     expect:
@@ -66,6 +90,10 @@ tests:
         - "positive integer"
 
   - name: two threads produce byte-identical output
+    diagnosis:
+      priority: 21
+      headline: Two worker threads produce non-identical index output
+      contract: Several workers finish in unpredictable order without changing output order.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "2"]
     expect:

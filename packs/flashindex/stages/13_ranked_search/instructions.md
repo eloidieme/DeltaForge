@@ -79,7 +79,7 @@ Coverage decides the order before occurrence count is considered.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and each displayed score can be reproduced from token occurrences.
+Every check for this stage passes and each displayed score can be reproduced from token occurrences.
 
 ## Non-goals
 

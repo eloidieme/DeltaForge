@@ -1,5 +1,9 @@
 tests:
   - name: one thread preserves canonical output
+    diagnosis:
+      priority: 10
+      headline: Single-threaded output no longer matches the canonical index
+      contract: Keep the threaded index command and byte-identical output for every thread count.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "1"]
     expect:
@@ -15,6 +19,10 @@ tests:
         struct lib/core.rs
 
   - name: eight threads preserve canonical output
+    diagnosis:
+      priority: 24
+      headline: Eight-thread runs diverge from the canonical index
+      contract: All measured thread counts produce the same canonical bytes.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "8"]
     expect:
@@ -30,6 +38,10 @@ tests:
         struct lib/core.rs
 
   - name: two threads preserve canonical output
+    diagnosis:
+      priority: 20
+      headline: Two-thread runs diverge from the canonical index
+      contract: All measured thread counts produce the same canonical bytes.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "2"]
     expect:
@@ -45,6 +57,10 @@ tests:
         struct lib/core.rs
 
   - name: four threads preserve canonical output
+    diagnosis:
+      priority: 22
+      headline: Four-thread runs diverge from the canonical index
+      contract: All measured thread counts produce the same canonical bytes.
     fixture: parallel_project
     command: ["index", "{fixture_path}", "--threads", "4"]
     expect:

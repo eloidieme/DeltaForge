@@ -28,13 +28,7 @@ Correctness remains the first gate. A fast index with missing or reordered posti
 
 Keep the threaded `index` command and byte-identical output for every thread count.
 
-Run:
-
-```console
-deltaforge bench
-```
-
-The bundled matrix measures `--threads 1`, `2`, `4`, and `8`. The derived `speedup_1_to_8` must be at least `1.5x` for the supplied benchmark corpus before `deltaforge next` can advance, unless performance-gate enforcement has been explicitly disabled in project configuration.
+Measuring runs the same indexing workload across a matrix of thread counts and reports the speedup between the lowest and highest. The bundled matrix measures `--threads 1`, `2`, `4`, and `8`. The derived `speedup_1_to_8` must be at least `1.5x` for the supplied benchmark corpus before this step can be marked complete, unless performance-gate enforcement has been explicitly disabled in project configuration.
 
 ## Example
 
@@ -59,7 +53,7 @@ Your numbers will differ. The relationship between the measurements, not these s
 
 ## Success criteria
 
-All `deltaforge test` cases pass, `deltaforge bench` completes the full matrix, and the real `speedup >= 1.5` performance gate passes.
+Every check for this stage passes, the benchmark completes the full matrix, and the real `speedup >= 1.5` performance gate passes.
 
 Afterward, record where time remains at eight threads: file discovery, tokenization, merging, sorting, output, or something else. The observation is more valuable than a claim that threads are always faster.
 

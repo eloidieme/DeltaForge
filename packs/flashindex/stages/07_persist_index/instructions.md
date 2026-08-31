@@ -53,7 +53,7 @@ After the command succeeds, `.flashindex/project.idx` is a regular file containi
 
 ## Success criteria
 
-All `deltaforge test` cases pass, a non-empty corpus produces token records, and rebuilding replaces rather than extends the previous file.
+Every check for this stage passes, a non-empty corpus produces token records, and rebuilding replaces rather than extends the previous file.
 
 ## Non-goals
 

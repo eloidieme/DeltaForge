@@ -1,5 +1,9 @@
 tests:
   - name: query reads persisted index
+    diagnosis:
+      priority: 10
+      headline: Querying a persisted index returns no results
+      contract: Read the tab-separated UTF-8 records produced by index --out and match the complete token field exactly.
     fixture: persisted_query
     command: ["query", "{fixture_path}/index.fi", "durable_token"]
     expect:
@@ -8,6 +12,10 @@ tests:
         src/main.rs
 
   - name: missing persisted token is empty success
+    diagnosis:
+      priority: 55
+      headline: A missing token query does not succeed cleanly
+      contract: A missing token is an empty successful result.
     fixture: persisted_query
     command: ["query", "{fixture_path}/index.fi", "absent_token"]
     expect:
@@ -15,6 +23,10 @@ tests:
       stdout_exact: ""
 
   - name: query returns sorted deduplicated paths
+    diagnosis:
+      priority: 42
+      headline: Returned paths are unsorted or contain duplicates
+      contract: Returned paths are sorted and contain no duplicates.
     fixture: persisted_query
     command: ["query", "{fixture_path}/index.fi", "shared_token"]
     expect:
@@ -24,6 +36,10 @@ tests:
         src/b.rs
 
   - name: unreadable index is an error
+    diagnosis:
+      priority: 65
+      headline: An unreadable index file does not raise an error
+      contract: An unreadable index file must exit non-zero.
     fixture: persisted_query
     command: ["query", "{fixture_path}/missing.fi", "shared_token"]
     expect:
@@ -31,6 +47,10 @@ tests:
       stdout_exact: ""
 
   - name: query matching is exact and case sensitive
+    diagnosis:
+      priority: 50
+      headline: Query matching ignores letter case
+      contract: Match the complete token field exactly and case-sensitively.
     fixture: persisted_query
     command: ["query", "{fixture_path}/index.fi", "DURABLE"]
     expect:
@@ -38,6 +58,10 @@ tests:
       stdout_exact: ""
 
   - name: token prefix does not match a longer stored token
+    diagnosis:
+      priority: 32
+      headline: A query matches the prefix of a longer stored token
+      contract: Match the complete token field exactly, so a prefix of a longer token is not a match.
     fixture: persisted_query
     command: ["query", "{fixture_path}/index.fi", "durable"]
     expect:
@@ -45,6 +69,10 @@ tests:
       stdout_exact: ""
 
   - name: token suffix does not match a longer stored token
+    diagnosis:
+      priority: 34
+      headline: A query matches the suffix of a longer stored token
+      contract: Match the complete token field exactly, so a suffix of a longer token is not a match.
     fixture: persisted_query
     command: ["query", "{fixture_path}/index.fi", "token"]
     expect:

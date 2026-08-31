@@ -26,7 +26,8 @@ pub struct ProjectContext {
     pub pack: LoadedPack,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GateStatus {
     Passed,
     NotYet,
@@ -226,10 +227,10 @@ impl ProjectContext {
         match self.gate_status(stage_id)? {
             Some(GateStatus::Passed) => Ok(()),
             Some(GateStatus::NotYet) => bail!(
-                "performance gates are not passing for stage {stage_id}\nRun: deltaforge bench"
+                "the performance target for stage {stage_id} is not met yet; measure again after changing the implementation"
             ),
             Some(GateStatus::NotMeasured) => bail!(
-                "performance gates have not been measured for stage {stage_id}\nRun: deltaforge bench"
+                "the performance target for stage {stage_id} has not been measured against the current source; run the benchmarks"
             ),
             None => Ok(()),
         }

@@ -151,6 +151,29 @@ struct RerunBody {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct StartBenchmarkBody {
+    /// Save the measurement to the project's benchmark history. The browser
+    /// always saves: a measurement the learner cannot compare later is of no
+    /// use to them.
+    #[serde(default = "default_true")]
+    save: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LearnerNoteBody {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    skipped: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EmptyBody {}
 
 #[derive(Debug, Clone, Copy)]
@@ -571,6 +594,9 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
             | "/api/v1/runs"
             | "/api/v1/runs/rerun"
             | "/api/v1/runs/cancel"
+            | "/api/v1/benchmarks"
+            | "/api/v1/predictions"
+            | "/api/v1/reflections"
             | "/api/v1/hints"
             | "/api/v1/capabilities/next"
             | "/api/v1/project/repin-pack"
@@ -736,6 +762,76 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                 options,
                 Some(body.test),
             )
+        }
+        ("POST", "/api/v1/benchmarks") => {
+            if !authorized_mutation(&request, shared) {
+                return respond(
+                    &mut stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"forbidden"}"#,
+                );
+            }
+            let body: StartBenchmarkBody = match parse_json_body(&request) {
+                Ok(body) => body,
+                Err(_) => {
+                    return respond(
+                        &mut stream,
+                        "400 Bad Request",
+                        "application/json",
+                        r#"{"error":"invalid_json"}"#,
+                    );
+                }
+            };
+            let (project_id, options) = project_request(shared, &request)?;
+            start_benchmark_run(
+                &mut stream,
+                Arc::clone(shared),
+                project_id,
+                options,
+                body.save,
+            )
+        }
+        ("POST", "/api/v1/predictions") | ("POST", "/api/v1/reflections") => {
+            if !authorized_mutation(&request, shared) {
+                return respond(
+                    &mut stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"forbidden"}"#,
+                );
+            }
+            let body: LearnerNoteBody = match parse_json_body(&request) {
+                Ok(body) => body,
+                Err(_) => {
+                    return respond(
+                        &mut stream,
+                        "400 Bad Request",
+                        "application/json",
+                        r#"{"error":"invalid_json"}"#,
+                    );
+                }
+            };
+            let (_, options) = project_request(shared, &request)?;
+            let recorded = if path == "/api/v1/predictions" {
+                application::record_prediction(&options, body.text, body.skipped)
+            } else {
+                application::record_reflection(&options, body.text, body.skipped)
+            };
+            match recorded {
+                Ok(state) => respond(
+                    &mut stream,
+                    "200 OK",
+                    "application/json",
+                    &serde_json::to_string(&state)?,
+                ),
+                Err(error) => respond(
+                    &mut stream,
+                    "409 Conflict",
+                    "application/json",
+                    &serde_json::json!({"error": format!("{error:#}")}).to_string(),
+                ),
+            }
         }
         ("POST", "/api/v1/runs/cancel") => {
             if !authorized_mutation(&request, shared) {
@@ -1033,6 +1129,72 @@ fn start_run(
         };
         let mut sink = application::NullEventSink;
         if let Err(error) = application::run_tests(&options, request, &mut sink)
+            && !format!("{error:#}").contains("already active")
+        {
+            let _ = application::publish_event(
+                &options,
+                &application::RunEvent::JobInterrupted {
+                    job_id: "pending".to_string(),
+                    reason: format!("{error:#}"),
+                },
+            );
+        }
+        worker
+            .run_starting
+            .lock()
+            .expect("workbench lock poisoned")
+            .remove(&project_id);
+        *worker
+            .last_activity
+            .lock()
+            .expect("workbench lock poisoned") = Instant::now();
+    });
+    respond(
+        stream,
+        "202 Accepted",
+        "application/json",
+        r#"{"status":"accepted"}"#,
+    )
+}
+
+/// Start a benchmark job on the same guard rails as a test run: one job per
+/// project at a time, run on a worker thread, progress delivered through the
+/// project's event stream rather than this response.
+fn start_benchmark_run(
+    stream: &mut TcpStream,
+    shared: Arc<Shared>,
+    project_id: String,
+    options: GlobalOptions,
+    save: bool,
+) -> Result<()> {
+    let mut starting = shared.run_starting.lock().expect("workbench lock poisoned");
+    if shared.shutting_down.load(Ordering::SeqCst)
+        || starting.contains(&project_id)
+        || application::run_is_active(&options)?
+    {
+        return respond(
+            stream,
+            "409 Conflict",
+            "application/json",
+            r#"{"error":"run_already_active"}"#,
+        );
+    }
+    starting.insert(project_id.clone());
+    drop(starting);
+
+    let worker = Arc::clone(&shared);
+    std::thread::spawn(move || {
+        let request = application::BenchmarkRunRequest {
+            stage: None,
+            all: false,
+            iterations: None,
+            warmup: None,
+            save,
+            compare: true,
+            trigger: application::RunTrigger::Workbench,
+        };
+        let mut sink = application::NullEventSink;
+        if let Err(error) = application::run_benchmarks(&options, request, &mut sink)
             && !format!("{error:#}").contains("already active")
         {
             let _ = application::publish_event(

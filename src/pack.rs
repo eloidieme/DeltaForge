@@ -254,6 +254,12 @@ impl LoadedPack {
         self.stage_dir(stage).join("design_prompt.md")
     }
 
+    /// Prompt shown before a stage's first benchmark run. Only stages that
+    /// declare benchmarks carry one.
+    pub fn prediction_prompt_path(&self, stage: &StageSpec) -> PathBuf {
+        self.stage_dir(stage).join("prediction.md")
+    }
+
     pub fn fixture_path(&self, stage: &StageSpec, fixture: &str) -> PathBuf {
         self.stage_dir(stage).join("fixtures").join(fixture)
     }

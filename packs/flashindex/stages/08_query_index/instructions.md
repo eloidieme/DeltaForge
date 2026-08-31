@@ -51,7 +51,7 @@ The command needs the index path and token; it does not need the original projec
 
 ## Success criteria
 
-All `deltaforge test` cases pass, and an index written in one invocation can be queried in another with the same postings.
+Every check for this stage passes, and an index written in one invocation can be queried in another with the same postings.
 
 ## Non-goals
 
