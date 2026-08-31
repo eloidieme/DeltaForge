@@ -56,28 +56,7 @@ fn home_directory() -> Result<PathBuf> {
         .context("could not locate the user home directory")
 }
 
-/// The directory tree a browser-chosen parent must stay inside. Normally the
-/// learner's home directory; `$DELTAFORGE_WORKSPACE` widens it to that
-/// workspace when it points outside home, so a scripted or containerised
-/// environment can still create projects.
-fn permitted_root() -> Result<Vec<PathBuf>> {
-    let mut roots = Vec::new();
-    if let Ok(home) = home_directory() {
-        roots.push(home);
-    }
-    if let Some(workspace) = env::var_os("DELTAFORGE_WORKSPACE") {
-        let workspace = PathBuf::from(workspace);
-        if !workspace.as_os_str().is_empty() {
-            roots.push(workspace);
-        }
-    }
-    if roots.is_empty() {
-        bail!("could not locate a directory DeltaForge may create projects in");
-    }
-    Ok(roots)
-}
-
-/// Validate a project name supplied by the browser. Returns the name unchanged
+/// Validate a project name supplied by the browser. Returns the trimmed name
 /// when it is acceptable.
 pub fn validate_name(name: &str) -> Result<&str> {
     let name = name.trim();
@@ -107,77 +86,120 @@ pub fn validate_name(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-/// Turn a browser-supplied parent directory and leaf name into the one path a
-/// project may be created at.
+/// Where DeltaForge is allowed to create a project.
 ///
-/// Every rejection below is deliberate:
-///
-/// - the leaf is a validated single component, so no request can traverse with
-///   `..` or an embedded separator;
-/// - the parent must already exist and canonicalize, which resolves symlinks
-///   *before* the containment check rather than after;
-/// - the canonical parent must lie inside the learner's home (or an explicitly
-///   configured workspace), so a request cannot reach system directories;
-/// - no path component may be hidden, keeping creation out of `~/.ssh`,
-///   `~/.config`, and every other dotted directory;
-/// - the parent must not itself be, or sit inside, a DeltaForge project, so a
-///   project can never be nested in another project's source tree;
-/// - the leaf must not already exist, so creation can never overwrite.
+/// Held as data rather than read from the environment at each use, so the
+/// rules can be exercised against a temporary tree instead of the developer's
+/// own home directory.
+#[derive(Debug, Clone)]
+pub struct CreationPolicy {
+    /// Used when the caller supplies no parent directory.
+    pub default_parent: PathBuf,
+    /// A supplied parent must resolve inside one of these.
+    pub permitted_roots: Vec<PathBuf>,
+}
+
+impl CreationPolicy {
+    /// The real policy: the learner's home directory, widened to include an
+    /// explicitly configured workspace so a scripted or containerised
+    /// environment can still create projects.
+    pub fn from_environment() -> Result<Self> {
+        let mut permitted_roots = Vec::new();
+        if let Ok(home) = home_directory() {
+            permitted_roots.push(home);
+        }
+        if let Some(workspace) = env::var_os("DELTAFORGE_WORKSPACE") {
+            let workspace = PathBuf::from(workspace);
+            if !workspace.as_os_str().is_empty() {
+                permitted_roots.push(workspace);
+            }
+        }
+        if permitted_roots.is_empty() {
+            bail!("could not locate a directory DeltaForge may create projects in");
+        }
+        Ok(Self {
+            default_parent: default_workspace()?,
+            permitted_roots,
+        })
+    }
+
+    /// Turn a browser-supplied parent directory and leaf name into the one
+    /// path a project may be created at.
+    ///
+    /// Every rejection below is deliberate:
+    ///
+    /// - the leaf is a validated single component, so no request can traverse
+    ///   with `..` or an embedded separator;
+    /// - the parent must already exist and canonicalize, which resolves
+    ///   symlinks *before* the containment check rather than after;
+    /// - the canonical parent must lie inside a permitted root, so a request
+    ///   cannot reach system directories;
+    /// - no path component below that root may be hidden, keeping creation out
+    ///   of `~/.ssh`, `~/.config`, and every other dotted directory;
+    /// - the parent must not itself be, or sit inside, a DeltaForge project, so
+    ///   a project can never be nested in another project's source tree;
+    /// - the leaf must not already exist, so creation never overwrites.
+    pub fn resolve_target(&self, parent: Option<&Path>, name: &str) -> Result<PathBuf> {
+        let name = validate_name(name)?;
+        let parent = match parent {
+            Some(parent) => parent.to_path_buf(),
+            None => {
+                fs::create_dir_all(&self.default_parent).with_context(|| {
+                    format!(
+                        "failed to create workspace directory {}",
+                        self.default_parent.display()
+                    )
+                })?;
+                self.default_parent.clone()
+            }
+        };
+        if !parent.is_absolute() {
+            bail!("the location must be an absolute path");
+        }
+        if !parent.is_dir() {
+            bail!("{} is not an existing directory", parent.display());
+        }
+        let parent = parent
+            .canonicalize()
+            .with_context(|| format!("failed to resolve {}", parent.display()))?;
+
+        let roots = self
+            .permitted_roots
+            .iter()
+            .filter_map(|root| root.canonicalize().ok())
+            .collect::<Vec<_>>();
+        if !roots.iter().any(|root| parent.starts_with(root)) {
+            bail!(
+                "DeltaForge only creates projects inside your home directory; {} is outside it",
+                parent.display()
+            );
+        }
+        for root in &roots {
+            if let Ok(relative) = parent.strip_prefix(root)
+                && let Some(hidden) = relative.components().find_map(hidden_component)
+            {
+                bail!("DeltaForge does not create projects inside the hidden directory {hidden}");
+            }
+        }
+        if let Some(existing) = enclosing_project(&parent) {
+            bail!(
+                "{} is inside the DeltaForge project at {}; choose a location outside it",
+                parent.display(),
+                existing.display()
+            );
+        }
+
+        let target = parent.join(name);
+        if target.exists() {
+            bail!("{} already exists", target.display());
+        }
+        Ok(target)
+    }
+}
+
+/// Resolve a creation target under the policy this machine is configured with.
 pub fn resolve_target(parent: Option<&Path>, name: &str) -> Result<PathBuf> {
-    let name = validate_name(name)?;
-    let parent = match parent {
-        Some(parent) => parent.to_path_buf(),
-        None => {
-            let workspace = default_workspace()?;
-            fs::create_dir_all(&workspace).with_context(|| {
-                format!(
-                    "failed to create workspace directory {}",
-                    workspace.display()
-                )
-            })?;
-            workspace
-        }
-    };
-    if !parent.is_absolute() {
-        bail!("the location must be an absolute path");
-    }
-    if !parent.is_dir() {
-        bail!("{} is not an existing directory", parent.display());
-    }
-    let parent = parent
-        .canonicalize()
-        .with_context(|| format!("failed to resolve {}", parent.display()))?;
-
-    let roots = permitted_root()?
-        .into_iter()
-        .filter_map(|root| root.canonicalize().ok())
-        .collect::<Vec<_>>();
-    if !roots.iter().any(|root| parent.starts_with(root)) {
-        bail!(
-            "DeltaForge only creates projects inside your home directory; {} is outside it",
-            parent.display()
-        );
-    }
-    for root in &roots {
-        if let Ok(relative) = parent.strip_prefix(root)
-            && let Some(hidden) = relative.components().find_map(hidden_component)
-        {
-            bail!("DeltaForge does not create projects inside the hidden directory {hidden}");
-        }
-    }
-    if let Some(existing) = enclosing_project(&parent) {
-        bail!(
-            "{} is inside the DeltaForge project at {}; choose a location outside it",
-            parent.display(),
-            existing.display()
-        );
-    }
-
-    let target = parent.join(name);
-    if target.exists() {
-        bail!("{} already exists", target.display());
-    }
-    Ok(target)
+    CreationPolicy::from_environment()?.resolve_target(parent, name)
 }
 
 fn hidden_component(component: Component<'_>) -> Option<String> {
@@ -453,6 +475,27 @@ fn initialize_git(target: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// A policy over a temporary tree, so the rules are exercised without
+    /// touching the developer's home directory and without depending on
+    /// process-wide environment variables.
+    fn sandbox(label: &str) -> (PathBuf, CreationPolicy) {
+        let root = std::env::temp_dir().join(format!(
+            "deltaforge-creation-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("projects")).unwrap();
+        let canonical = root.canonicalize().unwrap();
+        let policy = CreationPolicy {
+            default_parent: canonical.join("projects"),
+            permitted_roots: vec![canonical.clone()],
+        };
+        (canonical, policy)
+    }
+
     #[test]
     fn names_reject_traversal_separators_and_reserved_words() {
         assert!(validate_name("flashindex-rust").is_ok());
@@ -471,52 +514,77 @@ mod tests {
     }
 
     #[test]
-    fn locations_outside_home_and_inside_hidden_directories_are_refused() {
-        let home = home_directory().expect("test host has a home directory");
-        let outside = if cfg!(windows) {
-            PathBuf::from("C:\\Windows")
-        } else {
-            PathBuf::from("/etc")
-        };
-        let refusal = resolve_target(Some(&outside), "project")
-            .expect_err("a system directory must be refused");
-        assert!(format!("{refusal:#}").contains("home directory"));
+    fn a_parent_outside_every_permitted_root_is_refused() {
+        let (root, policy) = sandbox("outside");
+        let outside = std::env::temp_dir().canonicalize().unwrap();
+        let refusal = policy
+            .resolve_target(Some(&outside), "project")
+            .expect_err("a directory outside the permitted roots must be refused");
+        assert!(format!("{refusal:#}").contains("outside it"));
+        let _ = fs::remove_dir_all(root);
+    }
 
-        let hidden = home.join(".deltaforge-creation-test");
+    #[test]
+    fn hidden_directories_are_refused() {
+        let (root, policy) = sandbox("hidden");
+        let hidden = root.join(".config");
         fs::create_dir_all(&hidden).unwrap();
-        let refusal =
-            resolve_target(Some(&hidden), "project").expect_err("a hidden directory is refused");
-        assert!(format!("{refusal:#}").contains("hidden directory"));
-        let _ = fs::remove_dir_all(&hidden);
+        let refusal = policy
+            .resolve_target(Some(&hidden), "project")
+            .expect_err("a hidden directory must be refused");
+        assert!(format!("{refusal:#}").contains("hidden directory .config"));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn a_project_cannot_be_created_inside_another_project() {
-        let home = home_directory().expect("test host has a home directory");
-        let outer = home.join(format!("deltaforge-nesting-test-{}", std::process::id()));
+        let (root, policy) = sandbox("nesting");
+        let outer = root.join("projects").join("outer");
         fs::create_dir_all(outer.join(".deltaforge")).unwrap();
         fs::write(outer.join(".deltaforge").join("state.json"), "{}").unwrap();
-        let inner = outer.join("nested");
+        let inner = outer.join("src");
         fs::create_dir_all(&inner).unwrap();
 
-        let refusal = resolve_target(Some(&inner), "project").expect_err("nesting must be refused");
+        let refusal = policy
+            .resolve_target(Some(&inner), "project")
+            .expect_err("nesting must be refused");
         assert!(format!("{refusal:#}").contains("inside the DeltaForge project"));
-
-        let _ = fs::remove_dir_all(&outer);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn an_existing_target_is_never_overwritten() {
-        let home = home_directory().expect("test host has a home directory");
-        let parent = home.join(format!("deltaforge-existing-test-{}", std::process::id()));
+        let (root, policy) = sandbox("existing");
+        let parent = root.join("projects");
         fs::create_dir_all(parent.join("taken")).unwrap();
 
-        assert!(resolve_target(Some(&parent), "taken").is_err());
+        assert!(policy.resolve_target(Some(&parent), "taken").is_err());
         assert_eq!(
-            resolve_target(Some(&parent), "free").unwrap(),
-            parent.canonicalize().unwrap().join("free")
+            policy.resolve_target(Some(&parent), "free").unwrap(),
+            parent.join("free")
         );
+        let _ = fs::remove_dir_all(root);
+    }
 
-        let _ = fs::remove_dir_all(&parent);
+    #[test]
+    fn omitting_a_parent_uses_the_default_workspace_and_creates_it() {
+        let (root, mut policy) = sandbox("default");
+        policy.default_parent = root.join("fresh-workspace");
+        assert!(!policy.default_parent.exists());
+
+        let target = policy.resolve_target(None, "first-project").unwrap();
+        assert!(policy.default_parent.is_dir());
+        assert_eq!(target.file_name().unwrap(), "first-project");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_relative_parent_is_not_a_location() {
+        let (root, policy) = sandbox("relative");
+        let refusal = policy
+            .resolve_target(Some(Path::new("relative/path")), "project")
+            .expect_err("a relative parent must be refused");
+        assert!(format!("{refusal:#}").contains("absolute"));
+        let _ = fs::remove_dir_all(root);
     }
 }
