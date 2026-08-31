@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed: Windows project paths leaked into diagnoses
+
+- Stopped persisted failure diagnoses, the workbench event journal, and the browser from showing the learner's absolute project path on Windows. `locate_project_root` canonicalizes, which yields an extended-length path (`\\?\C:\...`), while child processes such as cargo print the ordinary `C:\...` form; the redaction matched only the canonical spelling, so build failures and timeouts embedded the real path. Both spellings are now redacted, longest first, including `\\?\UNC\` network roots.
+- This affected Windows only, which is why it survived a release audit whose full native test run was macOS.
+
 ### Live viewer server
 
 - Added `deltaforge serve`: a dependency-free local HTTP server on `127.0.0.1` that serves the generated learning and test-report pages and pushes a server-sent event whenever a command regenerates them. One browser tab now follows the terminal — `deltaforge test` refreshes the report in place and `deltaforge instructions`/`overview` navigate the connected tab — instead of a new tab opening on every failed run.

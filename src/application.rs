@@ -1168,10 +1168,39 @@ fn bounded_text(value: &str, maximum_bytes: usize) -> String {
 }
 
 fn sanitize_project_text(value: &str, project_root: &Path) -> String {
-    let native = project_root.to_string_lossy();
+    // `locate_project_root` canonicalizes, which on Windows yields an
+    // extended-length path (`\\?\C:\...`). Child processes such as cargo print
+    // the ordinary form, so matching only the canonical spelling would leak the
+    // learner's absolute path into persisted diagnoses and the workbench.
+    // The prefixed spelling is replaced first: it contains the plain one, so the
+    // reverse order would leave a stray `\\?\` behind.
+    let mut value = value.to_string();
+    for spelling in project_root_spellings(project_root) {
+        value = replace_project_path(&value, &spelling);
+    }
+    value
+}
+
+fn project_root_spellings(project_root: &Path) -> Vec<String> {
+    let native = project_root.to_string_lossy().to_string();
+    let plain = native
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .or_else(|| {
+            native
+                .strip_prefix(r"\\?\")
+                .map(std::string::ToString::to_string)
+        });
+    match plain {
+        Some(plain) if plain != native => vec![native, plain],
+        _ => vec![native],
+    }
+}
+
+fn replace_project_path(value: &str, native: &str) -> String {
     let escaped = native.replace('\\', "\\\\");
     let value = value.replace(&escaped, "{project_root}");
-    let value = value.replace(native.as_ref(), "{project_root}");
+    let value = value.replace(native, "{project_root}");
     let portable = native.replace('\\', "/");
     if portable == native {
         value
@@ -1282,6 +1311,55 @@ mod tests {
             Some("The command finishes successfully within 100 ms")
         );
         assert_eq!(diagnosis.actual.as_deref(), Some("command timed out"));
+    }
+
+    #[test]
+    fn extended_length_roots_do_not_leak_the_ordinary_windows_path() {
+        // `canonicalize` yields `\\?\C:\...` on Windows while child processes
+        // print `C:\...`; both spellings must be redacted.
+        let root = Path::new(r"\\?\C:\Users\learner\AppData\Local\Temp\project");
+
+        assert_eq!(
+            sanitize_project_text(
+                concat!(
+                    r"Compiling flashindex (C:\Users\learner\AppData\Local\Temp\project)",
+                    "\n",
+                    r"canonical \\?\C:\Users\learner\AppData\Local\Temp\project",
+                    "\n",
+                    r#"json "C:\\Users\\learner\\AppData\\Local\\Temp\\project""#,
+                    "\nportable C:/Users/learner/AppData/Local/Temp/project",
+                ),
+                root,
+            ),
+            concat!(
+                "Compiling flashindex ({project_root})\n",
+                "canonical {project_root}\n",
+                r#"json "{project_root}""#,
+                "\nportable {project_root}",
+            )
+        );
+        assert!(
+            !sanitize_project_text(r"at C:\Users\learner\AppData\Local\Temp\project\src", root)
+                .contains("learner")
+        );
+    }
+
+    #[test]
+    fn unc_and_plain_roots_are_still_redacted() {
+        assert_eq!(
+            sanitize_project_text(
+                r"at \\server\share\project\src",
+                Path::new(r"\\?\UNC\server\share\project")
+            ),
+            "at {project_root}\\src"
+        );
+        assert_eq!(
+            sanitize_project_text(
+                "at /home/learner/project/src",
+                Path::new("/home/learner/project")
+            ),
+            "at {project_root}/src"
+        );
     }
 
     #[test]
