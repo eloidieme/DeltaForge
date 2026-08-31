@@ -20,6 +20,20 @@ fn deltaforge_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_deltaforge"))
 }
 
+fn workbench_home(project: &Path) -> PathBuf {
+    project.join(".deltaforge").join("test-home")
+}
+
+fn deltaforge_command(project: &Path) -> Command {
+    deltaforge_command_with_home(project, &workbench_home(project))
+}
+
+fn deltaforge_command_with_home(_project: &Path, home: &Path) -> Command {
+    let mut command = Command::new(deltaforge_bin());
+    command.env("DELTAFORGE_HOME", home);
+    command
+}
+
 fn temp_project_path() -> PathBuf {
     std::env::temp_dir().join(format!(
         "deltaforge-workbench-it-{}-{}-{}",
@@ -58,7 +72,7 @@ fn spawn_captured_launch(project: &Path, label: &str) -> CapturedLaunch {
     let stderr_path = project.join(".deltaforge").join(format!("{label}.stderr"));
     let stdout = fs::File::create(&stdout_path).unwrap();
     let stderr = fs::File::create(&stderr_path).unwrap();
-    let child = Command::new(deltaforge_bin())
+    let child = deltaforge_command(project)
         .env("DELTAFORGE_NO_BROWSER", "1")
         .current_dir(project)
         .stdout(Stdio::from(stdout))
@@ -125,7 +139,11 @@ fn response_json(response: &str) -> serde_json::Value {
 }
 
 fn wait_for_record(project: &Path) -> serde_json::Value {
-    let path = project.join(".deltaforge/workbench.json");
+    wait_for_record_at(&workbench_home(project))
+}
+
+fn wait_for_record_at(home: &Path) -> serde_json::Value {
+    let path = home.join("workbench.json");
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if let Ok(source) = fs::read_to_string(&path)
@@ -151,7 +169,7 @@ fn wait_for_run_lease_release(project: &Path) {
 }
 
 fn wait_for_new_record(project: &Path, previous_pid: u64) -> serde_json::Value {
-    let path = project.join(".deltaforge/workbench.json");
+    let path = workbench_home(project).join("workbench.json");
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         if let Ok(source) = fs::read_to_string(&path)
@@ -299,7 +317,7 @@ fn visit(root: &Path, current: &Path, files: &mut Vec<PathBuf>) -> Result<(), St
 fn cli_run_reaches_the_open_workbench_event_stream() {
     let _guard = workbench_test_guard();
     let project = temp_project_path();
-    let init = Command::new(deltaforge_bin())
+    let init = deltaforge_command(&project)
         .args([
             "init",
             "flashindex",
@@ -318,7 +336,7 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
     );
 
     let token = "integration-token";
-    let service = Command::new(deltaforge_bin())
+    let service = deltaforge_command(&project)
         .args([
             "--project-dir",
             project.to_str().unwrap(),
@@ -355,6 +373,21 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
     ));
     assert_eq!(capability["stage_id"], "01_scan_files");
     assert_eq!(capability["help_levels"], 5);
+    assert_eq!(capability["project_overview"]["name"], "FlashIndex");
+    assert_eq!(capability["project_overview"]["capability_count"], 14);
+    assert!(
+        capability["project_overview"]["context"]
+            .as_array()
+            .is_some_and(|paragraphs| paragraphs.len() >= 3)
+    );
+    assert_eq!(capability["roadmap"].as_array().unwrap().len(), 14);
+    assert_eq!(capability["roadmap"][0]["status"], "current");
+    assert_eq!(capability["roadmap"][1]["status"], "upcoming");
+    assert!(
+        capability["roadmap"][1]["summary"]
+            .as_str()
+            .is_some_and(|summary| !summary.is_empty())
+    );
     assert!(
         capability["mission"]
             .as_str()
@@ -368,7 +401,7 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
         let token = token.to_string();
         move || read_run_events(port, &token, cursor, "\"type\":\"run_completed\"")
     });
-    let run = Command::new(deltaforge_bin())
+    let run = deltaforge_command(&project)
         .arg("test")
         .current_dir(&project)
         .output()
@@ -404,7 +437,7 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
     );
     assert_eq!(
         final_state["primary_failure"]["diagnosis"]["headline"],
-        "Required project files are missing"
+        "Your scanner did not report required files"
     );
     assert_eq!(final_state["primary_failure"]["diagnosis"]["priority"], 10);
     assert!(
@@ -545,7 +578,7 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
     wait_for_run_lease_release(&project);
 
     fs::write(project.join("src/main.rs"), "fn main( {\n").unwrap();
-    let broken_build = Command::new(deltaforge_bin())
+    let broken_build = deltaforge_command(&project)
         .arg("test")
         .current_dir(&project)
         .output()
@@ -573,7 +606,7 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
 fn passing_run_unlocks_retrospective_and_browser_progression() {
     let _guard = workbench_test_guard();
     let project = temp_project_path();
-    let init = Command::new(deltaforge_bin())
+    let init = deltaforge_command(&project)
         .args([
             "init",
             "flashindex",
@@ -593,7 +626,7 @@ fn passing_run_unlocks_retrospective_and_browser_progression() {
     fs::write(project.join("src/main.rs"), passing_scan_source()).unwrap();
 
     let token = "progression-token";
-    let service = Command::new(deltaforge_bin())
+    let service = deltaforge_command(&project)
         .args([
             "--project-dir",
             project.to_str().unwrap(),
@@ -612,7 +645,7 @@ fn passing_run_unlocks_retrospective_and_browser_progression() {
     let port = record["port"].as_u64().unwrap() as u16;
     let origin = format!("http://127.0.0.1:{port}");
 
-    let run = Command::new(deltaforge_bin())
+    let run = deltaforge_command(&project)
         .arg("test")
         .current_dir(&project)
         .output()
@@ -677,7 +710,7 @@ fn passing_run_unlocks_retrospective_and_browser_progression() {
     drop(_service);
     let return_token = "progression-return-token";
     let return_service = ChildGuard(
-        Command::new(deltaforge_bin())
+        deltaforge_command(&project)
             .args([
                 "--project-dir",
                 project.to_str().unwrap(),
@@ -719,7 +752,7 @@ fn passing_run_unlocks_retrospective_and_browser_progression() {
 fn source_changes_are_durable_filtered_and_recovered_after_restart() {
     let _guard = workbench_test_guard();
     let project = temp_project_path();
-    let init = Command::new(deltaforge_bin())
+    let init = deltaforge_command(&project)
         .args([
             "init",
             "flashindex",
@@ -740,7 +773,7 @@ fn source_changes_are_durable_filtered_and_recovered_after_restart() {
     fs::write(&source_path, passing_scan_source()).unwrap();
 
     let first_token = "freshness-token-one";
-    let first_service = Command::new(deltaforge_bin())
+    let first_service = deltaforge_command(&project)
         .args([
             "--project-dir",
             project.to_str().unwrap(),
@@ -758,7 +791,7 @@ fn source_changes_are_durable_filtered_and_recovered_after_restart() {
     let first_pid = first_record["pid"].as_u64().unwrap();
     let first_port = first_record["port"].as_u64().unwrap() as u16;
 
-    let run = Command::new(deltaforge_bin())
+    let run = deltaforge_command(&project)
         .arg("test")
         .current_dir(&project)
         .output()
@@ -821,7 +854,7 @@ fn source_changes_are_durable_filtered_and_recovered_after_restart() {
     fs::write(&source_path, source).unwrap();
 
     let second_token = "freshness-token-two";
-    let second_service = Command::new(deltaforge_bin())
+    let second_service = deltaforge_command(&project)
         .args([
             "--project-dir",
             project.to_str().unwrap(),
@@ -866,7 +899,7 @@ fn source_changes_are_durable_filtered_and_recovered_after_restart() {
 fn unhealthy_project_still_opens_and_supports_bounded_recovery() {
     let _guard = workbench_test_guard();
     let project = temp_project_path();
-    let init = Command::new(deltaforge_bin())
+    let init = deltaforge_command(&project)
         .args([
             "init",
             "flashindex",
@@ -888,7 +921,7 @@ fn unhealthy_project_still_opens_and_supports_bounded_recovery() {
     fs::write(&config_path, "[runner]\ntimeout_ms = 0\n").unwrap();
 
     let token = "unhealthy-token";
-    let service = Command::new(deltaforge_bin())
+    let service = deltaforge_command(&project)
         .args([
             "--project-dir",
             project.to_str().unwrap(),
@@ -977,7 +1010,7 @@ fn unhealthy_project_still_opens_and_supports_bounded_recovery() {
 fn stopped_service_restores_an_interrupted_run_without_rerunning_it() {
     let _guard = workbench_test_guard();
     let project = temp_project_path();
-    let init = Command::new(deltaforge_bin())
+    let init = deltaforge_command(&project)
         .args([
             "init",
             "flashindex",
@@ -997,7 +1030,7 @@ fn stopped_service_restores_an_interrupted_run_without_rerunning_it() {
 
     let first_token = "resume-token-one";
     let first_service = ChildGuard(
-        Command::new(deltaforge_bin())
+        deltaforge_command(&project)
             .args([
                 "--project-dir",
                 project.to_str().unwrap(),
@@ -1052,7 +1085,7 @@ fn stopped_service_restores_an_interrupted_run_without_rerunning_it() {
 
     let second_token = "resume-token-two";
     let second_service = ChildGuard(
-        Command::new(deltaforge_bin())
+        deltaforge_command(&project)
             .args([
                 "--project-dir",
                 project.to_str().unwrap(),
@@ -1150,7 +1183,7 @@ fn stopped_service_restores_an_interrupted_run_without_rerunning_it() {
 fn diagnostic_shutdown_is_authenticated_and_never_interrupts_a_run() {
     let _guard = workbench_test_guard();
     let project = temp_project_path();
-    let init = Command::new(deltaforge_bin())
+    let init = deltaforge_command(&project)
         .args([
             "init",
             "flashindex",
@@ -1170,7 +1203,7 @@ fn diagnostic_shutdown_is_authenticated_and_never_interrupts_a_run() {
 
     let token = "shutdown-token";
     let mut service = ChildGuard(
-        Command::new(deltaforge_bin())
+        deltaforge_command(&project)
             .args([
                 "--project-dir",
                 project.to_str().unwrap(),
@@ -1269,7 +1302,7 @@ fn diagnostic_shutdown_is_authenticated_and_never_interrupts_a_run() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert!(!project.join(".deltaforge/workbench.json").exists());
+    assert!(!workbench_home(&project).join("workbench.json").exists());
 
     drop(service);
     let _ = fs::remove_dir_all(project);
@@ -1279,7 +1312,7 @@ fn diagnostic_shutdown_is_authenticated_and_never_interrupts_a_run() {
 fn lifecycle_recovers_stale_metadata_and_replaces_an_incompatible_service() {
     let _guard = workbench_test_guard();
     let project = temp_project_path();
-    let init = Command::new(deltaforge_bin())
+    let init = deltaforge_command(&project)
         .args([
             "init",
             "flashindex",
@@ -1292,7 +1325,8 @@ fn lifecycle_recovers_stale_metadata_and_replaces_an_incompatible_service() {
         .output()
         .unwrap();
     assert!(init.status.success());
-    let record_path = project.join(".deltaforge/workbench.json");
+    let record_path = workbench_home(&project).join("workbench.json");
+    fs::create_dir_all(record_path.parent().unwrap()).unwrap();
     fs::write(&record_path, "{ stale lifecycle metadata").unwrap();
 
     let first_launch = spawn_captured_launch(&project, "first-launch");
@@ -1371,7 +1405,7 @@ fn lifecycle_recovers_stale_metadata_and_replaces_an_incompatible_service() {
 fn idle_service_exits_and_removes_its_discovery_record() {
     let _guard = workbench_test_guard();
     let project = temp_project_path();
-    let init = Command::new(deltaforge_bin())
+    let init = deltaforge_command(&project)
         .args([
             "init",
             "flashindex",
@@ -1386,7 +1420,7 @@ fn idle_service_exits_and_removes_its_discovery_record() {
     assert!(init.status.success());
 
     let mut service = ChildGuard(
-        Command::new(deltaforge_bin())
+        deltaforge_command(&project)
             .args([
                 "--project-dir",
                 project.to_str().unwrap(),
@@ -1411,7 +1445,7 @@ fn idle_service_exits_and_removes_its_discovery_record() {
         assert!(Instant::now() < deadline, "idle service did not exit");
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert!(!project.join(".deltaforge/workbench.json").exists());
+    assert!(!workbench_home(&project).join("workbench.json").exists());
 
     drop(service);
     let _ = fs::remove_dir_all(project);
@@ -1421,7 +1455,7 @@ fn idle_service_exits_and_removes_its_discovery_record() {
 fn bare_launch_focuses_a_connected_workbench_without_opening_another_tab() {
     let _guard = workbench_test_guard();
     let project = temp_project_path();
-    let init = Command::new(deltaforge_bin())
+    let init = deltaforge_command(&project)
         .args([
             "init",
             "flashindex",
@@ -1437,7 +1471,7 @@ fn bare_launch_focuses_a_connected_workbench_without_opening_another_tab() {
 
     let token = "focus-token";
     let service = ChildGuard(
-        Command::new(deltaforge_bin())
+        deltaforge_command(&project)
             .args([
                 "--project-dir",
                 project.to_str().unwrap(),
@@ -1477,7 +1511,7 @@ fn bare_launch_focuses_a_connected_workbench_without_opening_another_tab() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let launch = Command::new(deltaforge_bin())
+    let launch = deltaforge_command(&project)
         .env("DELTAFORGE_NO_BROWSER", "1")
         .current_dir(&project)
         .output()
@@ -1492,4 +1526,118 @@ fn bare_launch_focuses_a_connected_workbench_without_opening_another_tab() {
 
     drop(service);
     let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn one_service_lists_and_opens_multiple_registered_projects() {
+    let _guard = workbench_test_guard();
+    let root = temp_project_path();
+    let first = root.join("flashindex-one");
+    let second = root.join("flashindex-two");
+    let home = root.join("app-home");
+
+    for project in [&first, &second] {
+        let init = deltaforge_command_with_home(project, &home)
+            .args([
+                "init",
+                "flashindex",
+                "--lang",
+                "rust",
+                "--name",
+                project.to_str().unwrap(),
+                "--no-git",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "{}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+    }
+
+    let token = "multi-project-token";
+    let service = ChildGuard(
+        deltaforge_command_with_home(&first, &home)
+            .args([
+                "--project-dir",
+                first.to_str().unwrap(),
+                "__workbench",
+                "--token",
+                token,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let first_record = wait_for_record_at(&home);
+    let port = first_record["port"].as_u64().unwrap() as u16;
+
+    let launch = deltaforge_command_with_home(&second, &home)
+        .env("DELTAFORGE_NO_BROWSER", "1")
+        .current_dir(&second)
+        .output()
+        .unwrap();
+    assert!(
+        launch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&launch.stderr)
+    );
+    let reused = wait_for_record_at(&home);
+    assert_eq!(reused["pid"], first_record["pid"]);
+
+    let hub_launch = deltaforge_command_with_home(&root, &home)
+        .env("DELTAFORGE_NO_BROWSER", "1")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(hub_launch.status.success());
+    assert!(
+        String::from_utf8_lossy(&hub_launch.stdout).contains("/projects?token="),
+        "{}",
+        String::from_utf8_lossy(&hub_launch.stdout)
+    );
+
+    let projects = response_json(&request(
+        port,
+        "GET",
+        &format!("/api/v1/projects?token={token}"),
+        None,
+        "",
+    ));
+    let projects = projects.as_array().unwrap();
+    assert_eq!(projects.len(), 2);
+    let second_id = projects
+        .iter()
+        .find(|project| {
+            project["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("flashindex-two"))
+        })
+        .and_then(|project| project["id"].as_str())
+        .unwrap();
+
+    let state = response_json(&request(
+        port,
+        "GET",
+        &format!("/api/v1/state?token={token}&project={second_id}"),
+        None,
+        "",
+    ));
+    assert_eq!(state["project"], "flashindex");
+    assert_eq!(state["language"], "rust");
+    let overview = request(
+        port,
+        "GET",
+        &format!("/projects/{second_id}/overview?token={token}"),
+        None,
+        "",
+    );
+    assert!(overview.starts_with("HTTP/1.1 200"));
+    assert!(overview.contains("Your workspace"));
+
+    drop(service);
+    let _ = fs::remove_dir_all(root);
 }

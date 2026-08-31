@@ -118,7 +118,7 @@ fn cases() -> Vec<Case> {
             timeout_ms: None,
             expected_priority: 10,
             expected_kind: "stdout-contains",
-            expected_headline: "Required project files are missing",
+            expected_headline: "Your scanner did not report required files",
         },
         Case {
             name: "missing-nested-files",

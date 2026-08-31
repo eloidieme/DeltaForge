@@ -39,7 +39,7 @@ flowchart LR
 - The CLI and browser invoke the same typed application operations.
 - The Rust application core is authoritative for state, validation, tests, benchmarks,
   progression, and safety.
-- A single invisible user-level service can manage multiple registered projects.
+- A single invisible user-level service manages multiple registered projects.
 - The product works offline and without an account.
 - Frontend assets and bundled project content ship with the binary or installation.
 - The frontend renders application state; it does not independently infer learning
@@ -144,6 +144,11 @@ The service:
 
 Service management may have a diagnostic command, but it is not normal product
 navigation.
+
+The implemented application routes are `/projects`,
+`/projects/<project-id>/overview`, `/projects/<project-id>/build`, and
+`/projects/<project-id>/runs`. Browser requests resolve only opaque identifiers already
+present in the user-level registry; they never provide a project filesystem path.
 
 ## Local security boundary
 

@@ -220,7 +220,7 @@ After the failed run settles and before the participant reveals help, ask the ne
 failure question. Record:
 
 - the contradiction they state;
-- whether it matches the `Start here` diagnosis;
+- whether it matches the `Fix this first` diagnosis;
 - whether they distinguish the primary failure from the total failure count;
 - which evidence they use: fixture, expected, observed, contract, or raw output;
 - whether help is revealed, at which level, and why;

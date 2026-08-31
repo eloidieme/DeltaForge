@@ -156,6 +156,7 @@ pub struct WorkbenchState {
     pub resumption: Option<ResumptionSummary>,
     pub active_job: Option<ActiveJob>,
     pub latest_attempt: Option<TestAttempt>,
+    pub attempt_history: Vec<TestAttempt>,
     pub latest_run: Option<LastTestRunSummary>,
     pub primary_failure: Option<LastFailedTest>,
     pub source_revision: u64,
@@ -871,13 +872,13 @@ fn workbench_state(
                 (
                     ResumptionKind::Interrupted,
                     "Previous run interrupted".to_string(),
-                    "DeltaForge preserved the last completed evidence. Run checks again when you are ready."
+                    "DeltaForge preserved the last completed test result. Run checks again when you are ready."
                         .to_string(),
                 )
             } else if let Some(change) = &stage_change {
                 (
                     ResumptionKind::CapabilityChanged,
-                    "Current capability changed".to_string(),
+                    "Current step changed".to_string(),
                     format!(
                         "Your previous session was on {}. Continue with {}.",
                         change.from_title, change.to_title
@@ -887,7 +888,7 @@ fn workbench_state(
                 (
                     ResumptionKind::SourceChanged,
                     "Source changed since the last result".to_string(),
-                    "Your previous evidence is preserved, but the current source needs a new check run."
+                    "Your previous test result is preserved, but the current source needs a new check run."
                         .to_string(),
                 )
             } else if context.state.is_completed(&current.id)
@@ -895,22 +896,22 @@ fn workbench_state(
             {
                 (
                     ResumptionKind::CapabilityAcquired,
-                    "Capability evidence is still current".to_string(),
-                    "The completed capability and its passing evidence were restored without rerunning checks."
+                    "Completed step is still current".to_string(),
+                    "The completed step and its passing test result were restored without rerunning checks."
                         .to_string(),
                 )
             } else if primary_failure.is_some() && freshness == ResultFreshness::Fresh {
                 (
                     ResumptionKind::ChecksFailed,
-                    "Your last contradiction is ready".to_string(),
-                    "The latest run and primary remaining failure were restored without rerunning checks."
+                    "Your last failing check is ready".to_string(),
+                    "The latest run and first failing check were restored without rerunning checks."
                         .to_string(),
                 )
             } else {
                 (
                     ResumptionKind::Ready,
                     "Ready to continue".to_string(),
-                    "Your project and current capability were restored without rerunning checks."
+                    "Your project and current step were restored without rerunning checks."
                         .to_string(),
                 )
             };
@@ -940,13 +941,13 @@ fn workbench_state(
         {
             PrimaryAction {
                 kind: PrimaryActionKind::BeginNextCapability,
-                label: "Begin next capability".to_string(),
+                label: "Begin next step".to_string(),
                 enabled: true,
             }
         } else {
             PrimaryAction {
                 kind: PrimaryActionKind::JourneyComplete,
-                label: "Journey complete".to_string(),
+                label: "Project complete".to_string(),
                 enabled: false,
             }
         }
@@ -1008,6 +1009,7 @@ fn workbench_state(
         resumption,
         active_job,
         latest_attempt: context.state.attempt_history.last().cloned(),
+        attempt_history: context.state.attempt_history.clone(),
         latest_run,
         primary_failure,
         source_revision: context.state.source_revision,
@@ -1240,7 +1242,7 @@ mod tests {
             passed: false,
             diagnosis: Some(TestDiagnosis {
                 priority: 10,
-                headline: "Required project files are missing".to_string(),
+                headline: "Your scanner did not report required files".to_string(),
                 contract: "Every regular file must be reported.".to_string(),
             }),
             failures: vec!["command timed out".to_string()],

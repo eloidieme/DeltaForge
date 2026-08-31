@@ -2,7 +2,7 @@ tests:
   - name: scans files in a basic project
     diagnosis:
       priority: 10
-      headline: Required project files are missing
+      headline: Your scanner did not report required files
       contract: Every regular file beneath the supplied root must be reported.
     fixture: basic_project
     command: ["scan", "{fixture_path}"]

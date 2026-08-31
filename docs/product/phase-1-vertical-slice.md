@@ -42,7 +42,7 @@ Run bare deltaforge inside a prepared FlashIndex learner project
 
 1. Current mission before any run
 2. Build and checks running
-3. Checks failed with one `Start here` diagnosis
+3. Checks failed with one `Fix this first` diagnosis
 4. Source changed and result stale
 5. CLI-started run visible in the browser
 6. Capability acquired

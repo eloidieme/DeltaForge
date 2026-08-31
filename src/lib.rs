@@ -9,6 +9,7 @@ pub mod fs_util;
 pub mod integrity;
 pub mod pack;
 pub mod process;
+pub mod project_registry;
 pub mod run_journal;
 pub mod run_lease;
 pub mod runner;

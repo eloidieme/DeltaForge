@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -15,10 +15,8 @@ use crate::application;
 use crate::context::GlobalOptions;
 use crate::fs_util::atomic_write;
 
-const RECORD_FILE: &str = "workbench.json";
-const START_LOCK_FILE: &str = "workbench-start.lock";
 const API_VERSION: &str = "v1";
-const SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
+const SERVICE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-app2");
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(4);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -54,8 +52,10 @@ struct StartupLease {
 }
 
 impl StartupLease {
-    fn acquire(root: &Path) -> Result<Self> {
-        let path = root.join(".deltaforge").join(START_LOCK_FILE);
+    fn acquire(path: PathBuf) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         loop {
             match OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -114,17 +114,18 @@ fn startup_lease_is_active(path: &Path) -> bool {
 
 #[derive(Debug)]
 struct Shared {
-    options: GlobalOptions,
+    default_project_id: Option<String>,
     token: String,
     session_id: String,
     port: u16,
     clients: AtomicUsize,
     last_activity: Mutex<Instant>,
     record_path: PathBuf,
-    run_starting: Mutex<bool>,
+    run_starting: Mutex<BTreeSet<String>>,
     shutting_down: AtomicBool,
     idle_timeout: Duration,
     focus_revision: AtomicUsize,
+    focus_target: Mutex<String>,
 }
 
 #[derive(Debug)]
@@ -158,22 +159,59 @@ enum ProjectOpenKind {
     Folder,
 }
 
+struct ProjectOpenCommand {
+    command: Command,
+    application: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectSummary {
+    id: String,
+    name: String,
+    description: String,
+    language: String,
+    path: PathBuf,
+    current_step: String,
+    current_step_number: usize,
+    total_steps: usize,
+    completed_steps: usize,
+    last_opened_at: u64,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    issue: Option<String>,
+}
+
 pub fn launch(options: &GlobalOptions) -> Result<()> {
-    let root = crate::context::locate_project_root(options)?;
-    let startup_lease = StartupLease::acquire(&root)?;
-    let record_path = root.join(".deltaforge").join(RECORD_FILE);
+    let root = if options.project_dir.is_some() {
+        Some(crate::context::locate_project_root(options)?)
+    } else {
+        crate::context::locate_project_root(options).ok()
+    };
+    let startup_lease = StartupLease::acquire(crate::project_registry::startup_lock_path()?)?;
+    let registered = root
+        .as_deref()
+        .map(|root| crate::project_registry::register(root, options.packs_dir.as_deref()))
+        .transpose()?;
+    let record_path = crate::project_registry::service_record_path()?;
     let mut service = read_compatible_record(&record_path)?;
 
     if service.is_none() {
-        let token = capability_token(&root);
-        spawn_service(&root, options, &token)?;
+        let token = capability_token(root.as_deref().unwrap_or_else(|| Path::new("deltaforge")));
+        spawn_service(root.as_deref(), options, &token)?;
         service = wait_for_service(&record_path)?;
     }
 
     let (record, status) = service.context("the DeltaForge workbench did not start in time")?;
     drop(startup_lease);
-    let url = format!("http://127.0.0.1:{}/?token={}", record.port, record.token);
-    if status.clients > 0 && request_focus(&record) {
+    let route = registered.as_ref().map_or_else(
+        || "/projects".to_string(),
+        |project| format!("/projects/{}/overview", project.id),
+    );
+    let url = format!(
+        "http://127.0.0.1:{}{}?token={}",
+        record.port, route, record.token
+    );
+    if status.clients > 0 && request_focus(&record, &route) {
         println!("DeltaForge is ready.");
         return Ok(());
     }
@@ -231,12 +269,13 @@ fn browser_command(_target: &std::ffi::OsStr) -> Result<Command> {
     bail!("opening a browser is not supported on this operating system")
 }
 
-fn spawn_service(root: &Path, options: &GlobalOptions, token: &str) -> Result<()> {
+fn spawn_service(root: Option<&Path>, options: &GlobalOptions, token: &str) -> Result<()> {
     let executable = std::env::current_exe().context("failed to locate the deltaforge binary")?;
     let mut command = Command::new(executable);
+    if let Some(root) = root {
+        command.arg("--project-dir").arg(root);
+    }
     command
-        .arg("--project-dir")
-        .arg(root)
         .arg("__workbench")
         .arg("--token")
         .arg(token)
@@ -342,8 +381,11 @@ fn remove_record_if_matches(record_path: &Path, expected: &ServiceRecord) {
     }
 }
 
-fn request_focus(record: &ServiceRecord) -> bool {
-    let path = format!("/api/{API_VERSION}/focus?token={}", record.token);
+fn request_focus(record: &ServiceRecord, route: &str) -> bool {
+    let path = format!(
+        "/api/{API_VERSION}/focus?token={}&route={route}",
+        record.token
+    );
     http_get_response(record.port, &path)
         .is_some_and(|response| response.starts_with("HTTP/1.1 202"))
 }
@@ -364,7 +406,15 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
     if idle_timeout.is_zero() {
         bail!("workbench idle timeout must be greater than zero");
     }
-    let root = crate::context::locate_project_root(options)?;
+    let root = if options.project_dir.is_some() {
+        Some(crate::context::locate_project_root(options)?)
+    } else {
+        None
+    };
+    let registered = root
+        .as_deref()
+        .map(|root| crate::project_registry::register(root, options.packs_dir.as_deref()))
+        .transpose()?;
     let session_id = format!(
         "{}-{}",
         std::process::id(),
@@ -373,9 +423,15 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
             .unwrap_or_default()
             .as_nanos()
     );
-    let _ = application::load_workbench_state_for_session(options, &session_id);
-    let _ = application::observe_source_changes(options);
-    let record_path = root.join(".deltaforge").join(RECORD_FILE);
+    if root.is_some() {
+        let initial_session_id = registered.as_ref().map_or_else(
+            || session_id.clone(),
+            |project| format!("{}-{}", session_id, project.id),
+        );
+        let _ = application::load_workbench_state_for_session(options, &initial_session_id);
+        let _ = application::observe_source_changes(options);
+    }
+    let record_path = crate::project_registry::service_record_path()?;
     let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .context("failed to bind the DeltaForge workbench to loopback")?;
     let port = listener.local_addr()?.port();
@@ -388,20 +444,18 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
     atomic_write(&record_path, serde_json::to_string(&record)?)?;
 
     let shared = Arc::new(Shared {
-        options: GlobalOptions {
-            project_dir: Some(root),
-            packs_dir: options.packs_dir.clone(),
-        },
+        default_project_id: registered.map(|project| project.id),
         token,
         session_id,
         port,
         clients: AtomicUsize::new(0),
         last_activity: Mutex::new(Instant::now()),
         record_path,
-        run_starting: Mutex::new(false),
+        run_starting: Mutex::new(BTreeSet::new()),
         shutting_down: AtomicBool::new(false),
         idle_timeout,
         focus_revision: AtomicUsize::new(0),
+        focus_target: Mutex::new("/projects".to_string()),
     });
     spawn_idle_watchdog(Arc::clone(&shared));
     spawn_source_watcher(Arc::clone(&shared));
@@ -421,11 +475,16 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
 fn spawn_source_watcher(shared: Arc<Shared>) {
     std::thread::spawn(move || {
         loop {
-            if application::observe_source_changes(&shared.options)
-                .ok()
-                .flatten()
-                .is_some()
-            {
+            let changed = crate::project_registry::list()
+                .unwrap_or_default()
+                .into_iter()
+                .any(|project| {
+                    application::observe_source_changes(&options_for_entry(&project))
+                        .ok()
+                        .flatten()
+                        .is_some()
+                });
+            if changed {
                 *shared
                     .last_activity
                     .lock()
@@ -450,9 +509,18 @@ fn spawn_idle_watchdog(shared: Arc<Shared>) {
                 .lock()
                 .map(|last| last.elapsed())
                 .unwrap_or_default();
-            let run_starting = *shared.run_starting.lock().expect("workbench lock poisoned");
-            let run_active =
-                run_starting || application::run_is_active(&shared.options).unwrap_or(false);
+            let run_starting = !shared
+                .run_starting
+                .lock()
+                .expect("workbench lock poisoned")
+                .is_empty();
+            let run_active = run_starting
+                || crate::project_registry::list()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .any(|project| {
+                        application::run_is_active(&options_for_entry(&project)).unwrap_or(false)
+                    });
             if shared.clients.load(Ordering::SeqCst) == 0
                 && !run_active
                 && idle >= shared.idle_timeout
@@ -494,14 +562,59 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
             r#"{"error":"method_not_allowed"}"#,
         );
     }
+    let project_api = matches!(
+        path,
+        "/api/v1/project-health"
+            | "/api/v1/state"
+            | "/api/v1/capability"
+            | "/api/v1/events"
+            | "/api/v1/runs"
+            | "/api/v1/runs/rerun"
+            | "/api/v1/runs/cancel"
+            | "/api/v1/hints"
+            | "/api/v1/capabilities/next"
+            | "/api/v1/project/repin-pack"
+            | "/api/v1/project/open-editor"
+            | "/api/v1/project/open-folder"
+    );
+    if project_api && project_request(shared, &request).is_err() {
+        return respond(
+            &mut stream,
+            "404 Not Found",
+            "application/json",
+            r#"{"error":"project_not_found"}"#,
+        );
+    }
 
     match (request.method.as_str(), path) {
-        ("GET", "/") => respond(
+        ("GET", "/") | ("GET", "/projects") => respond(
             &mut stream,
             "200 OK",
             "text/html; charset=utf-8",
             &workbench_html(&shared.token),
         ),
+        ("GET", route)
+            if route.starts_with("/projects/")
+                && (route.ends_with("/overview")
+                    || route.ends_with("/build")
+                    || route.ends_with("/runs")) =>
+        {
+            let project_id = route.split('/').nth(2).unwrap_or_default();
+            if crate::project_registry::resolve(project_id).is_err() {
+                return respond(
+                    &mut stream,
+                    "404 Not Found",
+                    "text/plain; charset=utf-8",
+                    "Project not found",
+                );
+            }
+            respond(
+                &mut stream,
+                "200 OK",
+                "text/html; charset=utf-8",
+                &workbench_html(&shared.token),
+            )
+        }
         ("GET", "/api/v1/health") => {
             let body = serde_json::json!({
                 "service": "deltaforge",
@@ -514,7 +627,8 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
             respond(&mut stream, "200 OK", "application/json", &body)
         }
         ("GET", "/api/v1/project-health") => {
-            let health = application::load_project_health(&shared.options)?;
+            let (_, options) = project_request(shared, &request)?;
+            let health = application::load_project_health(&options)?;
             respond(
                 &mut stream,
                 "200 OK",
@@ -522,7 +636,21 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                 &serde_json::to_string(&health)?,
             )
         }
+        ("GET", "/api/v1/projects") => {
+            let projects = load_project_summaries()?;
+            respond(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                &serde_json::to_string(&projects)?,
+            )
+        }
         ("GET", "/api/v1/focus") => {
+            let route = query_value(&request.target, "route")
+                .filter(|route| route.starts_with("/projects"))
+                .unwrap_or("/projects")
+                .to_string();
+            *shared.focus_target.lock().expect("workbench lock poisoned") = route;
             shared.focus_revision.fetch_add(1, Ordering::SeqCst);
             respond(
                 &mut stream,
@@ -532,17 +660,25 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
             )
         }
         ("GET", "/api/v1/state") => {
-            let state =
-                application::load_workbench_state_for_session(&shared.options, &shared.session_id)?;
+            let (project_id, options) = project_request(shared, &request)?;
+            let state = application::load_workbench_state_for_session(
+                &options,
+                &project_session_id(shared, &project_id),
+            )?;
             let body = serde_json::to_string(&state)?;
             respond(&mut stream, "200 OK", "application/json", &body)
         }
         ("GET", "/api/v1/capability") => {
-            let content = application::load_capability_content(&shared.options)?;
+            let (_, options) = project_request(shared, &request)?;
+            let content = application::load_capability_content(&options)?;
             let body = serde_json::to_string(&content)?;
             respond(&mut stream, "200 OK", "application/json", &body)
         }
-        ("GET", "/api/v1/events") => serve_events(stream, shared, &request),
+        ("GET", "/api/v1/app-events") => serve_app_events(stream, shared),
+        ("GET", "/api/v1/events") => {
+            let (project_id, options) = project_request(shared, &request)?;
+            serve_events(stream, shared, &request, project_id, options)
+        }
         ("POST", "/api/v1/runs") => {
             if !authorized_mutation(&request, shared) {
                 return respond(
@@ -563,7 +699,14 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                     );
                 }
             };
-            start_run(&mut stream, Arc::clone(shared), body.filter)
+            let (project_id, options) = project_request(shared, &request)?;
+            start_run(
+                &mut stream,
+                Arc::clone(shared),
+                project_id,
+                options,
+                body.filter,
+            )
         }
         ("POST", "/api/v1/runs/rerun") => {
             if !authorized_mutation(&request, shared) {
@@ -585,7 +728,14 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                     );
                 }
             };
-            start_run(&mut stream, Arc::clone(shared), Some(body.test))
+            let (project_id, options) = project_request(shared, &request)?;
+            start_run(
+                &mut stream,
+                Arc::clone(shared),
+                project_id,
+                options,
+                Some(body.test),
+            )
         }
         ("POST", "/api/v1/runs/cancel") => {
             if !authorized_mutation(&request, shared) {
@@ -596,7 +746,8 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            cancel_run(&mut stream, shared)
+            let (_, options) = project_request(shared, &request)?;
+            cancel_run(&mut stream, &options)
         }
         ("POST", "/api/v1/hints") => {
             if !authorized_mutation(&request, shared) {
@@ -607,7 +758,8 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            match application::reveal_next_hint(&shared.options) {
+            let (_, options) = project_request(shared, &request)?;
+            match application::reveal_next_hint(&options) {
                 Ok(content) => respond(
                     &mut stream,
                     "200 OK",
@@ -631,7 +783,8 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            match application::begin_next_capability(&shared.options) {
+            let (_, options) = project_request(shared, &request)?;
+            match application::begin_next_capability(&options) {
                 Ok(state) => respond(
                     &mut stream,
                     "200 OK",
@@ -663,7 +816,8 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                     r#"{"error":"invalid_json"}"#,
                 );
             }
-            match application::repin_current_pack(&shared.options) {
+            let (_, options) = project_request(shared, &request)?;
+            match application::repin_current_pack(&options) {
                 Ok(health) => respond(
                     &mut stream,
                     "200 OK",
@@ -679,10 +833,24 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
             }
         }
         ("POST", "/api/v1/project/open-editor") => {
-            open_project(&mut stream, shared, &request, ProjectOpenKind::Editor)
+            let (_, options) = project_request(shared, &request)?;
+            open_project(
+                &mut stream,
+                shared,
+                &request,
+                &options,
+                ProjectOpenKind::Editor,
+            )
         }
         ("POST", "/api/v1/project/open-folder") => {
-            open_project(&mut stream, shared, &request, ProjectOpenKind::Folder)
+            let (_, options) = project_request(shared, &request)?;
+            open_project(
+                &mut stream,
+                shared,
+                &request,
+                &options,
+                ProjectOpenKind::Folder,
+            )
         }
         ("POST", "/api/v1/service/shutdown") => shutdown_service(&mut stream, shared, &request),
         ("POST", _) | ("GET", _) => respond(
@@ -817,7 +985,13 @@ where
     serde_json::from_slice(&request.body).context("invalid JSON request body")
 }
 
-fn start_run(stream: &mut TcpStream, shared: Arc<Shared>, filter: Option<String>) -> Result<()> {
+fn start_run(
+    stream: &mut TcpStream,
+    shared: Arc<Shared>,
+    project_id: String,
+    options: GlobalOptions,
+    filter: Option<String>,
+) -> Result<()> {
     if filter
         .as_ref()
         .is_some_and(|value| value.trim().is_empty() || value.len() > 200)
@@ -831,8 +1005,8 @@ fn start_run(stream: &mut TcpStream, shared: Arc<Shared>, filter: Option<String>
     }
     let mut starting = shared.run_starting.lock().expect("workbench lock poisoned");
     if shared.shutting_down.load(Ordering::SeqCst)
-        || *starting
-        || application::run_is_active(&shared.options)?
+        || starting.contains(&project_id)
+        || application::run_is_active(&options)?
     {
         return respond(
             stream,
@@ -841,7 +1015,7 @@ fn start_run(stream: &mut TcpStream, shared: Arc<Shared>, filter: Option<String>
             r#"{"error":"run_already_active"}"#,
         );
     }
-    *starting = true;
+    starting.insert(project_id.clone());
     drop(starting);
 
     let worker = Arc::clone(&shared);
@@ -858,18 +1032,22 @@ fn start_run(stream: &mut TcpStream, shared: Arc<Shared>, filter: Option<String>
             trigger: application::RunTrigger::Workbench,
         };
         let mut sink = application::NullEventSink;
-        if let Err(error) = application::run_tests(&worker.options, request, &mut sink)
+        if let Err(error) = application::run_tests(&options, request, &mut sink)
             && !format!("{error:#}").contains("already active")
         {
             let _ = application::publish_event(
-                &worker.options,
+                &options,
                 &application::RunEvent::JobInterrupted {
                     job_id: "pending".to_string(),
                     reason: format!("{error:#}"),
                 },
             );
         }
-        *worker.run_starting.lock().expect("workbench lock poisoned") = false;
+        worker
+            .run_starting
+            .lock()
+            .expect("workbench lock poisoned")
+            .remove(&project_id);
         *worker
             .last_activity
             .lock()
@@ -883,8 +1061,8 @@ fn start_run(stream: &mut TcpStream, shared: Arc<Shared>, filter: Option<String>
     )
 }
 
-fn cancel_run(stream: &mut TcpStream, shared: &Shared) -> Result<()> {
-    match application::cancel_active_run(&shared.options) {
+fn cancel_run(stream: &mut TcpStream, options: &GlobalOptions) -> Result<()> {
+    match application::cancel_active_run(options) {
         Ok(job_id) => respond(
             stream,
             "202 Accepted",
@@ -918,7 +1096,14 @@ fn shutdown_service(stream: &mut TcpStream, shared: &Shared, request: &HttpReque
         );
     }
     let run_starting = shared.run_starting.lock().expect("workbench lock poisoned");
-    if *run_starting || application::run_is_active(&shared.options).unwrap_or(false) {
+    let run_active = !run_starting.is_empty()
+        || crate::project_registry::list()
+            .unwrap_or_default()
+            .into_iter()
+            .any(|project| {
+                application::run_is_active(&options_for_entry(&project)).unwrap_or(false)
+            });
+    if run_active {
         return respond(
             stream,
             "409 Conflict",
@@ -947,6 +1132,7 @@ fn open_project(
     stream: &mut TcpStream,
     shared: &Shared,
     request: &HttpRequest,
+    options: &GlobalOptions,
     kind: ProjectOpenKind,
 ) -> Result<()> {
     if !authorized_mutation(request, shared) {
@@ -965,22 +1151,44 @@ fn open_project(
             r#"{"error":"invalid_json"}"#,
         );
     }
-    let target = application::project_open_target(&shared.options)?;
+    let target = match application::project_open_target(options) {
+        Ok(target) => target,
+        Err(error) => {
+            return respond(
+                stream,
+                "409 Conflict",
+                "application/json",
+                &serde_json::json!({"error": format!("could not locate project: {error}")})
+                    .to_string(),
+            );
+        }
+    };
     let editor = std::env::var("VISUAL")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| std::env::var("EDITOR").ok());
-    let mut command = project_open_command(kind, &target, editor.as_deref())?;
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    match command.spawn() {
-        Ok(_) => respond(
+    let resolved = match project_open_command(kind, &target, editor.as_deref()) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            return respond(
+                stream,
+                "409 Conflict",
+                "application/json",
+                &serde_json::json!({"error": format!("could not open project: {error}")})
+                    .to_string(),
+            );
+        }
+    };
+    match launch_project_command(resolved.command, &resolved.application) {
+        Ok(()) => respond(
             stream,
             "202 Accepted",
             "application/json",
-            r#"{"status":"opened"}"#,
+            &serde_json::json!({
+                "status": "opened",
+                "application": resolved.application,
+            })
+            .to_string(),
         ),
         Err(error) => respond(
             stream,
@@ -995,7 +1203,7 @@ fn project_open_command(
     kind: ProjectOpenKind,
     target: &Path,
     editor: Option<&str>,
-) -> Result<Command> {
+) -> Result<ProjectOpenCommand> {
     if matches!(kind, ProjectOpenKind::Editor)
         && let Some(editor) = editor
     {
@@ -1004,39 +1212,94 @@ fn project_open_command(
             .next()
             .filter(|part| !part.is_empty())
             .context("the configured VISUAL or EDITOR command is empty")?;
-        let mut command = Command::new(program);
-        command.args(parts).arg(target);
-        return Ok(command);
+        if !terminal_only_editor(program) {
+            let mut command = Command::new(program);
+            command.args(parts).arg(target);
+            return Ok(ProjectOpenCommand {
+                command,
+                application: program.to_string(),
+            });
+        }
     }
 
     #[cfg(target_os = "macos")]
     {
         let mut command = Command::new("open");
         if matches!(kind, ProjectOpenKind::Editor) {
-            command.arg("-a").arg("Visual Studio Code");
+            let application = [
+                "Cursor",
+                "Visual Studio Code",
+                "Zed",
+                "Sublime Text",
+                "Nova",
+                "RustRover",
+            ]
+            .into_iter()
+            .find(|application| macos_application_exists(application))
+            .context(
+                "no supported graphical editor was found; set VISUAL or EDITOR to a GUI editor command such as 'cursor', 'code', or 'zed'",
+            )?;
+            command.arg("-a").arg(application).arg(target);
+            return Ok(ProjectOpenCommand {
+                command,
+                application: application.to_string(),
+            });
         }
         command.arg(target);
-        Ok(command)
+        Ok(ProjectOpenCommand {
+            command,
+            application: "Finder".to_string(),
+        })
     }
     #[cfg(target_os = "linux")]
     {
-        let mut command = if matches!(kind, ProjectOpenKind::Editor) {
-            Command::new("code")
+        let (program, application) = if matches!(kind, ProjectOpenKind::Editor) {
+            [
+                ("cursor", "Cursor"),
+                ("code", "Visual Studio Code"),
+                ("zed", "Zed"),
+                ("codium", "VSCodium"),
+                ("subl", "Sublime Text"),
+            ]
+            .into_iter()
+            .find(|(program, _)| command_exists(program))
+            .context(
+                "no supported graphical editor was found; set VISUAL or EDITOR to a GUI editor command",
+            )?
         } else {
-            Command::new("xdg-open")
+            ("xdg-open", "file manager")
         };
+        let mut command = Command::new(program);
         command.arg(target);
-        Ok(command)
+        Ok(ProjectOpenCommand {
+            command,
+            application: application.to_string(),
+        })
     }
     #[cfg(windows)]
     {
-        let mut command = if matches!(kind, ProjectOpenKind::Editor) {
-            Command::new("code.cmd")
+        let (program, application) = if matches!(kind, ProjectOpenKind::Editor) {
+            [
+                ("cursor.cmd", "Cursor"),
+                ("code.cmd", "Visual Studio Code"),
+                ("zed.exe", "Zed"),
+                ("codium.cmd", "VSCodium"),
+                ("subl.exe", "Sublime Text"),
+            ]
+            .into_iter()
+            .find(|(program, _)| command_exists(program))
+            .context(
+                "no supported graphical editor was found; set VISUAL or EDITOR to a GUI editor command",
+            )?
         } else {
-            Command::new("explorer")
+            ("explorer", "File Explorer")
         };
+        let mut command = Command::new(program);
         command.arg(target);
-        Ok(command)
+        Ok(ProjectOpenCommand {
+            command,
+            application: application.to_string(),
+        })
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
@@ -1046,7 +1309,63 @@ fn project_open_command(
     }
 }
 
-fn serve_events(mut stream: TcpStream, shared: &Shared, request: &HttpRequest) -> Result<()> {
+fn terminal_only_editor(program: &str) -> bool {
+    Path::new(program)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, "vi" | "vim" | "nvim" | "nano" | "emacs"))
+}
+
+fn launch_project_command(mut command: Command, application: &str) -> Result<()> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to start {application}"))?;
+    let deadline = Instant::now() + Duration::from_millis(750);
+    loop {
+        match child.try_wait()? {
+            Some(status) if status.success() => return Ok(()),
+            Some(status) => bail!("{application} exited with status {status}"),
+            None if Instant::now() >= deadline => {
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                return Ok(());
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_application_exists(application: &str) -> bool {
+    Command::new("open")
+        .arg("-Ra")
+        .arg(application)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(any(target_os = "linux", windows))]
+fn command_exists(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|directory| directory.join(program).is_file())
+    })
+}
+
+fn serve_events(
+    mut stream: TcpStream,
+    shared: &Shared,
+    request: &HttpRequest,
+    project_id: String,
+    options: GlobalOptions,
+) -> Result<()> {
     stream.set_read_timeout(None)?;
     let headers = concat!(
         "HTTP/1.1 200 OK\r\n",
@@ -1074,7 +1393,7 @@ fn serve_events(mut stream: TcpStream, shared: &Shared, request: &HttpRequest) -
                 .get("last-event-id")
                 .and_then(|value| value.parse::<u64>().ok())
         })
-        .unwrap_or(crate::run_journal::cursor(project_root(&shared.options)?)?);
+        .unwrap_or(crate::run_journal::cursor(project_root(&options)?)?);
     let mut previous = String::new();
     let mut focus_revision = shared.focus_revision.load(Ordering::SeqCst);
 
@@ -1082,11 +1401,20 @@ fn serve_events(mut stream: TcpStream, shared: &Shared, request: &HttpRequest) -
         let current_focus_revision = shared.focus_revision.load(Ordering::SeqCst);
         if current_focus_revision != focus_revision {
             focus_revision = current_focus_revision;
-            if stream.write_all(b"event: focus\ndata: {}\n\n").is_err() {
+            let target = shared
+                .focus_target
+                .lock()
+                .expect("workbench lock poisoned")
+                .clone();
+            let payload = format!(
+                "event: focus\ndata: {}\n\n",
+                serde_json::json!({"route": target})
+            );
+            if stream.write_all(payload.as_bytes()).is_err() {
                 return Ok(());
             }
         }
-        for entry in crate::run_journal::entries_after(project_root(&shared.options)?, cursor)? {
+        for entry in crate::run_journal::entries_after(project_root(&options)?, cursor)? {
             let serialized = serde_json::to_string(&entry.event)?;
             let payload = format!("id: {}\nevent: run\ndata: {serialized}\n\n", entry.id);
             if stream.write_all(payload.as_bytes()).is_err() {
@@ -1094,8 +1422,10 @@ fn serve_events(mut stream: TcpStream, shared: &Shared, request: &HttpRequest) -
             }
             cursor = entry.id;
         }
-        let state =
-            application::load_workbench_state_for_session(&shared.options, &shared.session_id)?;
+        let state = application::load_workbench_state_for_session(
+            &options,
+            &project_session_id(shared, &project_id),
+        )?;
         let serialized = serde_json::to_string(&state)?;
         let payload = if serialized != previous {
             previous = serialized.clone();
@@ -1112,6 +1442,132 @@ fn serve_events(mut stream: TcpStream, shared: &Shared, request: &HttpRequest) -
             .expect("workbench lock poisoned") = Instant::now();
         std::thread::sleep(EVENT_POLL_INTERVAL);
     }
+}
+
+fn serve_app_events(mut stream: TcpStream, shared: &Shared) -> Result<()> {
+    stream.set_read_timeout(None)?;
+    stream.write_all(
+        concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "Content-Type: text/event-stream\r\n",
+            "Cache-Control: no-cache\r\n",
+            "X-Content-Type-Options: nosniff\r\n",
+            "Referrer-Policy: no-referrer\r\n",
+            "Connection: keep-alive\r\n\r\n"
+        )
+        .as_bytes(),
+    )?;
+    struct ClientGuard<'a>(&'a AtomicUsize);
+    impl Drop for ClientGuard<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+    shared.clients.fetch_add(1, Ordering::SeqCst);
+    let _guard = ClientGuard(&shared.clients);
+    let mut focus_revision = shared.focus_revision.load(Ordering::SeqCst);
+    loop {
+        let current = shared.focus_revision.load(Ordering::SeqCst);
+        let payload = if current != focus_revision {
+            focus_revision = current;
+            let target = shared
+                .focus_target
+                .lock()
+                .expect("workbench lock poisoned")
+                .clone();
+            format!(
+                "event: focus\ndata: {}\n\n",
+                serde_json::json!({"route": target})
+            )
+        } else {
+            ": keep-alive\n\n".to_string()
+        };
+        if stream.write_all(payload.as_bytes()).is_err() {
+            return Ok(());
+        }
+        *shared
+            .last_activity
+            .lock()
+            .expect("workbench lock poisoned") = Instant::now();
+        std::thread::sleep(EVENT_POLL_INTERVAL);
+    }
+}
+
+fn options_for_entry(project: &crate::project_registry::RegisteredProject) -> GlobalOptions {
+    GlobalOptions {
+        project_dir: Some(project.path.clone()),
+        packs_dir: project.packs_dir.clone(),
+    }
+}
+
+fn project_request(shared: &Shared, request: &HttpRequest) -> Result<(String, GlobalOptions)> {
+    let id = query_value(&request.target, "project")
+        .map(str::to_string)
+        .or_else(|| shared.default_project_id.clone())
+        .context("select a registered project first")?;
+    let project = crate::project_registry::resolve(&id)?;
+    Ok((id, options_for_entry(&project)))
+}
+
+fn project_session_id(shared: &Shared, project_id: &str) -> String {
+    format!("{}-{project_id}", shared.session_id)
+}
+
+fn load_project_summaries() -> Result<Vec<ProjectSummary>> {
+    crate::project_registry::list()?
+        .into_iter()
+        .map(|project| {
+            let options = options_for_entry(&project);
+            let health = application::load_project_health(&options)?;
+            let state_path = project.path.join(".deltaforge").join("state.json");
+            let state = crate::state::ProjectState::read_from(&state_path).ok();
+            let content = application::load_capability_content(&options).ok();
+            let current_position = content
+                .as_ref()
+                .and_then(|content| {
+                    content.roadmap.iter().find(|step| {
+                        matches!(step.status, crate::capability::RoadmapStatus::Current)
+                    })
+                })
+                .map_or(0, |step| step.position);
+            let healthy = matches!(health.status, application::ProjectHealthStatus::Healthy);
+            Ok(ProjectSummary {
+                id: project.id,
+                name: content
+                    .as_ref()
+                    .map(|content| content.project_overview.name.clone())
+                    .or_else(|| state.as_ref().map(|state| state.project.clone()))
+                    .unwrap_or_else(|| "Unavailable project".to_string()),
+                description: content
+                    .as_ref()
+                    .map(|content| content.project_overview.description.clone())
+                    .unwrap_or_else(|| {
+                        "This project needs attention before it can continue.".to_string()
+                    }),
+                language: state
+                    .as_ref()
+                    .map(|state| state.language.clone())
+                    .unwrap_or_default(),
+                path: project.path,
+                current_step: content
+                    .as_ref()
+                    .map(|content| content.title.clone())
+                    .unwrap_or_else(|| "Unavailable".to_string()),
+                current_step_number: current_position,
+                total_steps: content.as_ref().map_or(0, |content| content.roadmap.len()),
+                completed_steps: state
+                    .as_ref()
+                    .map_or(0, |state| state.completed_stages.len()),
+                last_opened_at: project.last_opened_at,
+                status: if healthy {
+                    "healthy"
+                } else {
+                    "needs_attention"
+                },
+                issue: health.issue.map(|issue| issue.title),
+            })
+        })
+        .collect()
 }
 
 fn project_root(options: &GlobalOptions) -> Result<&Path> {
@@ -1185,619 +1641,27 @@ fn capability_token(root: &Path) -> String {
     format!("{hash:016x}{nanos:x}")
 }
 fn workbench_html(token: &str) -> String {
-    let token_json = serde_json::to_string(token).unwrap_or_else(|_| "\"\"".to_string());
-    let html = r###"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="dark">
-<title>DeltaForge</title>
-<style>
-:root {
-  --bg: #090b10; --panel: #10141d; --panel-2: #151b27; --line: #252d3c;
-  --ink: #f2f5fb; --muted: #8e99aa; --blue: #75a7ff; --cyan: #6de3d1;
-  --amber: #f4c26b; --radius: 18px;
-  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0; min-height: 100vh; color: var(--ink);
-  background: radial-gradient(circle at 70% -10%, rgba(70,113,196,.18), transparent 38rem), var(--bg);
-}
-button { font: inherit; }
-button:focus-visible, summary:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; }
-.shell { min-height: 100vh; display: grid; grid-template-columns: 250px minmax(420px,1fr) 330px; }
-.rail {
-  border-right: 1px solid var(--line); padding: 30px 24px;
-  display: flex; flex-direction: column; gap: 34px;
-}
-.brand { font-weight: 720; letter-spacing: -.03em; font-size: 1.08rem; }
-.brand span { color: var(--blue); }
-.eyebrow {
-  color: var(--muted); font: 650 .68rem/1 ui-monospace, SFMono-Regular, Consolas, monospace;
-  letter-spacing: .14em; text-transform: uppercase;
-}
-.project-name { margin-top: 9px; font-weight: 650; }
-.cap-list { display: grid; gap: 8px; }
-.cap {
-  padding: 11px 12px; border: 1px solid transparent; border-radius: 11px;
-  color: var(--muted); font-size: .86rem;
-}
-.cap.current { color: var(--ink); background: var(--panel); border-color: var(--line); }
-.rail-foot { margin-top: auto; color: var(--muted); font-size: .76rem; line-height: 1.55; }
-.repo-actions { margin-top: 14px; display: grid; gap: 7px; }
-.repo-action { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; text-align: left; color: #c8d0dc; background: transparent; cursor: pointer; font-size: .74rem; }
-.local-note { display: inline; }
-main { padding: 46px clamp(34px,5vw,76px); }
-.health-screen { max-width: 720px; margin: 12vh auto 0; padding: 28px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
-.health-screen[hidden] { display: none; }
-.health-screen h1 { margin: 14px 0; font-size: clamp(2rem,4vw,3.6rem); }
-.health-screen p { color: var(--muted); line-height: 1.6; }
-.health-detail { padding: 13px; border-radius: 10px; background: #090c12; color: #c8d0dc; font: .76rem/1.5 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.health-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 22px; }
-.health-actions button { border: 1px solid var(--line); border-radius: 999px; padding: 10px 14px; color: var(--ink); background: transparent; cursor: pointer; font-weight: 650; }
-.health-actions button.health-primary { color: #07101a; background: var(--blue); border-color: var(--blue); }
-.shell.project-unhealthy .mission, .shell.project-unhealthy > .evidence { display: none; }
-.mission { max-width: 820px; margin: 0 auto; }
-.kicker { color: var(--cyan); font: 650 .72rem/1 ui-monospace, monospace; letter-spacing: .12em; }
-h1 { margin: 18px 0 14px; font-size: clamp(2.35rem,5vw,4.5rem); line-height: .98; letter-spacing: -.055em; }
-.lede { max-width: 640px; color: #b7c0ce; font-size: 1.06rem; line-height: 1.65; }
-.action-row { display: flex; align-items: center; gap: 14px; margin: 30px 0 36px; }
-.primary {
-  border: 0; border-radius: 999px; padding: 13px 22px; color: #07101a;
-  background: var(--blue); font-weight: 720; cursor: pointer;
-}
-.primary:disabled { cursor: default; opacity: .55; }
-.secondary {
-  display: none; margin-top: 14px; border: 1px solid var(--line); border-radius: 999px;
-  padding: 8px 12px; color: var(--ink); background: transparent; cursor: pointer;
-  font-size: .78rem; font-weight: 650;
-}
-.secondary.visible { display: inline-flex; }
-.status { color: var(--muted); font-size: .84rem; }
-.card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.card {
-  min-height: 150px; padding: 20px; border: 1px solid var(--line);
-  border-radius: var(--radius); background: rgba(16,20,29,.78);
-}
-.card h2 { margin: 9px 0 8px; font-size: 1rem; }
-.card p { margin: 0; color: var(--muted); line-height: 1.55; font-size: .9rem; }
-.spec { margin-top: 16px; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: rgba(16,20,29,.55); }
-.spec details + details { border-top: 1px solid var(--line); }
-.spec summary { padding: 16px 20px; cursor: pointer; color: #c8d0dc; font-size: .86rem; font-weight: 650; }
-.spec-body { padding: 0 20px 18px; color: var(--muted); font-size: .86rem; line-height: 1.55; }
-.bullet-list { margin: 0; padding-left: 1.15rem; display: grid; gap: 8px; }
-.example { margin: 0; padding: 14px; overflow: auto; border-radius: 11px; background: #090c12; color: #c8d8f4; font: .76rem/1.55 ui-monospace, monospace; white-space: pre-wrap; }
-.evidence { border-left: 1px solid var(--line); padding: 30px 24px; background: rgba(9,11,16,.5); }
-.evidence h2 { font-size: .94rem; margin: 9px 0 26px; }
-.signal { padding: 16px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
-.signal strong { display: block; font-size: .9rem; margin-bottom: 6px; }
-.signal p { color: var(--muted); margin: 0; font-size: .82rem; line-height: 1.5; }
-.signal.fresh strong { color: var(--cyan); }
-.signal.stale strong { color: var(--amber); }
-.run-meter { margin-top: 16px; color: var(--muted); font: .76rem/1.5 ui-monospace, monospace; }
-.contract { margin-top: 28px; display: grid; gap: 13px; }
-.contract-row { display: flex; gap: 10px; color: #b7c0ce; font-size: .82rem; line-height: 1.45; }
-.dot { width: 6px; height: 6px; margin-top: 6px; border-radius: 50%; background: var(--blue); flex: 0 0 auto; }
-.diagnosis { display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
-.diagnosis.visible { display: grid; gap: 13px; }
-.diagnosis-item span { display: block; margin-bottom: 4px; color: var(--muted); font: 650 .63rem/1 ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
-.diagnosis-item p, .diagnosis-item pre { margin: 0; color: #c8d0dc; font-size: .78rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-.diagnosis-item pre { max-height: 150px; overflow: auto; padding: 10px; border-radius: 9px; background: #090c12; }
-.other-failures { display: none; margin-top: 15px; border-top: 1px solid var(--line); padding-top: 13px; }
-.other-failures.visible { display: block; }
-.other-failures summary { cursor: pointer; color: var(--muted); font-size: .76rem; }
-.other-failures ul { margin: 11px 0 0; padding-left: 1rem; color: #b7c0ce; font-size: .76rem; line-height: 1.5; }
-.other-failures li { margin: 7px 0; padding-left: 2px; }
-.other-failure-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: start; gap: 8px; }
-.secondary-rerun { border: 1px solid var(--line); border-radius: 999px; padding: 5px 8px; color: #c8d0dc; background: transparent; cursor: pointer; font-size: .68rem; }
-.help { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
-.help-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.help button { border: 1px solid var(--line); border-radius: 999px; padding: 7px 11px; color: var(--ink); background: transparent; cursor: pointer; font-size: .74rem; font-weight: 650; }
-.help button:disabled { opacity: .5; cursor: default; }
-.help-levels { margin-top: 13px; display: grid; gap: 10px; }
-.help-level { padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
-.help-level strong { color: var(--cyan); font-size: .76rem; }
-.help-level p { margin: 7px 0 0; color: var(--muted); font-size: .79rem; line-height: 1.5; white-space: pre-wrap; }
-@media (max-width: 1040px) {
-  .shell { grid-template-columns: 210px 1fr; }
-  .evidence { grid-column: 2; border-top: 1px solid var(--line); border-left: 0; }
-}
-@media (max-width: 720px) {
-  .shell { display: block; }
-  .rail { border-right: 0; border-bottom: 1px solid var(--line); padding: 20px 22px; display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 16px; }
-  .rail-capabilities { display: none; }
-  .rail .eyebrow { display: none; }
-  .project-name { margin-top: 0; font-size: .86rem; }
-  .rail-foot { grid-column: 1 / -1; margin-top: 0; }
-  .local-note { display: none; }
-  .repo-actions { margin-top: 0; display: flex; }
-  .repo-action { min-height: 44px; flex: 1; text-align: center; }
-  main { padding: 34px 22px; }
-  .action-row { align-items: stretch; flex-wrap: wrap; }
-  .primary { min-height: 48px; }
-  .status { flex: 1; min-width: 140px; align-self: center; line-height: 1.4; }
-  .card-grid { grid-template-columns: 1fr; }
-}
-</style>
-</head>
-<body>
-<div class="shell" id="app-shell">
-  <aside class="rail">
-    <div class="brand">Delta<span>Forge</span></div>
-    <div><div class="eyebrow">Project</div><div class="project-name" id="project">Loading?</div></div>
-    <div class="rail-capabilities">
-      <div class="eyebrow">Capabilities</div>
-      <div class="cap-list">
-        <div class="cap current" id="current-cap">Current capability</div>
-        <div class="cap" id="next-cap">Next capability locked</div>
-      </div>
-    </div>
-    <div class="rail-foot"><span class="local-note">Local workbench<br>No account · Works offline</span>
-      <div class="repo-actions"><button class="repo-action" id="open-editor" type="button">Open editor</button><button class="repo-action" id="open-folder" type="button">Open folder</button></div>
-    </div>
-  </aside>
-  <main>
-    <section class="health-screen" id="health-screen" hidden>
-      <div class="eyebrow">Project recovery</div>
-      <h1 id="health-title">DeltaForge cannot load this project</h1>
-      <p id="health-guidance"></p>
-      <pre class="health-detail" id="health-detail"></pre>
-      <div class="health-actions"><button class="health-primary" id="health-recheck" type="button">Check again</button><button id="health-repin" type="button" hidden>Adopt current pack</button><button id="health-editor" type="button">Open editor</button><button id="health-folder" type="button">Open folder</button></div>
-    </section>
-    <section class="mission">
-      <div class="kicker">CURRENT MISSION</div>
-      <h1 id="mission-title">Loading your mission</h1>
-      <p class="lede" id="mission-copy">Loading the capability contract…</p>
-      <div class="action-row">
-        <button class="primary" id="primary-action" type="button">Run checks</button>
-        <span class="status" id="activity" aria-live="polite">Connecting to the local workbench…</span>
-      </div>
-      <div class="card-grid">
-        <article class="card">
-          <div class="eyebrow">Why it matters</div>
-          <h2>Capability context</h2>
-          <p id="why-copy">Loading…</p>
-        </article>
-        <article class="card">
-          <div class="eyebrow">Definition of done</div>
-          <h2>Observable outcomes</h2>
-          <ul class="bullet-list" id="success-list"></ul>
-        </article>
-      </div>
-      <div class="spec">
-        <details open><summary>Requirements</summary><div class="spec-body"><ul class="bullet-list" id="requirements-list"></ul></div></details>
-        <details><summary>Example</summary><div class="spec-body"><pre class="example" id="example-copy"></pre></div></details>
-        <details><summary>Edge cases</summary><div class="spec-body"><ul class="bullet-list" id="edge-list"></ul></div></details>
-        <details><summary>Non-goals</summary><div class="spec-body"><ul class="bullet-list" id="non-goals-list"></ul></div></details>
-      </div>
-    </section>
-  </main>
-  <aside class="evidence">
-    <div class="eyebrow">Evidence</div>
-    <h2>Your latest proof</h2>
-    <div class="signal" id="signal">
-      <strong id="signal-title">No run yet</strong>
-      <p id="signal-copy">Run checks when you are ready. DeltaForge will preserve the result for your next session.</p>
-      <button class="secondary" id="focused-rerun" type="button">Rerun this check</button>
-      <div class="run-meter" id="run-meter" aria-live="polite"></div>
-      <div class="diagnosis" id="diagnosis">
-        <div class="diagnosis-item"><span>Contract</span><p id="diagnosis-contract"></p></div>
-        <div class="diagnosis-item"><span>Expected</span><pre id="diagnosis-expected"></pre></div>
-        <div class="diagnosis-item"><span>Observed</span><pre id="diagnosis-actual"></pre></div>
-        <div class="diagnosis-item" id="diagnosis-fixture-row"><span>Fixture</span><p id="diagnosis-fixture"></p></div>
-      </div>
-      <details class="other-failures" id="other-failures"><summary id="other-failures-title">Other contradictions</summary><ul id="other-failures-list"></ul></details>
-    </div>
-    <div class="contract" id="contract">
-      <div class="eyebrow">Contract</div>
-      <div id="contract-rows"></div>
-    </div>
-    <div class="help">
-      <div class="help-head"><div class="eyebrow">Progressive help</div><button id="reveal-help" type="button">Reveal observation</button></div>
-      <div class="help-levels" id="help-levels"></div>
-    </div>
-  </aside>
-</div>
-<script>
-const token = __TOKEN_JSON__;
-const stateUrl = "/api/v1/state?token=" + encodeURIComponent(token);
-const api = path => path + "?token=" + encodeURIComponent(token);
-const capabilityUrl = api("/api/v1/capability");
-const healthUrl = api("/api/v1/project-health");
-const action = document.querySelector("#primary-action");
-const rerun = document.querySelector("#focused-rerun");
-const help = document.querySelector("#reveal-help");
-const meter = document.querySelector("#run-meter");
-let canonical = null;
-let content = null;
-let events = null;
-let busy = false;
-let currentHealth = null;
-let live = { active: false, phase: "", passed: 0, failed: 0, current: 0, total: 0, started: 0 };
-
-async function loadHealth() {
-  const response = await fetch(healthUrl);
-  if (!response.ok) throw new Error("project health unavailable");
-  const health = await response.json();
-  renderHealth(health);
-  return health;
+    include_str!("workbench.html").replace("__TOKEN_JSON__", &serde_json::json!(token).to_string())
 }
 
-function renderHealth(health) {
-  currentHealth = health;
-  const unhealthy = health.status === "unhealthy";
-  document.querySelector("#app-shell").classList.toggle("project-unhealthy", unhealthy);
-  document.querySelector("#health-screen").hidden = !unhealthy;
-  if (!unhealthy) return;
-  const issue = health.issue || {};
-  document.querySelector("#health-title").textContent = issue.title || "DeltaForge cannot load this project";
-  document.querySelector("#health-guidance").textContent = issue.guidance || "Resolve the reported problem, then check again.";
-  document.querySelector("#health-detail").textContent = issue.detail || "Project health check failed.";
-  document.querySelector("#health-repin").hidden = !health.actions.some(item => item.kind === "repin_pack");
-}
-
-function firstFailure(state) {
-  return state.primary_failure || null;
-}
-
-function fillList(selector, items) {
-  const list = document.querySelector(selector);
-  list.replaceChildren(...(items || []).map(item => {
-    const row = document.createElement("li"); row.textContent = item; return row;
-  }));
-}
-
-function renderContent(next) {
-  content = next;
-  document.querySelector("#mission-title").textContent = next.title;
-  document.querySelector("#mission-copy").textContent = next.mission;
-  document.querySelector("#why-copy").textContent = next.why;
-  fillList("#success-list", next.success_conditions);
-  fillList("#requirements-list", next.requirements);
-  fillList("#edge-list", next.edge_cases);
-  fillList("#non-goals-list", next.non_goals);
-  document.querySelector("#example-copy").textContent = next.example;
-  document.querySelector("#current-cap").textContent = next.title;
-  document.querySelector("#next-cap").textContent = next.next ? "Next · " + next.next.title : "Final capability";
-
-  const contractRows = document.querySelector("#contract-rows");
-  contractRows.replaceChildren(...next.requirements.slice(0, 4).map(requirement => {
-    const row = document.createElement("div"); row.className = "contract-row";
-    const dot = document.createElement("span"); dot.className = "dot";
-    const copy = document.createElement("span"); copy.textContent = requirement;
-    row.append(dot, copy); return row;
-  }));
-
-  const helpLevels = document.querySelector("#help-levels");
-  helpLevels.replaceChildren(...next.revealed_help.map(level => {
-    const panel = document.createElement("div"); panel.className = "help-level";
-    const title = document.createElement("strong"); title.textContent = `Level ${level.level} · ${level.label}`;
-    const copy = document.createElement("p"); copy.textContent = level.content;
-    panel.append(title, copy); return panel;
-  }));
-  const revealed = next.revealed_help.length;
-  const completed = Boolean(canonical && canonical.capability.completed);
-  const available = completed ? next.help_levels : Math.min(next.help_levels, 4);
-  help.disabled = busy || revealed >= available;
-  help.textContent = revealed >= available
-    ? (completed || revealed === next.help_levels ? "All help revealed" : "Retrospective locked")
-    : `Reveal level ${revealed + 1}`;
-}
-
-function showEvidence(titleText, copyText, tone = "") {
-  const signal = document.querySelector("#signal");
-  signal.className = "signal" + (tone ? " " + tone : "");
-  document.querySelector("#signal-title").textContent = titleText;
-  document.querySelector("#signal-copy").textContent = copyText;
-}
-
-function renderDiagnosis(failure) {
-  const panel = document.querySelector("#diagnosis");
-  const diagnosis = failure && failure.diagnosis;
-  panel.classList.toggle("visible", Boolean(diagnosis));
-  if (!diagnosis) return;
-  document.querySelector("#diagnosis-contract").textContent = diagnosis.contract || diagnosis.summary;
-  document.querySelector("#diagnosis-expected").textContent = diagnosis.expected || "The capability contract should hold.";
-  document.querySelector("#diagnosis-actual").textContent = diagnosis.actual || failure.failures.join("\n") || "The check failed.";
-  const fixture = [diagnosis.fixture, ...(diagnosis.fixture_entries || [])].filter(Boolean).join(" · ");
-  document.querySelector("#diagnosis-fixture").textContent = fixture;
-  document.querySelector("#diagnosis-fixture-row").style.display = fixture ? "block" : "none";
-}
-
-function renderSecondaryFailures(state) {
-  const failures = state.latest_run && state.latest_run.failed_tests ? state.latest_run.failed_tests.slice(1) : [];
-  const panel = document.querySelector("#other-failures");
-  panel.classList.toggle("visible", failures.length > 0 && state.freshness === "fresh" && !state.active_job);
-  document.querySelector("#other-failures-title").textContent = `${failures.length} other contradiction${failures.length === 1 ? "" : "s"}`;
-  const list = document.querySelector("#other-failures-list");
-  list.replaceChildren(...failures.map(failure => {
-    const row = document.createElement("li");
-    const content = document.createElement("div");
-    content.className = "other-failure-row";
-    const label = document.createElement("span");
-    label.textContent = failure.diagnosis ? failure.diagnosis.headline : failure.name;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "secondary-rerun";
-    button.dataset.test = failure.name;
-    button.textContent = "Rerun";
-    button.setAttribute("aria-label", "Rerun " + failure.name);
-    content.append(label, button);
-    row.append(content);
-    return row;
-  }));
-}
-
-function renderAction(state) {
-  const running = live.active || Boolean(state.active_job);
-  action.disabled = busy || (!running && !state.primary_action.enabled);
-  action.textContent = running ? "Cancel run" : state.primary_action.label;
-  if (content) renderContent(content);
-}
-
-function formatTimestamp(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium", timeStyle: "short"
-  }).format(date);
-}
-
-function render(state) {
-  canonical = state;
-  const returning = state.resumption && state.resumption.action_pending ? state.resumption : null;
-  document.querySelector("#project").textContent = state.project + " · " + state.language;
-  if (!content) {
-    document.querySelector("#mission-title").textContent = state.capability.title;
-    document.querySelector("#current-cap").textContent = state.capability.title;
-  }
-  document.querySelector("#activity").textContent =
-    returning && returning.previous_session_started_at ? "Returned · " + formatTimestamp(returning.previous_session_started_at) :
-    state.recovered_interrupted_job ? "Previous run was safely recovered" :
-    state.freshness === "stale" && state.last_source_change ? "Source changed · " + formatTimestamp(state.last_source_change.observed_at) :
-    "Last activity · " + formatTimestamp(state.last_activity_at);
-  const failure = firstFailure(state);
-  const fatalFailure = Boolean(failure && failure.diagnosis && failure.diagnosis.kind === "build");
-  renderSecondaryFailures(state);
-  rerun.classList.toggle("visible", Boolean(failure) && state.freshness === "fresh" && !state.active_job);
-  rerun.dataset.test = failure ? failure.name : "";
-  if (live.active || state.active_job) {
-    showEvidence("Checks are running", live.phase || "Preparing the project…");
-    renderDiagnosis(null);
-  } else if (returning) {
-    const tone = returning.kind === "interrupted" || returning.kind === "source_changed" ? "stale" : "fresh";
-    showEvidence("Welcome back · " + returning.title, returning.detail, tone);
-    renderDiagnosis(state.freshness === "fresh" ? failure : null);
-  } else if (fatalFailure) {
-    showEvidence("Start here · " + failure.diagnosis.headline, failure.diagnosis.summary);
-    renderDiagnosis(failure);
-  } else if (state.freshness === "fresh") {
-    if (state.capability.completed) {
-      showEvidence("Capability acquired", content ? content.capability_statement : "This evidence matches the source currently on disk.", "fresh");
-      renderDiagnosis(null);
-    } else if (failure) {
-      const diagnosis = failure.diagnosis;
-      showEvidence("Start here · " + (diagnosis ? diagnosis.headline : failure.name),
-        diagnosis ? diagnosis.summary : (failure.failures && failure.failures[0] ? failure.failures[0] : "This check contradicted the contract."));
-      renderDiagnosis(failure);
-    } else {
-      showEvidence("Result is current", "This evidence matches the source currently on disk.", "fresh");
-      renderDiagnosis(null);
-    }
-  } else if (state.freshness === "stale") {
-    showEvidence("Source changed", "Your previous result is preserved, but it no longer proves the current code.", "stale");
-    renderDiagnosis(null);
-  } else {
-    showEvidence("No run yet", "Run checks when you are ready. DeltaForge will preserve the result for your next session.");
-    renderDiagnosis(null);
-  }
-  renderAction(state);
-  renderMeter();
-}
-
-function renderMeter() {
-  if (!live.active) {
-    const run = canonical && canonical.freshness === "fresh" ? canonical.latest_run : null;
-    meter.textContent = run ? `${run.passed} passed · ${run.failed} failed` : "";
-    return;
-  }
-  const seconds = live.started ? Math.max(0, Math.floor((performance.now() - live.started) / 1000)) : 0;
-  const count = live.total ? ` · ${live.current}/${live.total}` : "";
-  meter.textContent = `${live.phase || "Running"}${count} · ${seconds}s · ${live.passed} passed · ${live.failed} failed`;
-}
-
-async function loadState() {
-  const response = await fetch(stateUrl);
-  if (!response.ok) throw new Error("state unavailable");
-  const state = await response.json();
-  render(state);
-  return state;
-}
-
-async function loadContent() {
-  const response = await fetch(capabilityUrl);
-  if (!response.ok) throw new Error("capability unavailable");
-  const next = await response.json();
-  renderContent(next);
-  return next;
-}
-
-async function post(path, body = {}) {
-  const response = await fetch(api(path), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.error || "operation failed");
-  }
-  return response.json();
-}
-
-function handleRun(event) {
-  switch (event.type) {
-    case "job_started":
-      live = { active: true, phase: "Preparing checks", passed: 0, failed: 0, current: 0, total: 0, started: performance.now(), buildOutput: "" };
-      break;
-    case "build_started": live.active = true; live.phase = "Building"; live.buildOutput = ""; break;
-    case "build_output":
-      live.active = true; live.phase = "Building";
-      live.buildOutput = ((live.buildOutput || "") + (event.text || "")).slice(-4000);
-      showEvidence("Building project · " + event.stream, live.buildOutput.trim() || "Build output received.");
-      break;
-    case "build_completed": live.phase = event.passed ? "Build complete" : "Build failed"; break;
-    case "test_started":
-      live.active = true; live.phase = event.name; live.current = event.index; live.total = event.total; break;
-    case "test_passed": live.passed += 1; break;
-    case "test_failed":
-      live.failed += 1;
-      showEvidence("Contradiction found · " + event.result.name,
-        event.result.failures && event.result.failures[0] ? event.result.failures[0] : "This check contradicted the contract.");
-      rerun.dataset.test = event.result.name;
-      break;
-    case "run_completed":
-      live.active = false; live.passed = event.passed_tests; live.failed = event.failed_tests;
-      loadState().catch(showConnectionError); break;
-    case "job_interrupted":
-      live.active = false; showEvidence("Run interrupted", event.reason, "stale");
-      loadState().catch(showConnectionError); break;
-    case "source_changed": loadState().catch(showConnectionError); break;
-    case "project_state_changed": Promise.all([loadState(), loadContent()]).catch(showConnectionError); break;
-  }
-  if (canonical) { renderAction(canonical); renderMeter(); }
-}
-
-function showConnectionError() {
-  document.querySelector("#activity").textContent = "Reconnecting to the local workbench…";
-}
-
-async function beginHealthy() {
-  try {
-    const [state] = await Promise.all([loadState(), loadContent()]);
-    events = new EventSource(api("/api/v1/events") + "&after=" + state.event_cursor);
-    events.addEventListener("state", event => render(JSON.parse(event.data)));
-    events.addEventListener("run", event => handleRun(JSON.parse(event.data)));
-    events.addEventListener("focus", () => window.focus());
-    events.onerror = showConnectionError;
-  } catch (_) { showConnectionError(); }
-}
-
-async function begin() {
-  try {
-    const health = await loadHealth();
-    if (health.status === "healthy") await beginHealthy();
-  } catch (_) { showConnectionError(); }
-}
-
-action.addEventListener("click", async () => {
-  if (!canonical || busy) return;
-  const restoreFocus = document.activeElement === action;
-  busy = true; renderAction(canonical);
-  try {
-    if (live.active || canonical.active_job) await post("/api/v1/runs/cancel");
-    else if (canonical.primary_action.kind === "begin_next_capability") {
-      const state = await post("/api/v1/capabilities/next");
-      render(state); await loadContent();
-    } else if (["run_checks", "resume_checks"].includes(canonical.primary_action.kind)) await post("/api/v1/runs");
-  } catch (error) {
-    showEvidence("Action could not start", error.message);
-  } finally {
-    busy = false; renderAction(canonical);
-    if (restoreFocus && !action.disabled) action.focus();
-  }
-});
-
-rerun.addEventListener("click", async () => {
-  const test = rerun.dataset.test;
-  if (!test || busy) return;
-  busy = true; renderAction(canonical);
-  try { await post("/api/v1/runs/rerun", { test }); }
-  catch (error) { showEvidence("Focused rerun could not start", error.message); }
-  finally { busy = false; renderAction(canonical); }
-});
-
-document.querySelector("#other-failures-list").addEventListener("click", async event => {
-  const button = event.target.closest("button[data-test]");
-  if (!button || busy) return;
-  busy = true; renderAction(canonical);
-  try { await post("/api/v1/runs/rerun", { test: button.dataset.test }); }
-  catch (error) { showEvidence("Focused rerun could not start", error.message); }
-  finally { busy = false; renderAction(canonical); }
-});
-
-help.addEventListener("click", async () => {
-  if (busy || !content) return;
-  const restoreFocus = document.activeElement === help;
-  busy = true; renderContent(content);
-  try {
-    const next = await post("/api/v1/hints");
-    renderContent(next);
-  } catch (error) {
-    document.querySelector("#activity").textContent = error.message;
-  } finally {
-    busy = false; renderContent(content);
-    if (restoreFocus && !help.disabled) help.focus();
-  }
-});
-
-async function openProject(path) {
-  try { await post(path); }
-  catch (error) {
-    if (currentHealth && currentHealth.status === "unhealthy") document.querySelector("#health-detail").textContent = error.message;
-    else showEvidence("Project could not be opened", error.message);
-  }
-}
-
-document.querySelector("#open-editor").addEventListener("click", () => openProject("/api/v1/project/open-editor"));
-document.querySelector("#open-folder").addEventListener("click", () => openProject("/api/v1/project/open-folder"));
-document.querySelector("#health-editor").addEventListener("click", () => openProject("/api/v1/project/open-editor"));
-document.querySelector("#health-folder").addEventListener("click", () => openProject("/api/v1/project/open-folder"));
-document.querySelector("#health-recheck").addEventListener("click", async () => {
-  const health = await loadHealth().catch(() => null);
-  if (health && health.status === "healthy") location.reload();
-});
-document.querySelector("#health-repin").addEventListener("click", async () => {
-  try {
-    const health = await post("/api/v1/project/repin-pack");
-    renderHealth(health);
-    if (health.status === "healthy") location.reload();
-  } catch (error) { document.querySelector("#health-detail").textContent = error.message; }
-});
-
-setInterval(renderMeter, 1000);
-setInterval(async () => {
-  const previous = currentHealth && currentHealth.status;
-  const health = await loadHealth().catch(() => null);
-  if (!health) return;
-  if (previous === "unhealthy" && health.status === "healthy") location.reload();
-  if (health.status === "unhealthy" && events) { events.close(); events = null; }
-}, 2000);
-begin();
-</script>
-</body>
-</html>"###;
-    html.replace("__TOKEN_JSON__", &token_json)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn test_shared(port: u16) -> Shared {
         Shared {
-            options: GlobalOptions::default(),
+            default_project_id: None,
             token: "secret-token".to_string(),
             session_id: "test-session".to_string(),
             port,
             clients: AtomicUsize::new(0),
             last_activity: Mutex::new(Instant::now()),
             record_path: PathBuf::from("unused-workbench-record.json"),
-            run_starting: Mutex::new(false),
+            run_starting: Mutex::new(BTreeSet::new()),
             shutting_down: AtomicBool::new(false),
             idle_timeout: IDLE_TIMEOUT,
             focus_revision: AtomicUsize::new(0),
+            focus_target: Mutex::new("/projects".to_string()),
         }
     }
 
@@ -1946,8 +1810,11 @@ mod tests {
     #[test]
     fn shell_uses_the_new_workbench_surface() {
         let html = workbench_html("secret-token");
-        assert!(html.contains("CURRENT MISSION"));
-        assert!(html.contains("/api/v1/state?token="));
+        assert!(html.contains("Your workspace"));
+        assert!(html.contains("Project overview"));
+        assert!(html.contains("Test results"));
+        assert!(html.contains("/api/v1/projects"));
+        assert!(html.contains("/api/v1/state"));
         assert!(html.contains("/api/v1/capability"));
         assert!(html.contains("/api/v1/runs"));
         assert!(html.contains("/api/v1/hints"));
@@ -1957,15 +1824,16 @@ mod tests {
         assert!(html.contains("/api/v1/project/open-folder"));
         assert!(html.contains("id=\"health-screen\""));
         assert!(html.contains("id=\"primary-action\""));
+        assert!(html.contains("id=\"overview-screen\""));
+        assert!(html.contains("id=\"overview-step-list\""));
+        assert!(html.contains("overview.sections"));
+        assert!(html.contains("content.roadmap"));
         assert!(html.contains("id=\"diagnosis-expected\""));
         assert!(html.contains("id=\"help-levels\""));
-        assert!(
-            html.contains("Boolean(failure) && state.freshness === \"fresh\" && !state.active_job")
-        );
-        assert!(html.contains("if (restoreFocus && !action.disabled) action.focus()"));
-        assert!(html.contains("if (restoreFocus && !help.disabled) help.focus()"));
-        assert!(!html.contains("class=\"primary\" disabled"));
-        assert!(html.contains("Local workbench"));
+        assert!(html.contains("Step complete"));
+        assert!(html.contains("Failing check"));
+        assert!(html.contains("Local · Offline"));
+        assert!(html.contains("Fix this first · "));
         assert!(!html.contains("Make file discovery deterministic:"));
         assert!(!html.contains("warm"));
     }
@@ -1973,17 +1841,21 @@ mod tests {
     #[test]
     fn configured_editor_is_passed_the_project_without_a_shell() {
         let target = Path::new("/tmp/learner-project");
-        let command =
+        let resolved =
             project_open_command(ProjectOpenKind::Editor, target, Some("code --reuse-window"))
                 .unwrap();
 
-        assert_eq!(command.get_program(), "code");
+        assert_eq!(resolved.application, "code");
+        assert_eq!(resolved.command.get_program(), "code");
         assert_eq!(
-            command
+            resolved
+                .command
                 .get_args()
                 .map(|value| value.to_string_lossy().to_string())
                 .collect::<Vec<_>>(),
             ["--reuse-window", "/tmp/learner-project"]
         );
+        assert!(terminal_only_editor("/usr/bin/nvim"));
+        assert!(!terminal_only_editor("cursor"));
     }
 }

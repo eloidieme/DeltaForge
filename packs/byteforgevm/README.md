@@ -56,7 +56,7 @@ The instruction pointer begins at address 0. Most instructions move it to the fo
 10. Support nested calls and protect the call stack's boundaries.
 11. Print a deterministic trace of the machine before each instruction.
 
-The capabilities depend on one another. Execution needs a loaded instruction sequence; branches need an explicit instruction pointer; calls need validated branch targets and a separate place for return addresses; tracing observes the same state transitions as ordinary execution.
+The steps depend on one another. Execution needs a loaded instruction sequence; branches need an explicit instruction pointer; calls need validated branch targets and a separate place for return addresses; tracing observes the same state transitions as ordinary execution.
 
 ## Instruction reference
 

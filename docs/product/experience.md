@@ -104,11 +104,11 @@ DeltaForge detects common editors and remembers the learner's choice. It offers:
 It does not silently modify editor configuration. Optional generated tasks or launch
 configuration require a later explicit action.
 
-## Mission presentation
+## Step presentation
 
-The current capability is presented progressively:
+The current project step is presented progressively:
 
-1. Mission
+1. Instructions
 2. Why it matters
 3. Success conditions
 4. Example
@@ -119,8 +119,8 @@ The current capability is presented progressively:
 The full behavioral specification remains accessible. The default view emphasizes the
 smallest useful next goal rather than presenting a document wall.
 
-Future capability names and concise previews are visible. Detailed future
-specifications remain locked until available. Completed capabilities remain revisitable.
+Future step names and concise previews are visible. Detailed future specifications
+remain locked until available. Completed steps remain revisitable.
 
 ## First run
 
@@ -144,7 +144,7 @@ workbench or CLI; both paths produce the same state and live events.
 
 A failed run initially presents:
 
-- one prioritized `Start here` contradiction;
+- one prioritized `Fix this first` contradiction;
 - overall passed, failed, and pending counts;
 - the smallest relevant input;
 - expected and actual behavior;

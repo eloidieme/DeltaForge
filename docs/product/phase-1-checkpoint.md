@@ -354,7 +354,7 @@ Validated against a fresh initialized FlashIndex learner project:
 
 - opened the canonical Stage 1 mission in the real loopback workbench with no prior
   evidence and ran the initial checks from the browser;
-- observed live build state followed by the deterministic `Start here` diagnosis,
+- observed live build state followed by the deterministic `Fix this first` diagnosis,
   with the other eight contradictions retained behind one disclosure;
 - revealed Observation, Concept, Experiment, and Structure progressively while the
   Retrospective remained locked before completion;

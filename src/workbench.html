@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DeltaForge</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #080a0f;
+  --surface: #0f131c;
+  --surface-2: #151b27;
+  --surface-3: #1b2332;
+  --line: #263043;
+  --line-soft: #1c2432;
+  --text: #f5f7fb;
+  --muted: #9ba7b8;
+  --blue: #8cadff;
+  --blue-strong: #6f96ff;
+  --mint: #82dfbd;
+  --amber: #f1c77c;
+  --red: #ff9a9a;
+  --max: 1180px;
+  --radius: 14px;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body { margin: 0; min-width: 320px; color: var(--text); background: radial-gradient(circle at 50% -20%, #17213a 0, var(--bg) 34rem); }
+button, a { font: inherit; }
+button { color: inherit; }
+a { color: inherit; text-decoration: none; }
+[hidden] { display: none !important; }
+.topbar { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--line-soft); background: rgba(8,10,15,.88); backdrop-filter: blur(18px); }
+.topbar-inner { width: min(var(--max), calc(100% - 40px)); min-height: 64px; margin: 0 auto; display: flex; align-items: center; gap: 30px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 760; letter-spacing: -.02em; }
+.brand-mark { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; color: #07111d; background: linear-gradient(145deg, var(--blue), var(--mint)); font-size: .78rem; font-weight: 900; }
+.global-nav { display: flex; align-items: stretch; align-self: stretch; }
+.nav-link { display: flex; align-items: center; padding: 0 5px; border-bottom: 2px solid transparent; color: var(--muted); font-size: .88rem; font-weight: 650; }
+.nav-link:hover, .nav-link.active { color: var(--text); border-bottom-color: var(--blue); }
+.local-badge { margin-left: auto; color: var(--muted); font-size: .75rem; }
+.page { width: min(var(--max), calc(100% - 40px)); margin: 0 auto; padding: 52px 0 80px; }
+.eyebrow { color: var(--mint); font: 700 .68rem/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .13em; text-transform: uppercase; }
+.page-title { margin: 10px 0 12px; font-size: clamp(2.15rem, 5vw, 4rem); line-height: .98; letter-spacing: -.055em; }
+.page-lede { max-width: 650px; margin: 0; color: var(--muted); font-size: 1.02rem; line-height: 1.65; }
+.button { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; background: var(--surface-2); cursor: pointer; font-weight: 680; }
+.button:hover { border-color: #465678; background: var(--surface-3); }
+.button.primary { border-color: transparent; color: #08111d; background: var(--blue); }
+.button.primary:hover { background: #a6bdff; }
+.button:disabled { opacity: .5; cursor: not-allowed; }
+.button.small { padding: 7px 10px; font-size: .78rem; }
+.empty-state { margin-top: 42px; padding: 42px; border: 1px dashed var(--line); border-radius: var(--radius); background: rgba(15,19,28,.7); text-align: center; }
+.empty-state h2 { margin: 0 0 10px; }
+.empty-state p { margin: 0; color: var(--muted); }
+.project-grid { margin-top: 38px; display: grid; grid-template-columns: repeat(auto-fill, minmax(310px,1fr)); gap: 18px; }
+.project-card { padding: 22px; display: grid; gap: 18px; border: 1px solid var(--line); border-radius: var(--radius); background: linear-gradient(145deg, rgba(21,27,39,.96), rgba(13,17,25,.96)); }
+.project-card:hover { border-color: #3b4a67; transform: translateY(-1px); }
+.project-card-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.project-card h2 { margin: 4px 0 7px; font-size: 1.25rem; }
+.project-card p { margin: 0; color: var(--muted); line-height: 1.5; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font: .68rem/1 ui-monospace, monospace; white-space: nowrap; }
+.pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--mint); }
+.pill.attention::before { background: var(--amber); }
+.progress-track { height: 5px; overflow: hidden; border-radius: 999px; background: #222b3a; }
+.progress-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--mint)); }
+.project-progress { display: grid; gap: 8px; }
+.progress-label { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: .76rem; }
+.card-actions { display: flex; gap: 9px; }
+.project-shell { min-height: calc(100vh - 64px); }
+.project-bar { border-bottom: 1px solid var(--line-soft); background: rgba(12,15,22,.72); }
+.project-bar-inner { width: min(var(--max), calc(100% - 40px)); margin: 0 auto; display: grid; grid-template-columns: minmax(180px,1fr) auto auto; align-items: center; gap: 24px; min-height: 74px; }
+.project-identity { min-width: 0; }
+.project-identity strong { display: block; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.project-meta { color: var(--muted); font-size: .74rem; }
+.project-nav { align-self: stretch; display: flex; gap: 22px; }
+.project-nav a { display: flex; align-items: center; border-bottom: 2px solid transparent; color: var(--muted); font-size: .84rem; font-weight: 680; }
+.project-nav a:hover, .project-nav a.active { color: var(--text); border-bottom-color: var(--blue); }
+.project-tools { display: flex; gap: 8px; }
+.open-status { position: absolute; width: 1px; height: 1px; overflow: hidden; }
+.overview-hero { padding: 38px 0 44px; display: grid; grid-template-columns: minmax(0,1fr) minmax(280px,.55fr); gap: 60px; align-items: end; border-bottom: 1px solid var(--line-soft); }
+.overview-hero h1 { margin: 11px 0 16px; font-size: clamp(2.6rem,7vw,5.7rem); line-height: .92; letter-spacing: -.065em; }
+.overview-description { max-width: 700px; color: #c0c8d5; font-size: 1.15rem; line-height: 1.55; }
+.topic-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
+.overview-continue { padding: 22px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.overview-continue strong { display: block; margin: 7px 0 15px; font-size: 1.1rem; }
+.overview-continue p { color: var(--muted); font-size: .82rem; line-height: 1.5; }
+.overview-layout { display: grid; grid-template-columns: minmax(0,1fr) 350px; gap: 56px; padding-top: 48px; align-items: start; }
+.guide { min-width: 0; }
+.guide-section { padding: 0 0 48px; margin-bottom: 48px; border-bottom: 1px solid var(--line-soft); }
+.guide-section:last-child { border-bottom: 0; }
+.guide-section h2 { margin: 0 0 20px; font-size: 1.65rem; letter-spacing: -.025em; }
+.guide-section p { max-width: 740px; margin: 0 0 15px; color: #bec7d4; line-height: 1.72; }
+.guide-section ul { margin: 18px 0; padding-left: 22px; color: #bec7d4; line-height: 1.7; }
+pre { margin: 22px 0; padding: 18px 20px; overflow-x: auto; border: 1px solid var(--line); border-radius: 11px; color: #dce5f5; background: #080b11; font: .82rem/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.plan-panel { position: sticky; top: 92px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(15,19,28,.94); overflow: hidden; }
+.plan-head { padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.plan-head h2 { margin: 5px 0 0; font-size: 1rem; }
+.step-list { max-height: calc(100vh - 190px); overflow-y: auto; margin: 0; padding: 8px; list-style: none; }
+.step { padding: 11px 12px; display: grid; grid-template-columns: 22px minmax(0,1fr); gap: 8px; border-radius: 9px; }
+.step.current { background: #192237; }
+.step-marker { color: #66738a; font: .75rem/1.5 ui-monospace, monospace; }
+.step.complete .step-marker { color: var(--mint); }
+.step.current .step-marker { color: var(--blue); }
+.step strong { display: block; font-size: .82rem; line-height: 1.45; }
+.step p { margin: 3px 0 0; color: var(--muted); font-size: .72rem; line-height: 1.45; }
+.build-layout { display: grid; grid-template-columns: 260px minmax(0,1fr) 330px; min-height: calc(100vh - 138px); }
+.build-steps { padding: 28px 16px; border-right: 1px solid var(--line-soft); background: rgba(10,13,19,.55); }
+.build-steps .step-list { max-height: calc(100vh - 210px); }
+.instructions { padding: 44px clamp(24px,4vw,58px) 80px; min-width: 0; }
+.step-kicker { color: var(--mint); font: 700 .7rem/1.2 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+.instructions h1 { margin: 10px 0 14px; font-size: clamp(2.5rem,5vw,4.8rem); line-height: .95; letter-spacing: -.06em; }
+.instructions .lede { max-width: 760px; margin: 0; color: #c1cad7; font-size: 1.05rem; line-height: 1.65; }
+.action-row { margin: 28px 0 42px; display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
+.activity { color: var(--muted); font-size: .76rem; }
+.instruction-card { margin-top: 18px; padding: 23px; border: 1px solid var(--line); border-radius: var(--radius); background: rgba(15,19,28,.76); }
+.instruction-card h2 { margin: 7px 0 13px; font-size: 1.05rem; }
+.instruction-card p { margin: 0; color: #bcc5d2; line-height: 1.65; }
+.instruction-card ul { margin: 0; padding-left: 20px; color: #c6ced9; line-height: 1.7; }
+.instruction-card details + details { border-top: 1px solid var(--line-soft); }
+.instruction-card summary { padding: 14px 0; cursor: pointer; font-weight: 680; }
+.results { padding: 30px 22px; border-left: 1px solid var(--line-soft); background: rgba(10,13,19,.6); }
+.results h2 { margin: 7px 0 22px; font-size: 1.08rem; }
+.result-card { padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.result-card strong { display: block; line-height: 1.4; }
+.result-card > p { margin: 9px 0 0; color: var(--muted); font-size: .82rem; line-height: 1.55; }
+.result-card.fresh { border-color: #275341; }
+.result-card.stale { border-color: #66502c; }
+.run-meter { margin: 12px 0; color: var(--muted); font: .72rem/1.4 ui-monospace, monospace; }
+.diagnosis { display: none; margin-top: 14px; }
+.diagnosis.visible { display: block; }
+.fact { margin-top: 13px; }
+.fact-label { margin-bottom: 5px; color: var(--muted); font: 650 .63rem/1.2 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .1em; }
+.fact-value { color: #d2d9e4; font-size: .78rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.other-failures { display: none; margin-top: 14px; }
+.other-failures.visible { display: block; }
+.other-failures summary { cursor: pointer; color: var(--muted); font-size: .78rem; }
+.other-failures ul { padding: 0; list-style: none; }
+.other-failure-row { display: flex; gap: 8px; justify-content: space-between; align-items: center; padding: 9px 0; border-top: 1px solid var(--line-soft); font-size: .76rem; }
+.focused-rerun { display: none; margin-top: 12px; }
+.focused-rerun.visible { display: inline-block; }
+.requirements-mini, .hints { margin-top: 25px; padding-top: 22px; border-top: 1px solid var(--line); }
+.requirements-mini ul { padding-left: 18px; color: var(--muted); font-size: .75rem; line-height: 1.55; }
+.help-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.help-level { margin-top: 12px; padding: 12px; border-radius: 9px; background: var(--surface-2); }
+.help-level strong { font-size: .76rem; }
+.help-level p { margin: 6px 0 0; color: var(--muted); font-size: .75rem; line-height: 1.5; }
+.runs-page { max-width: 900px; }
+.runs-list { margin-top: 34px; display: grid; gap: 12px; }
+.run-row { padding: 18px 20px; display: grid; grid-template-columns: 1fr auto; gap: 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.run-row h3 { margin: 0 0 6px; font-size: .93rem; }
+.run-row p { margin: 0; color: var(--muted); font-size: .78rem; }
+.run-counts { font: .72rem/1.4 ui-monospace, monospace; color: var(--muted); }
+.health-screen { max-width: 760px; margin: 65px auto; padding: 32px; border: 1px solid #64452c; border-radius: var(--radius); background: #17130f; }
+.health-screen h1 { margin: 9px 0 13px; }
+.health-screen p { color: #c9b9aa; line-height: 1.6; }
+.health-actions { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 22px; }
+.connection-error { color: var(--red); }
+@media (max-width: 1040px) {
+  .build-layout { grid-template-columns: 220px minmax(0,1fr); }
+  .results { grid-column: 2; border-left: 0; border-top: 1px solid var(--line-soft); }
+  .overview-layout { grid-template-columns: minmax(0,1fr) 300px; gap: 32px; }
+}
+@media (max-width: 760px) {
+  .topbar-inner, .page, .project-bar-inner { width: min(100% - 28px, var(--max)); }
+  .topbar-inner { min-height: 58px; gap: 18px; }
+  .local-badge { display: none; }
+  .page { padding-top: 36px; }
+  .project-bar-inner { padding: 12px 0; grid-template-columns: 1fr auto; gap: 12px; }
+  .project-nav { grid-column: 1 / -1; order: 3; min-height: 38px; overflow-x: auto; }
+  .project-tools .button:first-child { display: none; }
+  .overview-hero { grid-template-columns: 1fr; gap: 28px; }
+  .overview-layout { grid-template-columns: 1fr; }
+  .plan-panel { position: static; order: -1; }
+  .step-list { max-height: 320px; }
+  .build-layout { display: block; }
+  .build-steps { border-right: 0; border-bottom: 1px solid var(--line-soft); padding: 18px 14px; }
+  .build-steps .step-list { max-height: 220px; }
+  .instructions { padding: 38px 20px 55px; }
+  .results { border-left: 0; padding: 28px 20px 55px; }
+}
+@media (max-width: 480px) {
+  .brand-word { display: none; }
+  .project-grid { grid-template-columns: 1fr; }
+  .project-card { padding: 18px; }
+  .project-tools .button { padding: 8px 10px; }
+  .overview-hero h1 { font-size: 3.2rem; }
+  .card-actions { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/projects" data-route="/projects" aria-label="DeltaForge projects"><span class="brand-mark">Δ</span><span class="brand-word">DeltaForge</span></a>
+    <nav class="global-nav" aria-label="Main navigation"><a class="nav-link" id="projects-nav" href="/projects" data-route="/projects">Projects</a></nav>
+    <span class="local-badge">Local · Offline</span>
+  </div>
+</header>
+
+<main class="page" id="projects-screen" hidden>
+  <div class="eyebrow">Your workspace</div>
+  <h1 class="page-title">Projects</h1>
+  <p class="page-lede">Build substantial developer tools one clear step at a time. Everything runs locally and your code stays in your own folders.</p>
+  <div class="project-grid" id="project-grid"></div>
+  <div class="empty-state" id="projects-empty" hidden><h2>No projects yet</h2><p>Create one with <code>deltaforge init &lt;project&gt; --lang &lt;language&gt;</code>, then open DeltaForge from that folder.</p></div>
+</main>
+
+<div class="project-shell" id="project-shell" hidden>
+  <div class="project-bar">
+    <div class="project-bar-inner">
+      <div class="project-identity"><strong id="project-name">Loading project…</strong><span class="project-meta" id="project-meta"></span></div>
+      <nav class="project-nav" aria-label="Project navigation">
+        <a id="overview-nav" href="#">Overview</a>
+        <a id="build-nav" href="#">Build</a>
+        <a id="runs-nav" href="#">Test results</a>
+      </nav>
+      <div class="project-tools"><button class="button small" id="open-folder" type="button">Open folder</button><button class="button small" id="open-editor" type="button">Open editor</button></div>
+      <div class="open-status" id="project-open-status" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <main class="page" id="overview-screen" hidden>
+    <section class="overview-hero">
+      <div><div class="eyebrow">Project overview</div><h1 id="overview-name">Loading…</h1><p class="overview-description" id="overview-description"></p><div class="topic-list" id="overview-topics"></div></div>
+      <aside class="overview-continue"><div class="eyebrow">Your progress</div><strong id="overview-progress">Loading…</strong><p id="overview-current"></p><button class="button primary" id="continue-build" type="button">Continue building</button></aside>
+    </section>
+    <div class="overview-layout">
+      <article class="guide" id="overview-guide"></article>
+      <aside class="plan-panel"><div class="plan-head"><div class="eyebrow">Build plan</div><h2 id="overview-step-count">Project steps</h2></div><ol class="step-list" id="overview-step-list"></ol></aside>
+    </div>
+  </main>
+
+  <main id="build-screen" hidden>
+    <div class="build-layout">
+      <aside class="build-steps"><div class="eyebrow">Project steps</div><ol class="step-list" id="build-step-list"></ol></aside>
+      <article class="instructions">
+        <div class="step-kicker" id="step-position">Current step</div>
+        <h1 id="instruction-title">Loading instructions…</h1>
+        <p class="lede" id="instruction-summary"></p>
+        <div class="action-row"><button class="button primary" id="primary-action" type="button">Run checks</button><span class="activity" id="activity" aria-live="polite">Loading project…</span></div>
+        <section class="instruction-card"><div class="eyebrow">Why this matters</div><h2>Context</h2><p id="why-copy"></p></section>
+        <section class="instruction-card"><div class="eyebrow">Done when</div><h2>Expected behavior</h2><ul id="success-list"></ul></section>
+        <section class="instruction-card"><div class="eyebrow">Requirements</div><h2>What your program must do</h2><ul id="requirements-list"></ul></section>
+        <section class="instruction-card"><div class="eyebrow">Example</div><pre id="example-copy"></pre></section>
+        <section class="instruction-card"><details open><summary>Edge cases</summary><ul id="edge-list"></ul></details><details><summary>Not included in this step</summary><ul id="non-goals-list"></ul></details></section>
+      </article>
+      <aside class="results">
+        <div class="eyebrow">Test results</div><h2>Latest result</h2>
+        <div class="result-card" id="result-card"><strong id="result-title">No tests run yet</strong><p id="result-copy">Run the checks when you are ready.</p><div class="run-meter" id="run-meter"></div><button class="button small focused-rerun" id="focused-rerun" type="button">Rerun this check</button></div>
+        <div class="diagnosis" id="diagnosis"><div class="fact"><div class="fact-label">Requirement</div><div class="fact-value" id="diagnosis-requirement"></div></div><div class="fact"><div class="fact-label">Expected</div><div class="fact-value" id="diagnosis-expected"></div></div><div class="fact"><div class="fact-label">Received</div><div class="fact-value" id="diagnosis-actual"></div></div><div class="fact" id="diagnosis-fixture-row"><div class="fact-label">Test input</div><div class="fact-value" id="diagnosis-fixture"></div></div></div>
+        <details class="other-failures" id="other-failures"><summary id="other-failures-title">Other failing checks</summary><ul id="other-failures-list"></ul></details>
+        <div class="requirements-mini"><div class="eyebrow">Key requirements</div><ul id="requirement-summary"></ul></div>
+        <div class="hints"><div class="help-head"><div class="eyebrow">Hints</div><button class="button small" id="reveal-help" type="button">Show hint 1</button></div><div id="help-levels"></div></div>
+      </aside>
+    </div>
+  </main>
+
+  <main class="page runs-page" id="runs-screen" hidden>
+    <div class="eyebrow">Test results</div><h1 class="page-title">Run history</h1><p class="page-lede">See what passed, what failed, and which version of your source each run checked.</p><div class="runs-list" id="runs-list"></div>
+  </main>
+
+  <main class="health-screen" id="health-screen" hidden><div class="eyebrow">Project needs attention</div><h1 id="health-title">DeltaForge cannot load this project</h1><p id="health-guidance"></p><pre id="health-detail"></pre><div class="health-actions"><button class="button primary" id="health-recheck" type="button">Check again</button><button class="button" id="health-repin" type="button" hidden>Use updated project definition</button><button class="button" id="health-editor" type="button">Open editor</button><button class="button" id="health-folder" type="button">Open folder</button></div></main>
+</div>
+
+<script>
+const token = __TOKEN_JSON__;
+let activeProject = null;
+let currentView = "projects";
+let canonical = null;
+let content = null;
+let events = null;
+let busy = false;
+let currentHealth = null;
+let live = { active:false, phase:"", passed:0, failed:0, current:0, total:0, started:0, buildOutput:"" };
+
+const $ = selector => document.querySelector(selector);
+const api = (path, project = true) => {
+  const params = new URLSearchParams({token});
+  if (project && activeProject) params.set("project", activeProject);
+  return `${path}?${params}`;
+};
+
+function projectRoute(view) { return `/projects/${activeProject}/${view}`; }
+function routeLink(element, path) { element.href = `${path}?token=${encodeURIComponent(token)}`; element.dataset.route = path; }
+function navigate(path) { history.pushState({}, "", `${path}?token=${encodeURIComponent(token)}`); renderRoute(); }
+function setScreen(id) { ["projects-screen","overview-screen","build-screen","runs-screen","health-screen"].forEach(name => $("#"+name).hidden = name !== id); }
+function closeEvents() { if (events) events.close(); events = null; }
+function routeState() {
+  const match = location.pathname.match(/^\/projects\/([^/]+)\/(overview|build|runs)$/);
+  return match ? {project:match[1], view:match[2]} : {project:null, view:"projects"};
+}
+
+async function renderRoute() {
+  const route = routeState();
+  closeEvents(); canonical = null; content = null; currentHealth = null;
+  activeProject = route.project; currentView = route.view;
+  $("#projects-nav").classList.toggle("active", !activeProject);
+  if (!activeProject) {
+    $("#project-shell").hidden = true; $("#projects-screen").hidden = false;
+    await loadProjects(); connectAppEvents(); return;
+  }
+  $("#projects-screen").hidden = true; $("#project-shell").hidden = false;
+  ["overview","build","runs"].forEach(view => {
+    const nav = $(`#${view}-nav`);
+    routeLink(nav, projectRoute(view));
+    nav.classList.toggle("active", view === currentView);
+  });
+  await loadProject();
+}
+
+async function loadProjects() {
+  setScreen("projects-screen");
+  const response = await fetch(api("/api/v1/projects", false));
+  if (!response.ok) throw new Error("Projects are unavailable");
+  const projects = await response.json();
+  $("#projects-empty").hidden = projects.length !== 0;
+  $("#project-grid").replaceChildren(...projects.map(projectCard));
+}
+
+function projectCard(project) {
+  const card = document.createElement("article"); card.className = "project-card";
+  const percent = project.total_steps ? Math.round(project.completed_steps / project.total_steps * 100) : 0;
+  const status = project.status === "healthy" ? "Ready" : "Needs attention";
+  card.innerHTML = `<div class="project-card-head"><div><div class="eyebrow">${escapeText(project.language || "Project")}</div><h2></h2><p></p></div><span class="pill ${project.status === "healthy" ? "" : "attention"}">${status}</span></div><div class="project-progress"><div class="progress-label"><span></span><span>${percent}%</span></div><div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div></div><div class="card-actions"><button class="button project-overview">View overview</button><button class="button primary project-build">Continue building</button></div>`;
+  card.querySelector("h2").textContent = project.name;
+  card.querySelector("p").textContent = project.description;
+  card.querySelector(".progress-label span").textContent = project.total_steps ? `${project.completed_steps} of ${project.total_steps} steps complete` : status;
+  card.querySelector(".project-overview").onclick = () => navigate(`/projects/${project.id}/overview`);
+  card.querySelector(".project-build").onclick = () => navigate(`/projects/${project.id}/build`);
+  return card;
+}
+
+function escapeText(value) { const node = document.createElement("span"); node.textContent = value; return node.innerHTML; }
+async function fetchJson(path) { const response = await fetch(api(path)); if (!response.ok) throw new Error(`${path} is unavailable`); return response.json(); }
+async function post(path, body={}) { const response = await fetch(api(path), {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if (!response.ok) { const detail=await response.json().catch(()=>({})); throw new Error(detail.error||"Operation failed"); } return response.json(); }
+
+async function loadProject() {
+  const health = await fetchJson("/api/v1/project-health"); currentHealth = health;
+  if (health.status !== "healthy") { renderHealth(health); return; }
+  const [state, next] = await Promise.all([fetchJson("/api/v1/state"), fetchJson("/api/v1/capability")]);
+  canonical = state; content = next;
+  $("#project-name").textContent = next.project_overview.name;
+  $("#project-meta").textContent = `${state.language} · ${next.roadmap.length} steps`;
+  if (currentView === "overview") { setScreen("overview-screen"); renderOverview(); }
+  if (currentView === "build") { setScreen("build-screen"); renderBuild(); }
+  if (currentView === "runs") { setScreen("runs-screen"); renderRuns(); }
+  connectEvents(state.event_cursor);
+}
+
+function renderHealth(health) {
+  setScreen("health-screen");
+  const issue = health.issue || {};
+  $("#health-title").textContent = issue.title || "DeltaForge cannot load this project";
+  $("#health-guidance").textContent = issue.guidance || "Resolve this problem, then check again.";
+  $("#health-detail").textContent = issue.detail || "Project health check failed.";
+  $("#health-repin").hidden = !health.actions.some(action => action.kind === "repin_pack");
+}
+
+function renderOverview() {
+  const overview = content.project_overview;
+  $("#overview-name").textContent = overview.name;
+  $("#overview-description").textContent = overview.description;
+  $("#overview-topics").replaceChildren(...(overview.topics||[]).map(topic => { const node=document.createElement("span"); node.className="pill"; node.textContent=topic; return node; }));
+  const completed = content.roadmap.filter(step => step.status === "complete").length;
+  const current = content.roadmap.find(step => step.status === "current");
+  $("#overview-progress").textContent = `${completed} of ${content.roadmap.length} steps complete`;
+  $("#overview-current").textContent = current ? `Next: ${current.title}` : "Every project step is complete.";
+  $("#overview-step-count").textContent = `${content.roadmap.length} project steps`;
+  renderStepList("#overview-step-list");
+  $("#overview-guide").replaceChildren(...(overview.sections||[]).map(renderGuideSection));
+}
+
+function renderGuideSection(section) {
+  const node = document.createElement("section"); node.className="guide-section";
+  const heading=document.createElement("h2"); heading.textContent=section.title; node.append(heading);
+  for (const block of section.blocks) {
+    if (block.kind === "paragraph") { const p=document.createElement("p"); p.textContent=block.text; node.append(p); }
+    if (block.kind === "code") { const pre=document.createElement("pre"); pre.textContent=block.content; if(block.language) pre.dataset.language=block.language; node.append(pre); }
+    if (block.kind === "list") { const ul=document.createElement("ul"); ul.replaceChildren(...block.items.map(item=>{const li=document.createElement("li");li.textContent=item;return li;})); node.append(ul); }
+  }
+  return node;
+}
+
+function renderStepList(selector) {
+  $(selector).replaceChildren(...content.roadmap.map(step => {
+    const row=document.createElement("li"); row.className=`step ${step.status}`;
+    const marker=document.createElement("span"); marker.className="step-marker"; marker.textContent=step.status==="complete"?"✓":step.status==="current"?"→":"○";
+    const copy=document.createElement("div"); const title=document.createElement("strong"); title.textContent=`${step.position}. ${step.title}`; const summary=document.createElement("p"); summary.textContent=step.summary; copy.append(title,summary); row.append(marker,copy); return row;
+  }));
+}
+
+function fillList(selector, items) { $(selector).replaceChildren(...(items||[]).map(item=>{const li=document.createElement("li");li.textContent=item;return li;})); }
+function actionLabel(action) { if(action.kind==="begin_next_capability") return "Begin next step"; if(action.kind==="journey_complete") return "Project complete"; return action.label.replace(/capability/gi,"step"); }
+function renderBuild() {
+  renderStepList("#build-step-list");
+  const current=content.roadmap.find(step=>step.status==="current");
+  $("#step-position").textContent=current?`Step ${current.position} of ${content.roadmap.length}`:"Project complete";
+  $("#instruction-title").textContent=content.title;
+  $("#instruction-summary").textContent=content.mission;
+  $("#why-copy").textContent=content.why;
+  fillList("#success-list",content.success_conditions); fillList("#requirements-list",content.requirements); fillList("#edge-list",content.edge_cases); fillList("#non-goals-list",content.non_goals); fillList("#requirement-summary",content.requirements.slice(0,4));
+  $("#example-copy").textContent=content.example;
+  renderHints(); renderState();
+}
+
+function renderHints() {
+  $("#help-levels").replaceChildren(...content.revealed_help.map(hint=>{const panel=document.createElement("div");panel.className="help-level";const title=document.createElement("strong");title.textContent=`Hint ${hint.level} · ${hint.label}`;const p=document.createElement("p");p.textContent=hint.content;panel.append(title,p);return panel;}));
+  const revealed=content.revealed_help.length; const completed=canonical&&canonical.capability.completed; const available=completed?content.help_levels:Math.min(content.help_levels,4);
+  $("#reveal-help").disabled=busy||revealed>=available; $("#reveal-help").textContent=revealed>=available?(completed?"All hints shown":"More hints unlock later"):`Show hint ${revealed+1}`;
+}
+
+function renderState() {
+  if (!canonical) return;
+  const running=live.active||Boolean(canonical.active_job); const action=$("#primary-action");
+  action.disabled=busy||(!running&&!canonical.primary_action.enabled); action.textContent=running?"Cancel tests":actionLabel(canonical.primary_action);
+  $("#activity").textContent=canonical.freshness==="stale"?"Your source changed after the last test run":`Last activity · ${formatTimestamp(canonical.last_activity_at)}`;
+  const failure=canonical.primary_failure; renderOtherFailures();
+  $("#focused-rerun").classList.toggle("visible",Boolean(failure)&&canonical.freshness==="fresh"&&!canonical.active_job); $("#focused-rerun").dataset.test=failure?failure.name:"";
+  if (running) showResult("Tests are running",live.phase||"Preparing your project…","");
+  else if (canonical.freshness==="stale") showResult("Code changed","The previous result is saved, but it does not describe the current code.","stale");
+  else if (canonical.freshness==="fresh"&&canonical.capability.completed) showResult("Step complete",content.capability_statement,"fresh");
+  else if (canonical.freshness==="fresh"&&failure) { const diagnosis=failure.diagnosis; showResult(`Fix this first · ${diagnosis?diagnosis.headline:failure.name}`,diagnosis?diagnosis.summary:(failure.failures?.[0]||"This check failed."),""); }
+  else if (canonical.freshness==="fresh") showResult("Tests are up to date","These results match the source currently on disk.","fresh");
+  else showResult("No tests run yet","Run the checks to see what already works and what to tackle first.","");
+  renderDiagnosis(failure&&canonical.freshness==="fresh"?failure:null); renderMeter();
+}
+
+function showResult(title,copy,tone) { $("#result-card").className=`result-card ${tone}`; $("#result-title").textContent=title; $("#result-copy").textContent=copy; }
+function renderDiagnosis(failure) { const diagnosis=failure&&failure.diagnosis; $("#diagnosis").classList.toggle("visible",Boolean(diagnosis)); if(!diagnosis)return; $("#diagnosis-requirement").textContent=diagnosis.contract||diagnosis.summary; $("#diagnosis-expected").textContent=diagnosis.expected||"The requirement should be satisfied."; $("#diagnosis-actual").textContent=diagnosis.actual||failure.failures?.join("\n")||"The check failed."; const fixture=[diagnosis.fixture,...(diagnosis.fixture_entries||[])].filter(Boolean).join(" · "); $("#diagnosis-fixture").textContent=fixture; $("#diagnosis-fixture-row").hidden=!fixture; }
+function renderOtherFailures() { const failures=canonical.latest_run?.failed_tests?.slice(1)||[]; $("#other-failures").classList.toggle("visible",failures.length>0&&canonical.freshness==="fresh"&&!canonical.active_job); $("#other-failures-title").textContent=`${failures.length} other failing check${failures.length===1?"":"s"}`; $("#other-failures-list").replaceChildren(...failures.map(failure=>{const li=document.createElement("li");const row=document.createElement("div");row.className="other-failure-row";const label=document.createElement("span");label.textContent=failure.diagnosis?failure.diagnosis.headline:failure.name;const button=document.createElement("button");button.className="button small";button.dataset.test=failure.name;button.textContent="Rerun";row.append(label,button);li.append(row);return li;})); }
+function renderMeter() { if(!live.active){const run=canonical&&canonical.freshness==="fresh"?canonical.latest_run:null;$("#run-meter").textContent=run?`${run.passed} passed · ${run.failed} failed`:"";return;}const seconds=live.started?Math.floor((performance.now()-live.started)/1000):0;const count=live.total?` · ${live.current}/${live.total}`:"";$("#run-meter").textContent=`${live.phase||"Running"}${count} · ${seconds}s · ${live.passed} passed · ${live.failed} failed`; }
+function formatTimestamp(value){const date=new Date(value);return Number.isNaN(date.getTime())?value:new Intl.DateTimeFormat(undefined,{dateStyle:"medium",timeStyle:"short"}).format(date);}
+
+function renderRuns() {
+  const rows=(canonical.attempt_history||[]).slice().reverse().map(runRow);
+  if(!rows.length){const empty=document.createElement("div");empty.className="empty-state";empty.innerHTML="<h2>No test runs yet</h2><p>Run the checks from the Build page and the result will appear here.</p>";rows.push(empty);}
+  $("#runs-list").replaceChildren(...rows);
+}
+function runRow(run){const row=document.createElement("article");row.className="run-row";const copy=document.createElement("div");const title=document.createElement("h3");title.textContent=run.status==="passed"?"All checks passed":run.status==="interrupted"?"Run interrupted":"Checks failed";const p=document.createElement("p");p.textContent=formatTimestamp(run.timestamp||run.started_at||canonical.last_activity_at);copy.append(title,p);const counts=document.createElement("div");counts.className="run-counts";counts.textContent=canonical.latest_run?`${canonical.latest_run.passed} passed · ${canonical.latest_run.failed} failed`:run.status;row.append(copy,counts);return row;}
+
+function connectEvents(cursor) { events=new EventSource(api("/api/v1/events")+`&after=${cursor}`); events.addEventListener("state",event=>{canonical=JSON.parse(event.data);if(currentView==="build")renderState();if(currentView==="runs")renderRuns();}); events.addEventListener("run",event=>handleRun(JSON.parse(event.data))); events.addEventListener("focus",event=>{const data=JSON.parse(event.data||"{}");if(data.route&&data.route!==location.pathname)navigate(data.route);window.focus();}); events.onerror=()=>{if($("#activity"))$("#activity").textContent="Reconnecting…";}; }
+function connectAppEvents() { events=new EventSource(api("/api/v1/app-events",false)); events.addEventListener("focus",event=>{const data=JSON.parse(event.data||"{}");if(data.route&&data.route!==location.pathname)navigate(data.route);window.focus();}); }
+function handleRun(event){switch(event.type){case"job_started":live={active:true,phase:"Preparing tests",passed:0,failed:0,current:0,total:0,started:performance.now(),buildOutput:""};break;case"build_started":live.active=true;live.phase="Building";break;case"build_output":live.phase="Building";live.buildOutput=((live.buildOutput||"")+event.text).slice(-4000);break;case"build_completed":live.phase=event.passed?"Build complete":"Build failed";break;case"test_started":live.active=true;live.phase=event.name;live.current=event.index;live.total=event.total;break;case"test_passed":live.passed++;break;case"test_failed":live.failed++;showResult(`Failing check · ${event.result.name}`,event.result.failures?.[0]||"This check failed.","");break;case"run_completed":live.active=false;refreshProject();break;case"job_interrupted":live.active=false;showResult("Run interrupted",event.reason,"stale");refreshProject();break;case"source_changed":refreshProject();break;case"project_state_changed":refreshProject();break;}if(currentView==="build"&&canonical){renderState();renderMeter();}}
+async function refreshProject(){const [state,next]=await Promise.all([fetchJson("/api/v1/state"),fetchJson("/api/v1/capability")]);canonical=state;content=next;if(currentView==="build")renderBuild();if(currentView==="overview")renderOverview();if(currentView==="runs")renderRuns();}
+
+async function openProject(path){try{const result=await post(path);$("#project-open-status").textContent=`Opened in ${result.application||"your system application"}.`;}catch(error){$("#project-open-status").textContent=error.message;if(!$("#health-screen").hidden)$("#health-detail").textContent=error.message;}}
+$("#continue-build").onclick=()=>navigate(projectRoute("build"));
+$("#open-editor").onclick=()=>openProject("/api/v1/project/open-editor"); $("#open-folder").onclick=()=>openProject("/api/v1/project/open-folder"); $("#health-editor").onclick=()=>openProject("/api/v1/project/open-editor"); $("#health-folder").onclick=()=>openProject("/api/v1/project/open-folder");
+$("#primary-action").onclick=async()=>{if(!canonical||busy)return;busy=true;renderState();try{if(live.active||canonical.active_job)await post("/api/v1/runs/cancel");else if(canonical.primary_action.kind==="begin_next_capability"){canonical=await post("/api/v1/capabilities/next");content=await fetchJson("/api/v1/capability");renderBuild();}else await post("/api/v1/runs");}catch(error){showResult("Could not start",error.message,"");}finally{busy=false;renderState();}};
+$("#focused-rerun").onclick=async()=>{const test=$("#focused-rerun").dataset.test;if(test)await post("/api/v1/runs/rerun",{test}).catch(error=>showResult("Could not rerun check",error.message,""));};
+$("#other-failures-list").onclick=event=>{const button=event.target.closest("button[data-test]");if(button)post("/api/v1/runs/rerun",{test:button.dataset.test}).catch(error=>showResult("Could not rerun check",error.message,""));};
+$("#reveal-help").onclick=async()=>{if(busy||!content)return;busy=true;renderHints();try{content=await post("/api/v1/hints");renderHints();}finally{busy=false;renderHints();}};
+$("#health-recheck").onclick=()=>loadProject(); $("#health-repin").onclick=async()=>{await post("/api/v1/project/repin-pack");await loadProject();};
+document.addEventListener("click",event=>{const link=event.target.closest("a[data-route]");if(!link)return;event.preventDefault();navigate(link.dataset.route);});
+window.addEventListener("popstate",renderRoute);
+setInterval(()=>{if(currentView==="build")renderMeter();},1000);
+renderRoute().catch(error=>{document.body.innerHTML=`<main class="page"><h1>DeltaForge could not open</h1><p class="connection-error"></p></main>`;document.querySelector(".connection-error").textContent=error.message;});
+</script>
+</body>
+</html>

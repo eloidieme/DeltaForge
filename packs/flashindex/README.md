@@ -70,7 +70,7 @@ The extension list is another practical boundary. FlashIndex includes Rust, C, C
 
 ## From files to ranked results
 
-The design becomes easier to reason about as a chain of connected capabilities:
+The design becomes easier to reason about as a chain of connected steps:
 
 1. Walk a directory and print every regular file in stable order.
 2. Choose which filenames belong to the searchable corpus.
@@ -87,7 +87,7 @@ The design becomes easier to reason about as a chain of connected capabilities:
 13. Score files that match several query tokens.
 14. Break score ties and limit the final ranked result.
 
-Each capability prepares information needed by the next. File discovery defines the corpus; tokenization turns that corpus into occurrences; canonical indexing makes those occurrences reusable; persistence, parallel construction, and ranking build on the same definitions.
+Each step prepares information needed by the next. File discovery defines the corpus; tokenization turns that corpus into occurrences; canonical indexing makes those occurrences reusable; persistence, parallel construction, and ranking build on the same definitions.
 
 ## From characters to locations
 

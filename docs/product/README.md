@@ -1,6 +1,6 @@
 # DeltaForge product direction
 
-Status: **Phase 1 complete; frozen baseline retained for later phase scoping**
+Status: **Phase 1 complete; Phase 2 application-shell milestone implemented**
 Drafted: 2026-07-15  
 Branch: `codex/product-workbench`
 
@@ -25,6 +25,9 @@ and historical context.
   five-learner session script, recording sheets, pass thresholds, and issue rubric.
 - [phase-1-release-audit.md](phase-1-release-audit.md) -- release gates, resolved audit
   defects, platform evidence, and the hosted-CI completion boundary.
+- [phase-2-application-shell.md](phase-2-application-shell.md) -- the user-level project
+  registry, Projects hub, dedicated Overview and Build routes, global navigation, and
+  simplified interface vocabulary.
 
 ## Frozen decisions
 
@@ -38,8 +41,8 @@ The following decisions are binding for Phase 1:
 5. DeltaForge is local-first and fully usable offline without an account.
 6. A local service is an invisible implementation detail managed by `deltaforge`.
 7. FlashIndex is the flagship experience and the first complete product slice.
-8. Progress is communicated primarily as acquired capabilities, with stage numbers as
-   orientation.
+8. The domain models acquired capabilities, while the learner interface communicates
+   progress as ordinary project steps with step numbers for orientation.
 9. Correctness precedes performance; optimization is taught as prediction, experiment,
    measurement, and reflection.
 10. AI coaching is deferred until the deterministic experience is excellent.
@@ -55,5 +58,7 @@ Later direction changes require an explicit amendment that identifies the frozen
 decision, explains why it changed, and records its consequences for active work.
 
 Phase 0 contains no production implementation. Phase 1 completed the vertical slice
-defined in `phase-1-vertical-slice.md`; later implementation requires an explicitly
-approved phase contract.
+defined in `phase-1-vertical-slice.md`. The application-shell feedback approved on
+2026-07-18 amends frozen decision 8 only at the interface-language boundary; the
+capability model remains available internally. Its Phase 2 contract is recorded in
+`phase-2-application-shell.md`.

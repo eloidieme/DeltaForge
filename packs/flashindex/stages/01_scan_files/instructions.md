@@ -17,7 +17,7 @@ This does not search their contents. It gives the rest of the search pipeline a 
 
 ## Background
 
-Every later FlashIndex capability depends on a trustworthy corpus. If discovery misses
+Every later FlashIndex step depends on a trustworthy corpus. If discovery misses
 a nested file, includes generated output, leaks machine-specific absolute paths, or
 changes order between runs, indexing and search results cannot be reproduced.
 
