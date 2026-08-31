@@ -38,7 +38,7 @@ function applyTheme(theme) {
   if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   else delete document.documentElement.dataset.theme;
   const label = theme === "light" ? "Light" : theme === "dark" ? "Dark" : "System";
-  $("#theme-toggle").textContent = `Theme: ${label}`;
+  $("#theme-toggle").textContent = label;
   $("#theme-toggle").setAttribute("aria-label", `Colour theme: ${label}. Activate to change.`);
 }
 
@@ -396,22 +396,23 @@ function renderOverview() {
   $("#overview-guide").replaceChildren(...(overview.sections || []).map(renderGuideSection));
 }
 
+function renderBlock(block) {
+  if (block.kind === "code") {
+    const pre = text(element("pre"), block.content);
+    if (block.language) pre.dataset.language = block.language;
+    return pre;
+  }
+  if (block.kind === "list") {
+    const list = element("ul");
+    list.replaceChildren(...block.items.map((item) => text(element("li"), item)));
+    return list;
+  }
+  return text(element("p"), block.text);
+}
+
 function renderGuideSection(section) {
   const node = element("section", "guide-section");
-  node.append(text(element("h2"), section.title));
-  for (const block of section.blocks) {
-    if (block.kind === "paragraph") node.append(text(element("p"), block.text));
-    if (block.kind === "code") {
-      const pre = text(element("pre"), block.content);
-      if (block.language) pre.dataset.language = block.language;
-      node.append(pre);
-    }
-    if (block.kind === "list") {
-      const list = element("ul");
-      list.replaceChildren(...block.items.map((item) => text(element("li"), item)));
-      node.append(list);
-    }
-  }
+  node.append(text(element("h2"), section.title), ...section.blocks.map(renderBlock));
   return node;
 }
 
@@ -454,12 +455,12 @@ function renderBuild() {
   $("#step-position").textContent = current ? `Step ${current.position} of ${content.roadmap.length}` : "Project complete";
   $("#instruction-title").textContent = content.title;
   $("#instruction-summary").textContent = content.mission;
-  $("#why-copy").textContent = content.why;
-  fillList("#success-list", content.success_conditions);
-  fillList("#requirements-list", content.requirements);
-  fillList("#edge-list", content.edge_cases);
-  fillList("#non-goals-list", content.non_goals);
-  $("#example-copy").textContent = content.example;
+  // Each authored section goes into the panel named for it. A pack that adds
+  // a section DeltaForge has no panel for is simply not shown here.
+  for (const section of content.sections) {
+    const target = $(`#section-${section.key}`);
+    if (target) target.replaceChildren(...section.blocks.map(renderBlock));
+  }
   renderHints();
   renderState();
 }
@@ -925,10 +926,6 @@ function element(tag, className, style) {
 function text(node, value) {
   node.textContent = value ?? "";
   return node;
-}
-
-function fillList(selector, items) {
-  $(selector).replaceChildren(...(items || []).map((item) => text(element("li"), item)));
 }
 
 function formatTimestamp(value) {

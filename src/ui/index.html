@@ -157,13 +157,13 @@ __STYLE__
         <div class="notice measure" id="gate-notice" hidden><span><strong id="gate-notice-title"></strong><span id="gate-notice-detail"></span></span><button class="button small" id="gate-notice-action" type="button">Open the performance lab</button></div>
         <div class="notice proven" id="snapshot-notice" hidden><span><strong>Step recorded</strong><span id="snapshot-notice-detail"></span></span></div>
 
-        <section class="instruction-card"><div class="eyebrow">Why this matters</div><h2>Context</h2><p id="why-copy" style="color:var(--text-2)"></p></section>
-        <section class="instruction-card"><div class="eyebrow">Done when</div><h2>Expected behavior</h2><ul id="success-list"></ul></section>
-        <section class="instruction-card"><div class="eyebrow">Requirements</div><h2>What your program must do</h2><ul id="requirements-list"></ul></section>
-        <section class="instruction-card"><div class="eyebrow">Example</div><pre id="example-copy"></pre></section>
+        <section class="instruction-card"><div class="eyebrow">Why this matters</div><h2>Context</h2><div class="prose" id="section-background"></div></section>
+        <section class="instruction-card"><div class="eyebrow">Requirements</div><h2>What your program must do</h2><div class="prose" id="section-requirements"></div></section>
+        <section class="instruction-card"><div class="eyebrow">Example</div><h2>What it should look like</h2><div class="prose" id="section-example"></div></section>
+        <section class="instruction-card"><div class="eyebrow">Done when</div><h2>Expected behavior</h2><div class="prose" id="section-expected"></div></section>
         <section class="instruction-card">
-          <details open><summary>Edge cases</summary><ul id="edge-list"></ul></details>
-          <details><summary>Not included in this step</summary><ul id="non-goals-list"></ul></details>
+          <details open><summary>Edge cases</summary><div class="prose" id="section-edge_cases"></div></details>
+          <details><summary>Not included in this step</summary><div class="prose" id="section-non_goals"></div></details>
         </section>
       </article>
 

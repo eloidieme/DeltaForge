@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Add target (x86_64-apple-darwin)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Compute version string
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_ENV"
+
+      - name: Package archive (Linux, macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="deltaforge-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/deltaforge" "$STAGE/"
+          cp README.md LICENSE "$STAGE/"
+          ARCHIVE="${STAGE}.tar.gz"
+          tar -czf "$ARCHIVE" "$STAGE"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          else
+            sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+          fi
+          echo "ARCHIVE_NAME=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "deltaforge-$env:VERSION-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/deltaforge.exe" -Destination $stage
+          Copy-Item README.md,LICENSE -Destination $stage
+          $archive = "$stage.zip"
+          Compress-Archive -Path $stage -DestinationPath $archive
+          $hash = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLower()
+          "$hash  $archive" | Out-File -FilePath "$archive.sha256" -Encoding ascii
+          Add-Content -Path $env:GITHUB_ENV -Value "ARCHIVE_NAME=$archive"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deltaforge-${{ matrix.target }}
+          path: |
+            ${{ env.ARCHIVE_NAME }}
+            ${{ env.ARCHIVE_NAME }}.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          fail_on_unmatched_files: true
+          files: dist/*
+          body: |
+            Prebuilt `deltaforge` binaries for Linux (x86_64), macOS (Intel and Apple Silicon), and Windows (x86_64).
+
+            To verify a download, compare its `.sha256` file against a locally computed hash: `sha256sum -c <archive>.sha256` on Linux, `shasum -a 256 -c <archive>.sha256` on macOS, or `Get-FileHash <archive> -Algorithm SHA256` on Windows (compare the printed hash to the contents of the `.sha256` file).
+
+            Prefer building from source? `cargo install deltaforge` installs the same binary via crates.io.
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for release notes.

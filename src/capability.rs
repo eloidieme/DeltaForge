@@ -13,16 +13,32 @@ pub struct CapabilityContent {
     pub stage_id: String,
     pub title: String,
     pub mission: String,
-    pub why: String,
-    pub success_conditions: Vec<String>,
-    pub example: String,
-    pub requirements: Vec<String>,
-    pub edge_cases: Vec<String>,
-    pub non_goals: Vec<String>,
+    /// The stage's authored sections, in reading order, each parsed into
+    /// paragraphs, lists, and code blocks.
+    ///
+    /// These were once flattened to a first paragraph and a few bullet items.
+    /// Packs write requirements as prose with a fenced list as often as they
+    /// write them as bullets, so that flattening silently emptied the two
+    /// panels a learner relies on most on thirteen of FlashIndex's fourteen
+    /// stages. The workbench now renders what the pack actually says.
+    pub sections: Vec<CapabilitySection>,
     pub capability_statement: String,
     pub next: Option<CapabilityPreview>,
     pub help_levels: usize,
     pub revealed_help: Vec<HelpLevel>,
+}
+
+/// One authored section of a stage guide.
+#[derive(Debug, Clone, Serialize)]
+pub struct CapabilitySection {
+    /// Stable identifier the workbench places into a specific panel:
+    /// `background`, `requirements`, `example`, `expected`, `edge_cases`, or
+    /// `non_goals`.
+    pub key: &'static str,
+    /// The heading the pack used, kept so an unusual pack still reads
+    /// correctly.
+    pub title: String,
+    pub blocks: Vec<OverviewBlock>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,7 +58,7 @@ pub struct OverviewSection {
     pub blocks: Vec<OverviewBlock>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OverviewBlock {
     Paragraph { text: String },
@@ -79,6 +95,79 @@ pub struct HelpLevel {
     pub level: usize,
     pub label: String,
     pub content: String,
+}
+
+/// Exactly what a learner can see in the workbench for one stage, and nothing
+/// else: no `tests.yaml`, no fixtures, no reference solution.
+///
+/// This is the fixture for the content-sufficiency practice in
+/// `docs/product/content-sufficiency.md`: if a stage cannot be implemented from
+/// this alone, the specification is incomplete, however complete it looks to
+/// its author.
+#[derive(Debug, Clone, Serialize)]
+pub struct PublishedStageContent {
+    pub pack: String,
+    pub pack_description: String,
+    pub stage_id: String,
+    pub position: usize,
+    pub total_stages: usize,
+    pub title: String,
+    pub mission: String,
+    pub sections: Vec<CapabilitySection>,
+    pub help: Vec<HelpLevel>,
+    /// The titles of every earlier stage, which a learner has already built and
+    /// may therefore rely on.
+    pub established: Vec<String>,
+    /// Build and run commands for the chosen language, since the contract is
+    /// expressed in terms of an invocation.
+    pub run_command: Vec<String>,
+}
+
+pub fn load_published_content(
+    pack: &crate::pack::LoadedPack,
+    stage_id: &str,
+    language_id: &str,
+) -> Result<PublishedStageContent> {
+    let position = pack
+        .manifest
+        .stages
+        .iter()
+        .position(|stage| stage.id == stage_id)
+        .with_context(|| {
+            format!(
+                "pack {} does not contain stage {stage_id}",
+                pack.manifest.id
+            )
+        })?;
+    let stage = &pack.manifest.stages[position];
+    let language = pack.manifest.language(language_id).with_context(|| {
+        format!(
+            "pack {} does not support language {language_id}",
+            pack.manifest.id
+        )
+    })?;
+    let source = pack.read_stage_file(&pack.instructions_path(stage))?;
+    let sections = markdown_sections(&source);
+    let help = fs::read_to_string(pack.hints_path(stage))
+        .map(|source| parse_help(&source))
+        .unwrap_or_default();
+
+    Ok(PublishedStageContent {
+        pack: pack.manifest.name.clone(),
+        pack_description: pack.manifest.description.clone(),
+        stage_id: stage.id.clone(),
+        position: position + 1,
+        total_stages: pack.manifest.stages.len(),
+        title: stage.title.clone(),
+        mission: first_paragraph(required_section(&sections, "Goal")?),
+        sections: capability_sections(&sections)?,
+        help,
+        established: pack.manifest.stages[..position]
+            .iter()
+            .map(|earlier| earlier.title.clone())
+            .collect(),
+        run_command: language.run.command.clone(),
+    })
 }
 
 pub fn load_current(context: &ProjectContext) -> Result<CapabilityContent> {
@@ -133,12 +222,7 @@ pub fn load_current(context: &ProjectContext) -> Result<CapabilityContent> {
         stage_id: stage.id.clone(),
         title: stage.title.clone(),
         mission: first_paragraph(required_section(&sections, "Goal")?),
-        why: first_paragraph(required_section(&sections, "Background")?),
-        success_conditions: bullet_items(required_section(&sections, "Success criteria")?),
-        example: first_code_block(required_section(&sections, "Example")?),
-        requirements: bullet_items(required_section(&sections, "Requirements")?),
-        edge_cases: bullet_items(required_section(&sections, "Edge cases")?),
-        non_goals: bullet_items(required_section(&sections, "Non-goals")?),
+        sections: capability_sections(&sections)?,
         capability_statement: sections
             .get("Capability acquired")
             .map(|section| first_paragraph(section))
@@ -147,6 +231,31 @@ pub fn load_current(context: &ProjectContext) -> Result<CapabilityContent> {
         help_levels: hints.len(),
         revealed_help,
     })
+}
+
+/// The six sections the workbench shows for a stage, in reading order, each
+/// parsed into blocks. A pack that omits one of the required headings fails
+/// here rather than rendering an empty panel.
+fn capability_sections(sections: &BTreeMap<String, String>) -> Result<Vec<CapabilitySection>> {
+    const WANTED: [(&str, &str); 6] = [
+        ("background", "Background"),
+        ("requirements", "Requirements"),
+        ("example", "Example"),
+        ("expected", "Success criteria"),
+        ("edge_cases", "Edge cases"),
+        ("non_goals", "Non-goals"),
+    ];
+    WANTED
+        .into_iter()
+        .map(|(key, heading)| {
+            let body = required_section(sections, heading)?;
+            Ok(CapabilitySection {
+                key,
+                title: heading.to_string(),
+                blocks: parse_blocks(&body.lines().collect::<Vec<_>>()),
+            })
+        })
+        .collect()
 }
 
 fn load_project_overview(context: &ProjectContext) -> ProjectOverview {
@@ -186,7 +295,7 @@ fn parse_overview_sections(source: &str) -> Vec<OverviewSection> {
             if let Some(previous) = title.replace(next.trim().to_string()) {
                 sections.push(OverviewSection {
                     title: previous,
-                    blocks: parse_overview_blocks(&lines),
+                    blocks: parse_blocks(&lines),
                 });
                 lines.clear();
             }
@@ -197,14 +306,16 @@ fn parse_overview_sections(source: &str) -> Vec<OverviewSection> {
     if let Some(title) = title {
         sections.push(OverviewSection {
             title,
-            blocks: parse_overview_blocks(&lines),
+            blocks: parse_blocks(&lines),
         });
     }
     sections.retain(|section| !section.blocks.is_empty());
     sections
 }
 
-fn parse_overview_blocks(lines: &[&str]) -> Vec<OverviewBlock> {
+/// Parse markdown lines into paragraphs, bullet or numbered lists, and
+/// fenced code blocks. Shared by the project overview and every stage section.
+fn parse_blocks(lines: &[&str]) -> Vec<OverviewBlock> {
     let mut blocks = Vec::new();
     let mut paragraph = Vec::new();
     let mut list = Vec::new();
@@ -427,31 +538,6 @@ fn narrative_paragraphs(section: &str, limit: usize) -> Vec<String> {
     paragraphs
 }
 
-fn bullet_items(section: &str) -> Vec<String> {
-    section
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("- "))
-        .map(strip_inline_markdown)
-        .filter(|item| !item.is_empty())
-        .collect()
-}
-
-fn first_code_block(section: &str) -> String {
-    let mut inside = false;
-    let mut lines = Vec::new();
-    for line in section.lines() {
-        if line.trim_start().starts_with("```") {
-            if inside {
-                break;
-            }
-            inside = true;
-        } else if inside {
-            lines.push(line);
-        }
-    }
-    lines.join("\n").trim().to_string()
-}
-
 fn strip_inline_markdown(text: &str) -> String {
     text.replace(['`', '*'], "")
         .replace("  ", " ")
@@ -503,13 +589,93 @@ fn push_help(levels: &mut Vec<HelpLevel>, heading: Option<String>, lines: &mut V
 mod tests {
     use super::*;
 
+    /// Every panel the workbench shows must have authored content behind it,
+    /// for every stage of every shipped pack. This is the guard for a defect
+    /// that hid in plain sight: requirements and expected behavior were
+    /// extracted as bullet items only, so thirteen of FlashIndex's fourteen
+    /// stages rendered those two panels empty.
+    #[test]
+    fn every_shipped_stage_fills_every_panel() {
+        for pack_id in ["flashindex", "minikv", "tinyhttp", "byteforgevm"] {
+            let pack = crate::pack::load_builtin_pack(pack_id).unwrap();
+            for stage in &pack.manifest.stages {
+                let published = load_published_content(&pack, &stage.id, "rust")
+                    .unwrap_or_else(|error| panic!("{pack_id}/{}: {error:#}", stage.id));
+                assert!(
+                    !published.mission.trim().is_empty(),
+                    "{pack_id}/{} has no goal",
+                    stage.id
+                );
+                assert_eq!(
+                    published.sections.len(),
+                    6,
+                    "{pack_id}/{} is missing a section",
+                    stage.id
+                );
+                for section in &published.sections {
+                    assert!(
+                        !section.blocks.is_empty(),
+                        "{pack_id}/{} would render an empty {} panel",
+                        stage.id,
+                        section.key
+                    );
+                }
+                let expected_help = if pack_id == "flashindex" { 5 } else { 3 };
+                assert!(
+                    published.help.len() >= expected_help,
+                    "{pack_id}/{} has {} help levels, expected at least {expected_help}",
+                    stage.id,
+                    published.help.len()
+                );
+                for (index, level) in published.help.iter().enumerate() {
+                    assert_eq!(level.level, index + 1, "{pack_id}/{}", stage.id);
+                    assert!(
+                        !level.content.trim().is_empty(),
+                        "{pack_id}/{} help level {} is empty",
+                        stage.id,
+                        level.level
+                    );
+                }
+            }
+        }
+    }
+
+    /// The flagship's help ladder is labelled at every rung. A missing label
+    /// falls back to the literal word "Hint", which is what thirteen stages
+    /// used to show.
+    #[test]
+    fn the_flagship_help_ladder_is_labelled_end_to_end() {
+        const LADDER: [&str; 5] = [
+            "Observation",
+            "Concept",
+            "Experiment",
+            "Structure",
+            "Retrospective",
+        ];
+        let pack = crate::pack::load_builtin_pack("flashindex").unwrap();
+        for stage in &pack.manifest.stages {
+            let published = load_published_content(&pack, &stage.id, "rust").unwrap();
+            let labels = published
+                .help
+                .iter()
+                .map(|level| level.label.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(labels, LADDER, "{}", stage.id);
+        }
+    }
+
     #[test]
     fn parses_structured_sections_and_help_levels() {
         let sections = markdown_sections(
             "# Stage\n\n## Goal\n\nBuild `scan`.\n\n## Requirements\n\n- Walk files.\n- Sort output.\n",
         );
         assert_eq!(first_paragraph(&sections["Goal"]), "Build scan.");
-        assert_eq!(bullet_items(&sections["Requirements"]).len(), 2);
+        assert_eq!(
+            parse_blocks(&sections["Requirements"].lines().collect::<Vec<_>>()),
+            [OverviewBlock::List {
+                items: vec!["Walk files.".to_string(), "Sort output.".to_string()],
+            }]
+        );
 
         let paragraphs = narrative_paragraphs(
             "First paragraph.\n\n```text\nskipped\n```\n\nSecond `paragraph`.",
@@ -523,6 +689,17 @@ mod tests {
         assert_eq!(overview.len(), 1);
         assert_eq!(overview[0].title, "What you build");
         assert_eq!(overview[0].blocks.len(), 3);
+
+        // Requirements are as often prose with a fenced list as they are
+        // bullets. Both must reach the learner.
+        let prose = parse_blocks(
+            &"Only print files with these extensions:\n\n```text\n.rs .md\n```\n"
+                .lines()
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(prose.len(), 2);
+        assert!(matches!(prose[0], OverviewBlock::Paragraph { .. }));
+        assert!(matches!(prose[1], OverviewBlock::Code { .. }));
 
         let help = parse_help(
             "# Hint 1 — Observation\n\nLook at output.\n\n# Hint 2 — Concept\n\nThink recursively.\n",

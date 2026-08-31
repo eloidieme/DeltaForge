@@ -220,7 +220,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .appnav a:hover { color: var(--text); }
 .appnav a.active { color: var(--text); border-bottom-color: var(--accent); }
 .appbar-end { margin-left: auto; display: flex; align-items: center; gap: 12px; }
-.local-note { color: var(--text-3); font-size: 0.75rem; }
+.local-note { color: var(--text-3); font-size: 0.75rem; white-space: nowrap; }
+#theme-toggle { white-space: nowrap; }
 
 /* ---------- controls ---------- */
 
@@ -502,6 +503,8 @@ textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
   gap: 8px;
 }
 .instruction-card h2 { font-size: 0.98rem; }
+.instruction-card .prose { display: grid; gap: 10px; }
+.instruction-card .prose p { color: var(--text-2); }
 .instruction-card ul { display: grid; gap: 5px; color: var(--text-2); }
 .instruction-card pre {
   margin: 0;
@@ -679,6 +682,18 @@ table.measure td.numeric { font-family: var(--mono); font-variant-numeric: tabul
   .build-layout { grid-template-columns: minmax(0, 1fr); }
   .evidence { position: static; }
   .page, .build-layout, .appbar-inner, .projectbar-inner { width: calc(100% - 32px); }
+}
+
+@media (max-width: 560px) {
+  /* The app bar is the one row that cannot wrap without losing the brand, so
+     it sheds the least useful element first. */
+  .appbar-inner { gap: 16px; }
+  .appnav { gap: 14px; }
+  .local-note { display: none; }
+  .catalog-grid, .project-grid { grid-template-columns: minmax(0, 1fr); }
+  .projectnav { gap: 14px; overflow-x: auto; }
+  .project-tools { margin-left: 0; }
+  h1 { font-size: 1.35rem; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -55,8 +55,91 @@ pub fn run(command: PackCommand, options: &GlobalOptions) -> Result<()> {
                 bail!("reference validation failed")
             }
         }
+        PackCommand::Content(args) => content(&args, options),
         PackCommand::Install(args) => install(&args.project, &args.dest, args.force, options),
     }
+}
+
+/// Print what a learner can see for one stage, and nothing else.
+fn content(args: &crate::cli::PackContentArgs, options: &GlobalOptions) -> Result<()> {
+    let pack = load_pack(&args.project, &pack_options(options))?;
+    let stage_ids: Vec<String> = match &args.stage {
+        Some(stage) => vec![stage.clone()],
+        None => pack
+            .manifest
+            .stages
+            .iter()
+            .map(|stage| stage.id.clone())
+            .collect(),
+    };
+    let published = stage_ids
+        .iter()
+        .map(|stage_id| crate::capability::load_published_content(&pack, stage_id, &args.lang))
+        .collect::<Result<Vec<_>>>()?;
+
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&published)?);
+        return Ok(());
+    }
+    for stage in &published {
+        println!("{}", render_published(stage));
+    }
+    Ok(())
+}
+
+fn render_published(stage: &crate::capability::PublishedStageContent) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "# {} — step {} of {}: {}\n\n",
+        stage.pack, stage.position, stage.total_stages, stage.title
+    ));
+    out.push_str(&format!("{}\n\n", stage.pack_description));
+    if !stage.established.is_empty() {
+        out.push_str("## Already built\n\n");
+        for title in &stage.established {
+            out.push_str(&format!("- {title}\n"));
+        }
+        out.push('\n');
+    }
+    out.push_str(&format!("## Goal\n\n{}\n\n", stage.mission));
+    for section in &stage.sections {
+        out.push_str(&format!("## {}\n\n", section.title));
+        out.push_str(&render_blocks(&section.blocks));
+    }
+    out.push_str(&format!(
+        "## Invocation\n\nThe program is run as `{}`.\n",
+        stage.run_command.join(" ")
+    ));
+    if !stage.help.is_empty() {
+        out.push_str("\n## Help\n\n");
+        for level in &stage.help {
+            out.push_str(&format!(
+                "### {}. {}\n\n{}\n\n",
+                level.level, level.label, level.content
+            ));
+        }
+    }
+    out
+}
+
+fn render_blocks(blocks: &[crate::capability::OverviewBlock]) -> String {
+    use crate::capability::OverviewBlock;
+    let mut out = String::new();
+    for block in blocks {
+        match block {
+            OverviewBlock::Paragraph { text } => out.push_str(&format!("{text}\n\n")),
+            OverviewBlock::Code { language, content } => {
+                out.push_str(&format!("```{language}\n{content}\n```\n\n"));
+            }
+            OverviewBlock::List { items } => {
+                for item in items {
+                    out.push_str(&format!("- {item}\n"));
+                }
+                out.push('\n');
+            }
+        }
+    }
+    out
 }
 
 fn list(json: bool, options: &GlobalOptions) -> Result<()> {

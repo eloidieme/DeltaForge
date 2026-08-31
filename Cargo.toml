@@ -3,6 +3,22 @@ name = "deltaforge"
 version = "0.1.0"
 edition = "2024"
 default-run = "deltaforge"
+description = "A local CodeCrafters-style learning framework for staged systems-programming projects."
+license = "MIT"
+repository = "https://github.com/eloidieme/DeltaForge"
+readme = "README.md"
+keywords = ["learning", "education", "cli", "systems-programming", "tutorial"]
+categories = ["command-line-utilities", "development-tools"]
+rust-version = "1.85"
+exclude = [
+    "/.github",
+    "/docs",
+    "/handoffs",
+    "/tests",
+    "/tools",
+    "/Spec.md",
+    "/target",
+]
 
 [dependencies]
 anyhow = "1"

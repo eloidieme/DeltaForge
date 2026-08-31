@@ -293,6 +293,8 @@ pub enum PackCommand {
     Doctor(PackDoctorArgs),
     /// Prove a pack by running an internal reference solution.
     CheckReference(PackCheckReferenceArgs),
+    /// Print exactly the content a learner can see for one stage.
+    Content(PackContentArgs),
     /// Copy a discovered pack to a local packs directory.
     Install(PackInstallArgs),
 }
@@ -388,6 +390,27 @@ pub struct PackCheckReferenceArgs {
     /// Path to reference solution main.rs.
     #[arg(long)]
     pub reference: PathBuf,
+
+    /// Print machine-readable JSON only.
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Emits the learner-visible content for one stage and nothing else: no
+/// tests, no fixtures, no reference solution. Used by the content-sufficiency
+/// practice described in docs/product/content-sufficiency.md.
+#[derive(Debug, Args)]
+pub struct PackContentArgs {
+    /// Project pack id.
+    pub project: String,
+
+    /// Stage id. Prints every stage when omitted.
+    #[arg(long)]
+    pub stage: Option<String>,
+
+    /// Implementation language whose run command is reported.
+    #[arg(long, default_value = "rust")]
+    pub lang: String,
 
     /// Print machine-readable JSON only.
     #[arg(long)]

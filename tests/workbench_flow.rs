@@ -394,7 +394,27 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
             .unwrap()
             .contains("deterministic")
     );
-    assert!(capability["requirements"].as_array().unwrap().len() >= 4);
+    // Every panel the build screen shows must have authored content behind it.
+    // Requirements and expected behavior were once flattened to bullet items
+    // only, which left both empty on thirteen of the fourteen stages.
+    let sections = capability["sections"].as_array().unwrap();
+    for key in [
+        "background",
+        "requirements",
+        "example",
+        "expected",
+        "edge_cases",
+        "non_goals",
+    ] {
+        let section = sections
+            .iter()
+            .find(|section| section["key"] == key)
+            .unwrap_or_else(|| panic!("capability content has no {key} section"));
+        assert!(
+            !section["blocks"].as_array().unwrap().is_empty(),
+            "the {key} panel would render empty"
+        );
+    }
     assert_eq!(capability["next"]["id"], "02_filter_files");
 
     let reader = std::thread::spawn({
