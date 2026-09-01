@@ -6,6 +6,8 @@ use crate::context::{GlobalOptions, ProjectContext};
 use crate::pack::pack_source_label;
 
 pub fn run(args: SyncPackArgs, options: &GlobalOptions) -> Result<()> {
+    let initial = ProjectContext::load_unpinned(options)?;
+    let _lease = crate::application::acquire_for_learner_action(&initial.root, "sync the pack")?;
     let mut context = ProjectContext::load_unpinned(options)?;
 
     let old_version = context.state.pack_version.clone();
@@ -60,6 +62,10 @@ pub fn run(args: SyncPackArgs, options: &GlobalOptions) -> Result<()> {
 
     context.state.touch()?;
     context.save_state()?;
+    crate::run_journal::append(
+        &context.root,
+        &crate::application::RunEvent::ProjectStateChanged,
+    )?;
 
     let report = SyncReport {
         project: context.state.project.clone(),
@@ -81,7 +87,7 @@ pub fn run(args: SyncPackArgs, options: &GlobalOptions) -> Result<()> {
     print_change("digest", &report.digest);
     if report.migrated_proofs > 0 {
         println!(
-            "  migrated legacy completion proofs: {}",
+            "  migrated legacy completion records: {}",
             report.migrated_proofs
         );
     }

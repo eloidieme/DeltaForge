@@ -36,10 +36,10 @@ two foundations (a general job model, a path-accepting API) have to land before 
 
 `RunEvent` has eleven variants, all test-shaped: `JobStarted`, `Build*`, `Test*`,
 `RunCompleted`, `SourceChanged`, `ProjectStateChanged`, `JobInterrupted`
-([application.rs:24](../../src/application.rs:24)). `architecture.md` lists
+([application.rs](../../src/application.rs#L24)). `architecture.md` lists
 `BenchmarkSampleRecorded` as representative; it does not exist.
 
-`ActiveJob` and `TestAttempt` ([state.rs:139](../../src/state.rs:139)) carry
+`ActiveJob` and `TestAttempt` ([state.rs](../../src/state.rs#L139)) carry
 `stage_ids`, `passed`, `failed` and no job kind. A benchmark job cannot be represented.
 
 Work:
@@ -57,7 +57,7 @@ context and runs to completion, printing as it goes. It is the last major comman
 never went through the Phase 1 application extraction.
 
 Consequence today: the only browser-reachable code path that touches gates is
-`begin_next_capability` ([application.rs:506](../../src/application.rs:506)), which
+`begin_next_capability` ([application.rs](../../src/application.rs#L506)), which
 *blocks*. A learner reaching FlashIndex `09_parallel_performance` in the browser gets a
 409 reading `Run: deltaforge bench`. Gates can currently only ever appear as a wall.
 
@@ -69,7 +69,7 @@ Work:
 - benchmark events flow through the same journal and SSE stream as tests;
 - `POST /api/v1/benchmarks`; cancellation reuses the existing route;
 - `WorkbenchState` gains a benchmark/gate summary — it has no gate field at all today
-  ([application.rs:137](../../src/application.rs:137)), though
+  ([application.rs](../../src/application.rs#L137)), though
   `context.gate_status()` already computes exactly what is needed and is used only by
   `status --json`;
 - prediction and reflection persistence: new state fields plus two routes;
@@ -102,7 +102,7 @@ itself (copy template, write state and config, write README, `git init`) is in p
 helpers that lift cleanly. `--name` already accepts an absolute path — `check_reference`
 relies on that — so the engine can target an arbitrary location today.
 
-Missing for a catalog: `ProjectPack` ([pack.rs:17](../../src/pack.rs:17)) has
+Missing for a catalog: `ProjectPack` ([pack.rs](../../src/pack.rs#L17)) has
 `description` and `topics` but **no difficulty, no time estimate, and no toolchain
 declaration**. `LanguageSpec` declares `build` / `run` / `bench_run` commands but not
 what must be installed, so preflight cannot know that `rust` needs `cargo`; `doctor`
@@ -209,7 +209,7 @@ this is packaging, and it is small.
   refactor; `print_actual_output`, `print_actual_stream`, and `truncate_output` are
   reachable only from inside them. About sixty dead lines.
 - The source watcher re-hashes every registered project's full tree every 500 ms
-  ([workbench.rs:475](../../src/workbench.rs:475)). Generated directories are excluded,
+  ([workbench.rs](../../src/workbench.rs#L475)). Generated directories are excluded,
   so a learner project is small and this is currently fine — but it is full-content
   hashing on a timer, not mtime-gated, and it scales with project size times project
   count. Worth revisiting if projects get large.

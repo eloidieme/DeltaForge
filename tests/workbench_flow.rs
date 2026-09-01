@@ -157,9 +157,8 @@ fn wait_for_record_at(home: &Path) -> serde_json::Value {
 }
 
 fn wait_for_run_lease_release(project: &Path) {
-    let path = project.join(".deltaforge/run.lock");
     let deadline = Instant::now() + Duration::from_secs(5);
-    while path.exists() {
+    while deltaforge::run_lease::active(project) {
         assert!(
             Instant::now() < deadline,
             "workbench run lease was not released"
@@ -1308,9 +1307,13 @@ fn diagnostic_shutdown_is_authenticated_and_never_interrupts_a_run() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    let stopped = request(port, "POST", &shutdown_path, Some(&origin), "{}");
-    assert!(stopped.starts_with("HTTP/1.1 202"), "{stopped}");
-    assert_eq!(response_json(&stopped)["status"], "stopping");
+    let stopped = deltaforge_command(&project).arg("exit").output().unwrap();
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert!(String::from_utf8_lossy(&stopped.stdout).contains("DeltaForge stopped."));
     let stopped_deadline = Instant::now() + Duration::from_secs(5);
     loop {
         if service.0.try_wait().unwrap().is_some() {

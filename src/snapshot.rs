@@ -94,10 +94,12 @@ pub fn changed_files(root: &Path) -> Result<Vec<ChangedFile>> {
         if index == b'R' {
             let _ = fields.next();
         }
-        files.push(ChangedFile {
-            path: path.to_string(),
-            change: classify(index, worktree),
-        });
+        if path.replace('\\', "/") != ".deltaforge/run.lock" {
+            files.push(ChangedFile {
+                path: path.to_string(),
+                change: classify(index, worktree),
+            });
+        }
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(files)
@@ -132,6 +134,12 @@ pub fn take(root: &Path, message: &str, tag: Option<&str>) -> Result<SnapshotOut
     ensure_git_repository(root)?;
     let changed = changed_files(root)?.len();
     run_git(root, &["add", "-A"])?;
+    // Also protect projects created before DeltaForge wrote .gitignore.
+    // Remove only the live lease path from the index; source changes stay staged.
+    run_git(
+        root,
+        &["rm", "--cached", "--ignore-unmatch", ".deltaforge/run.lock"],
+    )?;
     run_git(root, &["commit", "-m", message])?;
     let commit = git_output(root, &["rev-parse", "HEAD"])?.trim().to_string();
     let (tag, existing_tag) = match tag {

@@ -56,6 +56,19 @@ pub fn application_home() -> Result<PathBuf> {
     Ok(home.join(".deltaforge"))
 }
 
+pub fn ensure_private_application_home() -> Result<PathBuf> {
+    let home = application_home()?;
+    fs::create_dir_all(&home)
+        .with_context(|| format!("failed to create DeltaForge home {}", home.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("failed to secure DeltaForge home {}", home.display()))?;
+    }
+    Ok(home)
+}
+
 pub fn service_record_path() -> Result<PathBuf> {
     Ok(application_home()?.join(SERVICE_RECORD_FILE))
 }
@@ -146,9 +159,7 @@ fn read_registry() -> Result<RegistryFile> {
 }
 
 fn write_registry(registry: &RegistryFile) -> Result<()> {
-    let home = application_home()?;
-    fs::create_dir_all(&home)
-        .with_context(|| format!("failed to create DeltaForge home {}", home.display()))?;
+    let home = ensure_private_application_home()?;
     atomic_write(
         &home.join(REGISTRY_FILE),
         serde_json::to_string_pretty(registry)?,

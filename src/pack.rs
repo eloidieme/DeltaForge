@@ -352,7 +352,7 @@ impl LoadedPack {
     /// given language: the stage's tests, its fixtures, and the language's
     /// build/run commands. Documentation (instructions, hints, design prompts,
     /// README) is deliberately excluded so doc-only pack updates do not
-    /// invalidate completion proofs.
+    /// invalidate completion records.
     ///
     /// Tests and fixtures are hashed as raw bytes because those bytes are the
     /// runner's semantics. Performance gates have an interpretation layer, so
@@ -1202,6 +1202,12 @@ pub fn validate_stage_benchmarks_source(
         if matches!(benchmark.iterations, Some(0)) {
             problems.push(format!(
                 "stage {} benchmark {} iterations must be greater than 0",
+                stage.id, name
+            ));
+        }
+        if matches!(benchmark.warmup, Some(0)) {
+            problems.push(format!(
+                "stage {} benchmark {} warmup must be greater than 0",
                 stage.id, name
             ));
         }

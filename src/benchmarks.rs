@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -734,6 +734,11 @@ fn run_one_benchmark(
         .warmup
         .or(benchmark.warmup)
         .unwrap_or(context.config.bench.warmup);
+    // Persistent pack/config values must include a warmup. The explicit CLI
+    // override keeps `--warmup 0` as an intentional fast diagnostic mode.
+    if warmup == 0 && options.warmup.is_none() {
+        bail!("benchmark {} warmup must be greater than 0", benchmark.name);
+    }
     let timeout_ms = benchmark
         .timeout_ms
         .unwrap_or(context.config.runner.timeout_ms);
@@ -990,8 +995,11 @@ fn percentile(values: &[f64], percentile: f64) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
-    let index = ((values.len() as f64 - 1.0) * percentile).ceil() as usize;
-    values.get(index).copied()
+    let position = (values.len() as f64 - 1.0) * percentile.clamp(0.0, 1.0);
+    let lower = position.floor() as usize;
+    let upper = position.ceil() as usize;
+    let fraction = position - lower as f64;
+    Some(values[lower] + (values[upper] - values[lower]) * fraction)
 }
 
 pub fn append_history(context: &ProjectContext, records: &[BenchmarkRecord]) -> Result<()> {
@@ -1053,7 +1061,6 @@ fn run_timed_command(
     timeout_ms: u64,
     cancellation_path: Option<&Path>,
 ) -> Result<(Duration, Option<u64>)> {
-    let start = Instant::now();
     let measured = process::run_command_measured(
         command,
         cwd,
@@ -1062,7 +1069,6 @@ fn run_timed_command(
         &BTreeMap::new(),
         cancellation_path,
     )?;
-    let elapsed = start.elapsed();
     if !measured.output.status.success() {
         bail!(
             "benchmark command failed: {}\nstdout:\n{}\nstderr:\n{}",
@@ -1071,7 +1077,7 @@ fn run_timed_command(
             String::from_utf8_lossy(&measured.output.stderr)
         );
     }
-    Ok((elapsed, measured.peak_rss_bytes))
+    Ok((measured.elapsed, measured.peak_rss_bytes))
 }
 
 fn create_temp_dir(stage: &StageSpec, name: &str) -> Result<PathBuf> {
@@ -1155,9 +1161,16 @@ fn current_git_commit(root: &Path) -> Option<String> {
 }
 
 fn machine_metadata() -> BTreeMap<String, String> {
+    let host = hostname::get()
+        .ok()
+        .map(|value| value.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unknown".to_string());
+    let host_id =
+        crate::integrity::digest_named_contents(vec![("host".to_string(), host.into_bytes())]);
     BTreeMap::from([
         ("os".to_string(), std::env::consts::OS.to_string()),
         ("arch".to_string(), std::env::consts::ARCH.to_string()),
+        ("host_id".to_string(), host_id),
     ])
 }
 
@@ -1191,6 +1204,12 @@ mod tests {
         );
         assert!(!destination.join("extra.txt").exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn percentile_interpolates_even_median() {
+        assert_eq!(percentile(&[10.0, 20.0], 0.5), Some(15.0));
+        assert_eq!(percentile(&[10.0, 20.0, 30.0], 0.5), Some(20.0));
     }
 
     fn sample_record() -> BenchmarkRecord {

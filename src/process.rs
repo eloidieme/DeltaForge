@@ -27,6 +27,9 @@ struct CommandRunOptions<'a> {
 /// A finished command plus best-effort peak-memory data.
 pub struct MeasuredOutput {
     pub output: Output,
+    /// Wall-clock execution time beginning immediately after the OS creates
+    /// the child, excluding DeltaForge's command construction and spawn call.
+    pub elapsed: Duration,
     /// Approximate peak resident set size of the child process, sampled from
     /// the poll loop (Linux `VmHWM`, macOS `proc_pid_rusage` resident size,
     /// Windows `PeakWorkingSetSize`). `None` when sampling is unsupported on
@@ -166,6 +169,7 @@ fn run_command_impl(
     let mut child = process
         .spawn()
         .with_context(|| format!("failed to spawn command {}", command.join(" ")))?;
+    let execution_started = Instant::now();
     let stdout = child
         .stdout
         .take()
@@ -227,7 +231,11 @@ fn run_command_impl(
                 format!("failed to wait for cancelled command {}", command.join(" "))
             })?;
         }
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(if measure {
+            Duration::from_millis(1)
+        } else {
+            Duration::from_millis(10)
+        });
     };
 
     if let (Some(receiver), Some(sink)) = (stream_receiver.as_ref(), output_sink.as_mut()) {
@@ -258,6 +266,7 @@ fn run_command_impl(
             stdout,
             stderr,
         },
+        elapsed: execution_started.elapsed(),
         peak_rss_bytes,
     })
 }

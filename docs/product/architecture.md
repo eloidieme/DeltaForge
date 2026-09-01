@@ -73,7 +73,7 @@ Owns:
 - canonical learner state;
 - pack loading and content interpretation;
 - test and benchmark execution;
-- progression and completion proofs;
+- progression and completion records;
 - hints and experiments;
 - Git integration;
 - persistence and safety rules;

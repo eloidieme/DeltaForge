@@ -611,7 +611,7 @@ pub fn create_project(
 /// still produces a prompt, honest refusal.
 const LEARNER_ACTION_LEASE_WAIT: std::time::Duration = std::time::Duration::from_millis(750);
 
-fn acquire_for_learner_action(
+pub(crate) fn acquire_for_learner_action(
     root: &Path,
     doing: &'static str,
 ) -> Result<crate::run_lease::RunLease> {

@@ -7,6 +7,8 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
     if args.level == Some(0) {
         anyhow::bail!("hint level must be greater than 0");
     }
+    let initial = ProjectContext::load(options)?;
+    let _lease = crate::application::acquire_for_learner_action(&initial.root, "update help")?;
     let mut context = ProjectContext::load(options)?;
     let stage_id = context.state.current_stage.clone();
     let stage = context
@@ -23,14 +25,17 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
         return Ok(());
     }
 
+    let maximum = if context.state.is_completed(&stage_id) {
+        hints.len()
+    } else {
+        hints.len().min(4)
+    };
+
     if args.all {
-        for (index, hint) in hints.iter().enumerate() {
+        for (index, hint) in hints.iter().take(maximum).enumerate() {
             print_hint(index + 1, hints.len(), hint);
         }
-        context
-            .state
-            .hint_state
-            .insert(stage.id.clone(), hints.len());
+        context.state.hint_state.insert(stage.id.clone(), maximum);
     } else {
         let level = args.level.unwrap_or_else(|| {
             context
@@ -41,7 +46,10 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
                 .unwrap_or(0)
                 + 1
         });
-        let capped_level = level.min(hints.len());
+        if level > maximum {
+            anyhow::bail!("the retrospective unlocks after this capability is acquired");
+        }
+        let capped_level = level.min(maximum);
         print_hint(capped_level, hints.len(), &hints[capped_level - 1]);
         let previous = context
             .state
@@ -57,6 +65,10 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
 
     context.state.touch()?;
     context.save_state()?;
+    crate::run_journal::append(
+        &context.root,
+        &crate::application::RunEvent::ProjectStateChanged,
+    )?;
     Ok(())
 }
 

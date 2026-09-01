@@ -3,6 +3,8 @@ use anyhow::Result;
 use crate::context::{GlobalOptions, ProjectContext};
 
 pub fn run(options: &GlobalOptions) -> Result<()> {
+    let initial = ProjectContext::load(options)?;
+    let _lease = crate::application::acquire_for_learner_action(&initial.root, "advance")?;
     let mut context = ProjectContext::load(options)?;
     let current_stage = context.state.current_stage.clone();
 
@@ -25,6 +27,10 @@ pub fn run(options: &GlobalOptions) -> Result<()> {
         context.state.current_stage = next_stage.id.clone();
         context.state.touch()?;
         context.save_state()?;
+        crate::run_journal::append(
+            &context.root,
+            &crate::application::RunEvent::ProjectStateChanged,
+        )?;
         println!("Unlocked Stage {}: {}", next_stage.id, next_stage.title);
     } else {
         println!("All stages complete.");

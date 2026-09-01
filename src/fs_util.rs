@@ -1,11 +1,28 @@
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 
+pub fn lock_unavailable(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33))
+}
+
 pub fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+    atomic_write_with_mode(path, contents, false)
+}
+
+/// Atomically write a credential-bearing file. On Unix both the temporary
+/// file and the installed file are owner-readable/writable only.
+pub fn atomic_write_private(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
+    atomic_write_with_mode(path, contents, true)
+}
+
+fn atomic_write_with_mode(path: &Path, contents: impl AsRef<[u8]>, private: bool) -> Result<()> {
+    #[cfg(windows)]
+    let _ = private;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create directory {}", parent.display()))?;
@@ -13,7 +30,15 @@ pub fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
 
     let temp_path = temporary_path(path)?;
     {
-        let mut file = File::create(&temp_path)
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&temp_path)
             .with_context(|| format!("failed to create temp file {}", temp_path.display()))?;
         file.write_all(contents.as_ref())
             .with_context(|| format!("failed to write temp file {}", temp_path.display()))?;
@@ -28,6 +53,13 @@ pub fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
             path.display()
         )
     })?;
+
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to secure {}", path.display()))?;
+    }
 
     if let Some(parent) = path.parent()
         && let Ok(dir) = File::open(parent)

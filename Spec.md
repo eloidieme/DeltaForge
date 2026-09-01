@@ -1,5 +1,7 @@
 # DeltaForge — Product & Technical Specification
 
+> **Status: superseded.** This planning document predates the implemented 1.0 contract. For current behavior, see [`docs/product/release-1-0-contract.md`](docs/product/release-1-0-contract.md), [`docs/commands.md`](docs/commands.md), and [`README.md`](README.md).
+
 ## 1. One-line description
 
 **DeltaForge is a local CodeCrafters-style learning framework for building performance-critical software through staged projects, black-box tests, benchmarks, profiling, optimization quests, and measurable engineering progress.**

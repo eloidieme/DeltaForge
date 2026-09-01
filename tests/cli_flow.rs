@@ -37,6 +37,9 @@ where
     Command::new(deltaforge_bin())
         .args(args)
         .current_dir(cwd)
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", "NUL")
         .output()
         .unwrap()
 }
@@ -47,7 +50,12 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     let mut command = Command::new(deltaforge_bin());
-    command.args(args).current_dir(cwd);
+    command
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", "NUL");
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -1535,6 +1543,8 @@ fn commit_requires_git_and_passed_stage_unless_forced() {
         ["config", "user.name", "DeltaForge Tests"],
         &git_project,
     ));
+    fs::create_dir_all(git_project.join("target/debug")).unwrap();
+    fs::write(git_project.join("target/debug/cache.bin"), "generated").unwrap();
 
     let refused = run_deltaforge(["commit"], &git_project);
     assert_failure(&refused);
@@ -1543,6 +1553,12 @@ fn commit_requires_git_and_passed_stage_unless_forced() {
     let forced = run_deltaforge(["commit", "--force"], &git_project);
     assert_success(&forced);
     assert_stdout_contains(&forced, "Complete Stage 01: Scan files");
+    let tracked = run_git(["ls-files"], &git_project);
+    assert_success(&tracked);
+    let tracked = String::from_utf8_lossy(&tracked.stdout).replace('\\', "/");
+    assert!(!tracked.lines().any(|path| path.starts_with("target/")));
+    assert!(!tracked.lines().any(|path| path == ".deltaforge/run.lock"));
+    assert!(git_project.join(".deltaforge/run.lock").exists());
 }
 
 #[test]
@@ -2207,7 +2223,7 @@ fn legacy_schema_v1_state_loads_but_requires_a_fresh_completion_proof() {
     assert_stdout_contains(&status, "01_scan_files");
     let next = run_deltaforge(["next"], &project);
     assert_failure(&next);
-    assert_stderr_contains(&next, "has no integrity proof");
+    assert_stderr_contains(&next, "has no current completion record");
     assert_stderr_contains(&next, "deltaforge test");
 
     fs::copy(
@@ -2414,7 +2430,7 @@ fn sync_pack_migrates_legacy_proofs_when_pack_is_unchanged() {
     // safely upgrade the legacy proof to a behavioral digest.
     let sync = run_deltaforge(["sync-pack"], &project);
     assert_success(&sync);
-    assert_stdout_contains(&sync, "migrated legacy completion proofs: 1");
+    assert_stdout_contains(&sync, "migrated legacy completion records: 1");
     assert_stdout_contains(&sync, "✓ 01_scan_files");
 
     let migrated: serde_json::Value =

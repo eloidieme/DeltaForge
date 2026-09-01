@@ -59,6 +59,8 @@ pub enum Command {
     Doctor(DoctorArgs),
     /// Explain the latest failing stage results and suggest next steps.
     ExplainFailure(ExplainFailureArgs),
+    /// Stop the background DeltaForge workbench service.
+    Exit,
     #[command(name = "__workbench", hide = true)]
     Workbench(WorkbenchArgs),
 }
@@ -66,7 +68,7 @@ pub enum Command {
 #[derive(Debug, Args)]
 pub struct WorkbenchArgs {
     #[arg(long, hide = true)]
-    pub token: String,
+    pub token: Option<String>,
 
     #[arg(long, hide = true)]
     pub idle_timeout_ms: Option<u64>,

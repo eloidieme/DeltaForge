@@ -5,6 +5,10 @@ Stage tests live in `tests.yaml`.
 ```yaml
 tests:
   - name: finds exact token matches
+    diagnosis:
+      priority: 10
+      headline: Exact-token filtering is not implemented yet
+      contract: Search results include whole-token matches and exclude substrings.
     fixture: search_project
     stdin: ""
     env:
@@ -32,6 +36,8 @@ Supported expectations include `exit_code`, `stdout_exact`, `stdout_contains`, `
 
 Tests may provide `stdin` and per-test `env` entries. Commands are executed directly as argument vectors, not through a shell.
 
+`diagnosis` is optional pack metadata with three required fields: `priority` (lower values are shown first), `headline` (the short “fix this first” label), and `contract` (the behavior the check protects). After a failure, DeltaForge combines this metadata with the observed assertion, expected/actual values, command, fixture name, and a bounded fixture listing. That full structure is persisted for both the browser and `explain-failure`; pack authors do not duplicate those runtime fields in YAML.
+
 Only a successful, unfiltered run of every test in a stage records completion. Filtered runs are diagnostic and never unlock progression. Test files reject unknown fields, zero timeouts, assertion-free cases, and fixture or expectation paths that escape the stage fixture/temporary root.
 
-Every edge case promised by `instructions.md` should be represented by a deterministic case here. Because behavioral completion proofs hash `tests.yaml` and fixture bytes, adding or correcting a case intentionally makes an older proof stale after `sync-pack`; the learner re-runs that stage to prove the stronger contract.
+Every edge case promised by `instructions.md` should be represented by a deterministic case here. Because behavioral completion records hash `tests.yaml` and fixture bytes for staleness detection, adding or correcting a case intentionally makes an older record stale after `sync-pack`; the learner re-runs that stage against the stronger contract.

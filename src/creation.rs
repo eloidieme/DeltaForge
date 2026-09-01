@@ -360,8 +360,45 @@ pub fn create(
     })?;
     write_metadata(target, pack, language_id, stage)?;
     write_readme(target, pack, stage)?;
+    write_gitignore(target)?;
     if git {
         initialize_git(target)?;
+    }
+    Ok(())
+}
+
+fn write_gitignore(target: &Path) -> Result<()> {
+    const GENERATED: [&str; 5] = [
+        "/.deltaforge/",
+        "/target/",
+        "/build/",
+        "/node_modules/",
+        "/.venv/",
+    ];
+    let path = target.join(".gitignore");
+    let mut source = match fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    if !source.is_empty() && !source.ends_with('\n') {
+        source.push('\n');
+    }
+    let existing = source.lines().collect::<std::collections::BTreeSet<_>>();
+    let additions = GENERATED
+        .into_iter()
+        .filter(|entry| !existing.contains(entry))
+        .collect::<Vec<_>>();
+    if !additions.is_empty() {
+        if !source.is_empty() {
+            source.push('\n');
+        }
+        source.push_str("# DeltaForge runtime and generated build output\n");
+        source.push_str(&additions.join("\n"));
+        source.push('\n');
+        fs::write(&path, source).with_context(|| format!("failed to write {}", path.display()))?;
     }
     Ok(())
 }

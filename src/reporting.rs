@@ -1,7 +1,7 @@
 //! The engineering record a learner can export.
 //!
 //! Every line this module emits traces to something DeltaForge actually
-//! recorded: a completion proof, a saved measurement, a gate result, a commit,
+//! recorded: a completion record, a saved measurement, a gate result, a commit,
 //! or a note the learner wrote. Nothing here offers generic advice, and no
 //! claim appears without the evidence behind it.
 
@@ -49,7 +49,7 @@ pub struct ProjectReport {
     pub steps_total: usize,
     pub steps_complete: usize,
     /// Behavioral checks passing across all completed steps, summed from the
-    /// completion proofs rather than from the last run.
+    /// completion records rather than from the last run.
     pub checks_proven: usize,
     pub steps: Vec<StepRecord>,
     pub measurements: Vec<MeasurementRecord>,
@@ -66,8 +66,8 @@ pub struct StepRecord {
     pub status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
-    /// Checks the completion proof recorded for this step. `None` means the
-    /// step passed before proofs existed, or has not passed.
+    /// Checks the completion record for this step. `None` means the step
+    /// passed before these records existed, or has not passed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checks: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]

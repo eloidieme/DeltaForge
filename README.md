@@ -2,8 +2,9 @@
 
 Build a real developer tool on your own machine, one behavior at a time.
 
-DeltaForge gives you a written contract for each step, black-box checks that hold you
-to it, a diagnosis that names the single thing to fix first, a five-level help ladder,
+DeltaForge gives you a written contract for each step and black-box checks that hold you
+to it. The flagship FlashIndex pack adds a diagnosis that names the single thing to fix
+first and a five-level help ladder,
 and — where a step is about speed rather than correctness — benchmarks with a target to
 hit. Your code lives in your own folder, in your own editor, under your own version
 control. Nothing leaves the machine.
@@ -35,12 +36,13 @@ Rust is the implementation language in 1.0.
 
 ## Install
 
-Download a release archive for macOS, Linux, or Windows from
+Download a published release archive for macOS, Linux, or Windows from
 [Releases](https://github.com/eloidieme/DeltaForge/releases), verify its checksum, and
-put the binary on your `PATH`. Or build it yourself:
+put the binary on your `PATH`. Before the first tagged release is published, install the
+current source directly from the repository:
 
 ```bash
-cargo install deltaforge
+cargo install --git https://github.com/eloidieme/DeltaForge
 ```
 
 You need a working Rust toolchain (`cargo`) to build the projects, and Git if you want
@@ -59,6 +61,9 @@ behavioral run in a few seconds of machine time.
 `DELTAFORGE_NO_BROWSER=1` prints the local URL instead of opening a tab.
 `DELTAFORGE_WORKSPACE` changes where new projects are created; the default is
 `~/DeltaForge`.
+
+The workbench runs in the background. Stop it cleanly from any directory with
+`deltaforge exit`.
 
 ## The terminal, if you prefer it
 

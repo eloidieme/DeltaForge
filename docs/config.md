@@ -25,7 +25,9 @@ exclude = []
 enforce = true
 ```
 
-`integrity.exclude` adds names to the built-in integrity-digest exclusion list (`target`, `node_modules`, ...). Entries are plain file or directory names matched at any depth — no paths. Use it when a tool creates a generated directory or a directory symlink that DeltaForge does not already know about.
+`integrity.exclude` adds names to the built-in staleness-digest exclusion list (`target`, `node_modules`, ...). Entries are plain file or directory names matched only at the project root — no paths. A nested `src/target`, for example, remains source-visible. Use the setting when a tool creates a generated root directory or directory symlink that DeltaForge does not already know about.
+
+`bench.iterations` and `bench.warmup` must both be greater than zero.
 
 Run `deltaforge config validate` after manual edits.
 
@@ -39,6 +41,15 @@ Packs are discovered from these locations, in order:
 2. `DELTAFORGE_PACKS_DIR` (environment override).
 3. The builtin dev-tree packs directory (when running from a source checkout).
 4. The bundled packs embedded in the binary.
+
+## Environment variables
+
+- `DELTAFORGE_HOME` overrides the per-user application directory that holds the project registry and private workbench discovery record.
+- `DELTAFORGE_BIN` tells the pack MCP server which `deltaforge` executable to invoke.
+- `DELTAFORGE_PACKS_DIR` overrides pack discovery after the per-invocation flag.
+- `DELTAFORGE_WORKSPACE` changes the browser creation flow's default project parent.
+- `DELTAFORGE_NO_BROWSER=1` prints the workbench URL instead of opening it.
+- `DELTAFORGE_NO_PAGER=1` disables the terminal pager.
 
 Embedded packs are extracted to a per-user cache directory rather than the shared system temp directory:
 

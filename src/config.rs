@@ -24,8 +24,8 @@ pub struct ProjectConfig {
     pub gates: GatesConfig,
 }
 
-/// Learner-controlled additions to the integrity digest exclusion list.
-/// Entries are directory or file names matched at any depth, like the built-in
+/// Learner-controlled additions to the staleness digest exclusion list.
+/// Entries are directory or file names matched at the project root, like the built-in
 /// exclusions (`target`, `node_modules`, ...). Useful when a tool creates a
 /// generated directory or directory symlink DeltaForge does not know about.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -168,6 +168,12 @@ impl ProjectConfig {
         if self.bench.iterations == 0 {
             bail!(
                 "invalid config {}: bench.iterations must be greater than 0",
+                path.display()
+            );
+        }
+        if self.bench.warmup == 0 {
+            bail!(
+                "invalid config {}: bench.warmup must be greater than 0",
                 path.display()
             );
         }

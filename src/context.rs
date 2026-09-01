@@ -172,7 +172,9 @@ impl ProjectContext {
             .completion_proofs
             .get(stage_id)
             .with_context(|| {
-                format!("stage {stage_id} has no integrity proof; run `deltaforge test` again")
+                format!(
+                    "stage {stage_id} has no current completion record; run `deltaforge test` again"
+                )
             })?;
         if self.stage_needs_revalidation(stage_id)? {
             bail!(

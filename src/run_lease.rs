@@ -1,8 +1,9 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 const LEASE_FILE: &str = "run.lock";
@@ -14,7 +15,7 @@ struct LeaseRecord {
 }
 
 pub struct RunLease {
-    path: PathBuf,
+    file: File,
 }
 
 impl RunLease {
@@ -41,103 +42,55 @@ impl RunLease {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        for _ in 0..2 {
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(mut file) => {
-                    let lease = Self { path: path.clone() };
-                    let record = serde_json::to_vec(&LeaseRecord {
-                        pid: std::process::id(),
-                    })?;
-                    file.write_all(&record)?;
-                    file.sync_all()?;
-                    return Ok(Some(lease));
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if active(project_root) {
-                        return Ok(None);
-                    }
-                }
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!("failed to acquire run lease {}", path.display())
-                    });
-                }
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("failed to open run lease {}", path.display()))?;
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                file.set_len(0)?;
+                file.seek(SeekFrom::Start(0))?;
+                let record = serde_json::to_vec(&LeaseRecord {
+                    pid: std::process::id(),
+                })?;
+                file.write_all(&record)?;
+                file.sync_all()?;
+                Ok(Some(Self { file }))
+            }
+            Err(error) if crate::fs_util::lock_unavailable(&error) => Ok(None),
+            Err(error) => {
+                Err(error).with_context(|| format!("failed to lock run lease {}", path.display()))
             }
         }
-        Ok(None)
     }
 }
 
 impl Drop for RunLease {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let _ = FileExt::unlock(&self.file);
     }
 }
 
 pub fn active(project_root: &Path) -> bool {
     let path = lease_path(project_root);
-    let record = fs::read(&path)
-        .ok()
-        .and_then(|source| serde_json::from_slice::<LeaseRecord>(&source).ok());
-    match record {
-        Some(record) if process_is_alive(record.pid) => true,
-        Some(_) => {
-            let _ = fs::remove_file(path);
+    let Ok(file) = OpenOptions::new().read(true).write(true).open(path) else {
+        return false;
+    };
+    match file.try_lock_exclusive() {
+        Ok(()) => {
+            let _ = FileExt::unlock(&file);
             false
         }
-        None if path.exists() && recently_created(&path) => true,
-        None if path.exists() => {
-            let _ = fs::remove_file(path);
-            false
-        }
-        None => false,
+        Err(error) if crate::fs_util::lock_unavailable(&error) => true,
+        Err(_) => true,
     }
-}
-
-fn recently_created(path: &Path) -> bool {
-    path.metadata()
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|elapsed| elapsed < std::time::Duration::from_secs(5))
 }
 
 fn lease_path(project_root: &Path) -> PathBuf {
     project_root.join(".deltaforge").join(LEASE_FILE)
-}
-
-#[cfg(unix)]
-pub(crate) fn process_is_alive(pid: u32) -> bool {
-    unsafe extern "C" {
-        fn kill(pid: i32, signal: i32) -> i32;
-    }
-    i32::try_from(pid)
-        .ok()
-        .is_some_and(|pid| unsafe { kill(pid, 0) } == 0)
-}
-
-#[cfg(windows)]
-pub(crate) fn process_is_alive(pid: u32) -> bool {
-    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
-    const STILL_ACTIVE: u32 = 259;
-    unsafe extern "system" {
-        fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
-        fn GetExitCodeProcess(process: *mut std::ffi::c_void, code: *mut u32) -> i32;
-        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
-    }
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
-    if handle.is_null() {
-        return false;
-    }
-    let mut code = 0;
-    let result = unsafe { GetExitCodeProcess(handle, &mut code) };
-    let _ = unsafe { CloseHandle(handle) };
-    result != 0 && code == STILL_ACTIVE
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn process_is_alive(pid: u32) -> bool {
-    pid == std::process::id()
 }
 
 #[cfg(test)]

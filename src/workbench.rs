@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -9,14 +9,15 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 use crate::application;
 use crate::context::GlobalOptions;
-use crate::fs_util::atomic_write;
+use crate::fs_util::atomic_write_private;
 
 const API_VERSION: &str = "v1";
-const SERVICE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-app2");
+const SERVICE_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-app3");
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(4);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -41,41 +42,31 @@ struct ServiceStatus {
     clients: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StartupLeaseRecord {
-    pid: u32,
-}
-
 struct StartupLease {
-    path: PathBuf,
+    file: File,
 }
 
 impl StartupLease {
     fn acquire(path: PathBuf) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        crate::project_registry::ensure_private_application_home()?;
         let deadline = Instant::now() + STARTUP_TIMEOUT;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("failed to open startup lease {}", path.display()))?;
         loop {
-            match OpenOptions::new().write(true).create_new(true).open(&path) {
-                Ok(mut file) => {
-                    file.write_all(&serde_json::to_vec(&StartupLeaseRecord {
-                        pid: std::process::id(),
-                    })?)?;
-                    file.sync_all()?;
-                    return Ok(Self { path });
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    if !startup_lease_is_active(&path) {
-                        continue;
-                    }
+            match file.try_lock_exclusive() {
+                Ok(()) => return Ok(Self { file }),
+                Err(error) if crate::fs_util::lock_unavailable(&error) => {
                     if Instant::now() >= deadline {
                         bail!("another DeltaForge workbench launch is still starting");
                     }
                     std::thread::sleep(Duration::from_millis(25));
                 }
-                Err(error) => return Err(error.into()),
+                Err(error) => return Err(error).context("failed to lock workbench startup lease"),
             }
         }
     }
@@ -83,32 +74,7 @@ impl StartupLease {
 
 impl Drop for StartupLease {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
-
-fn startup_lease_is_active(path: &Path) -> bool {
-    let record = fs::read(path)
-        .ok()
-        .and_then(|source| serde_json::from_slice::<StartupLeaseRecord>(&source).ok());
-    match record {
-        Some(record) if crate::run_lease::process_is_alive(record.pid) => true,
-        Some(_) => {
-            let _ = fs::remove_file(path);
-            false
-        }
-        None => {
-            let recent = path
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .ok()
-                .and_then(|modified| modified.elapsed().ok())
-                .is_some_and(|elapsed| elapsed < Duration::from_secs(1));
-            if !recent {
-                let _ = fs::remove_file(path);
-            }
-            recent
-        }
+        let _ = FileExt::unlock(&self.file);
     }
 }
 
@@ -263,7 +229,7 @@ pub fn launch(options: &GlobalOptions) -> Result<()> {
     let mut service = read_compatible_record(&record_path)?;
 
     if service.is_none() {
-        let token = capability_token(root.as_deref().unwrap_or_else(|| Path::new("deltaforge")));
+        let token = capability_token(root.as_deref().unwrap_or_else(|| Path::new("deltaforge")))?;
         spawn_service(root.as_deref(), options, &token)?;
         service = wait_for_service(&record_path)?;
     }
@@ -284,14 +250,12 @@ pub fn launch(options: &GlobalOptions) -> Result<()> {
     }
     if std::env::var_os("DELTAFORGE_NO_BROWSER").is_some() {
         println!("DeltaForge is ready at {url}");
-        println!("You can run checks with: deltaforge test");
     } else {
         match open_in_browser(url.as_ref()) {
             Ok(()) => println!("DeltaForge is ready."),
             Err(error) => {
                 println!("DeltaForge is ready at {url}");
                 println!("Browser opening failed: {error:#}");
-                println!("You can still run checks with: deltaforge test");
             }
         }
     }
@@ -344,9 +308,7 @@ fn spawn_service(root: Option<&Path>, options: &GlobalOptions, token: &str) -> R
     }
     command
         .arg("__workbench")
-        .arg("--token")
-        .arg(token)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if let Some(packs_dir) = &options.packs_dir {
@@ -358,10 +320,35 @@ fn spawn_service(root: Option<&Path>, options: &GlobalOptions, token: &str) -> R
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    command
+    let mut child = command
         .spawn()
         .context("failed to start the DeltaForge workbench service")?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("workbench service stdin pipe is missing")?;
+    stdin
+        .write_all(token.as_bytes())
+        .context("failed to send the workbench capability to the service")?;
+    drop(stdin);
     Ok(())
+}
+
+pub fn service_token(argument: Option<String>) -> Result<String> {
+    let token = match argument {
+        Some(token) => token,
+        None => {
+            let mut token = String::new();
+            std::io::stdin()
+                .read_to_string(&mut token)
+                .context("failed to read the workbench capability from stdin")?;
+            token
+        }
+    };
+    if token.is_empty() {
+        bail!("workbench capability token must not be empty");
+    }
+    Ok(token)
 }
 
 fn wait_for_service(record_path: &Path) -> Result<Option<(ServiceRecord, ServiceStatus)>> {
@@ -398,7 +385,7 @@ fn read_compatible_record(record_path: &Path) -> Result<Option<(ServiceRecord, S
     }
     if record.pid != status.pid {
         record.pid = status.pid;
-        atomic_write(record_path, serde_json::to_string(&record)?)?;
+        atomic_write_private(record_path, serde_json::to_string(&record)?)?;
     }
     Ok(Some((record, status)))
 }
@@ -453,8 +440,48 @@ fn request_focus(record: &ServiceRecord, route: &str) -> bool {
         "/api/{API_VERSION}/focus?token={}&route={route}",
         record.token
     );
-    http_get_response(record.port, &path)
+    let origin = format!("http://127.0.0.1:{}", record.port);
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: {origin}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+        record.port
+    );
+    http_exchange(record.port, &request)
         .is_some_and(|response| response.starts_with("HTTP/1.1 202"))
+}
+
+pub fn exit() -> Result<()> {
+    let record_path = crate::project_registry::service_record_path()?;
+    let source = match fs::read_to_string(&record_path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            println!("DeltaForge is not running.");
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let Ok(record) = serde_json::from_str::<ServiceRecord>(&source) else {
+        let _ = fs::remove_file(record_path);
+        println!("DeltaForge is not running.");
+        return Ok(());
+    };
+    if probe(&record).is_none() {
+        remove_record_if_matches(&record_path, &record);
+        println!("DeltaForge is not running.");
+        return Ok(());
+    }
+    if !request_shutdown(&record) {
+        bail!("DeltaForge could not stop while a check run is active; cancel it and try again");
+    }
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
+    while Instant::now() < deadline {
+        if probe(&record).is_none() {
+            remove_record_if_matches(&record_path, &record);
+            println!("DeltaForge stopped.");
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    bail!("DeltaForge accepted the stop request but did not exit in time")
 }
 
 fn request_shutdown(record: &ServiceRecord) -> bool {
@@ -469,6 +496,9 @@ fn request_shutdown(record: &ServiceRecord) -> bool {
 }
 
 pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Duration>) -> Result<()> {
+    if token.is_empty() {
+        bail!("workbench capability token must not be empty");
+    }
     let idle_timeout = idle_timeout.unwrap_or(IDLE_TIMEOUT);
     if idle_timeout.is_zero() {
         bail!("workbench idle timeout must be greater than zero");
@@ -508,7 +538,8 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
         token: token.clone(),
         version: SERVICE_VERSION.to_string(),
     };
-    atomic_write(&record_path, serde_json::to_string(&record)?)?;
+    crate::project_registry::ensure_private_application_home()?;
+    atomic_write_private(&record_path, serde_json::to_string(&record)?)?;
 
     let shared = Arc::new(Shared {
         default_project_id: registered.map(|project| project.id),
@@ -751,7 +782,23 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
                 &serde_json::to_string(&projects)?,
             )
         }
-        ("GET", "/api/v1/focus") => {
+        ("POST", "/api/v1/focus") => {
+            if !authorized_mutation(&request, shared) {
+                return respond(
+                    &mut stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"forbidden"}"#,
+                );
+            }
+            if parse_json_body::<EmptyBody>(&request).is_err() {
+                return respond(
+                    &mut stream,
+                    "400 Bad Request",
+                    "application/json",
+                    r#"{"error":"invalid_json"}"#,
+                );
+            }
             let route = query_value(&request.target, "route")
                 .filter(|route| route.starts_with("/projects"))
                 .unwrap_or("/projects")
@@ -1223,7 +1270,7 @@ fn authorized(request: &HttpRequest, shared: &Shared) -> bool {
                 .find_map(|pair| pair.strip_prefix("token="))
         })
         .unwrap_or_default();
-    if token != shared.token {
+    if !constant_time_eq(token.as_bytes(), shared.token.as_bytes()) {
         return false;
     }
     let expected_origin = format!("http://{expected_host}");
@@ -1231,6 +1278,16 @@ fn authorized(request: &HttpRequest, shared: &Shared) -> bool {
         .headers
         .get("origin")
         .is_none_or(|origin| origin == &expected_origin)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    for index in 0..right.len() {
+        let left = left.get(index).copied().unwrap_or_default();
+        let right = right.get(index).copied().unwrap_or_default();
+        difference |= usize::from(left ^ right);
+    }
+    difference == 0
 }
 
 fn authorized_mutation(request: &HttpRequest, shared: &Shared) -> bool {
@@ -2037,23 +2094,11 @@ fn http_exchange(port: u16, request: &str) -> Option<String> {
     Some(response)
 }
 
-fn capability_token(root: &Path) -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_nanos())
-        .unwrap_or_default();
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in root
-        .to_string_lossy()
-        .as_bytes()
-        .iter()
-        .chain(nanos.to_le_bytes().iter())
-        .chain(std::process::id().to_le_bytes().iter())
-    {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}{nanos:x}")
+fn capability_token(_root: &Path) -> Result<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| anyhow::anyhow!("operating system randomness is unavailable: {error}"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 /// The single-page workbench, assembled at compile time from three source
 /// files. It is served inline rather than as separate assets so the page
@@ -2085,6 +2130,16 @@ mod tests {
             focus_revision: AtomicUsize::new(0),
             focus_target: Mutex::new("/projects".to_string()),
         }
+    }
+
+    #[test]
+    fn capability_tokens_are_random_and_fixed_length() {
+        let first = capability_token(Path::new("project")).unwrap();
+        let second = capability_token(Path::new("project")).unwrap();
+        assert_eq!(first.len(), 64);
+        assert_eq!(second.len(), 64);
+        assert_ne!(first, second);
+        assert!(service_token(Some(String::new())).is_err());
     }
 
     fn raw_request(target: &str, host: &str, origin: Option<&str>) -> String {

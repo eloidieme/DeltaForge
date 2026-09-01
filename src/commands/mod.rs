@@ -50,9 +50,10 @@ pub fn run(cli: Cli) -> Result<()> {
         Some(Command::Commit(args)) => commit::run(args, &options),
         Some(Command::Doctor(args)) => doctor::run(args, &options),
         Some(Command::ExplainFailure(args)) => explain_failure::run(args, &options),
+        Some(Command::Exit) => crate::workbench::exit(),
         Some(Command::Workbench(args)) => crate::workbench::serve(
             &options,
-            args.token,
+            crate::workbench::service_token(args.token)?,
             args.idle_timeout_ms.map(std::time::Duration::from_millis),
         ),
     }

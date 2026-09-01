@@ -48,10 +48,56 @@ pub fn run(args: ExplainFailureArgs, options: &GlobalOptions) -> Result<()> {
         if explanation.failed == 0 {
             println!("No failures recorded for this stage.");
         } else {
-            for failed_test in &explanation.failed_tests {
+            let primary = explanation.failed_tests.iter().min_by_key(|failure| {
+                failure
+                    .diagnosis
+                    .as_ref()
+                    .map_or(u32::MAX, |diagnosis| diagnosis.priority)
+            });
+            if let Some(failed_test) = primary {
                 println!("Failed: {}", failed_test.name);
-                for failure in &failed_test.failures {
-                    println!("  - {failure}");
+                println!("Fix this first: {}", failed_test.name);
+                if let Some(diagnosis) = &failed_test.diagnosis {
+                    println!("{}", diagnosis.headline);
+                    println!();
+                    println!("{}", diagnosis.summary);
+                    println!("Requirement: {}", diagnosis.contract);
+                    if let Some(expected) = &diagnosis.expected {
+                        println!("Expected: {expected}");
+                    }
+                    if let Some(actual) = &diagnosis.actual {
+                        println!("Actual: {actual}");
+                    }
+                    let fixture = diagnosis
+                        .fixture
+                        .iter()
+                        .chain(diagnosis.fixture_entries.iter())
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if !fixture.is_empty() {
+                        println!("Fixture: {}", fixture.join(" · "));
+                    }
+                } else {
+                    for failure in &failed_test.failures {
+                        println!("  - {failure}");
+                    }
+                }
+            }
+            let other_count = explanation.failed_tests.len().saturating_sub(1);
+            if other_count > 0 {
+                println!();
+                println!("{other_count} other failing check(s):");
+                for failed_test in &explanation.failed_tests {
+                    if primary.is_some_and(|primary| std::ptr::eq(primary, failed_test)) {
+                        continue;
+                    }
+                    let label = failed_test
+                        .diagnosis
+                        .as_ref()
+                        .map_or(failed_test.name.as_str(), |diagnosis| {
+                            diagnosis.headline.as_str()
+                        });
+                    println!("  - {label}");
                 }
             }
             println!();

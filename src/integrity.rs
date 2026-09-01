@@ -15,8 +15,8 @@ pub fn digest_pack_tree(root: &Path) -> Result<String> {
     hash_entries(root, entries)
 }
 
-/// Digest a learner project. Generated directories are excluded by name at any
-/// depth. Symlinks to files are hashed as link path + target path + target
+/// Digest a learner project. Generated directories are excluded only at the
+/// project root. Symlinks to files are hashed as link path + target path + target
 /// contents so the digest tracks what the toolchain actually reads; symlinks
 /// to directories are rejected with an actionable error, and non-symlink
 /// special files (sockets, fifos) are skipped since they are not program
@@ -34,14 +34,8 @@ pub fn strict_tree_contents(root: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     entries
         .into_iter()
         .map(|entry| {
-            let contents = fs::read(root.join(&entry.relative)).with_context(|| {
-                format!(
-                    "failed to read {} while computing integrity digest",
-                    entry.relative.display()
-                )
-            })?;
             let name = entry.relative.to_string_lossy().replace('\\', "/");
-            Ok((name, contents))
+            Ok((name, entry.contents))
         })
         .collect()
 }
@@ -89,6 +83,7 @@ enum SymlinkPolicy {
 #[derive(Debug)]
 struct TreeEntry {
     relative: PathBuf,
+    contents: Vec<u8>,
     /// `Some(target)` when the entry is a symlink to a file.
     symlink_target: Option<PathBuf>,
 }
@@ -119,18 +114,35 @@ fn collect_into(
     {
         let entry = entry?;
         let name = entry.file_name();
-        if excluded_names.iter().any(|excluded| name == *excluded) {
+        if current == root && excluded_names.iter().any(|excluded| name == *excluded) {
             continue;
         }
         let path = entry.path();
         // Does not follow symlinks, so symlinked directories cannot smuggle
         // external trees into (or out of) the digest via recursion.
-        let file_type = entry.file_type()?;
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
         if file_type.is_dir() {
             collect_into(root, &path, excluded_names, policy, entries)?;
         } else if file_type.is_file() {
+            let contents = match fs::read(&path) {
+                Ok(contents) => contents,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to read {} while computing project digest",
+                            path.display()
+                        )
+                    });
+                }
+            };
             entries.push(TreeEntry {
                 relative: path.strip_prefix(root)?.to_path_buf(),
+                contents,
                 symlink_target: None,
             });
         } else if file_type.is_symlink() {
@@ -167,6 +179,11 @@ fn collect_symlink(
                 .with_context(|| format!("failed to read symbolic link {}", path.display()))?;
             entries.push(TreeEntry {
                 relative: path.strip_prefix(root)?.to_path_buf(),
+                contents: match fs::read(path) {
+                    Ok(contents) => contents,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                    Err(error) => return Err(error.into()),
+                },
                 symlink_target: Some(target),
             });
             Ok(())
@@ -184,7 +201,7 @@ fn collect_symlink(
     }
 }
 
-fn hash_entries(root: &Path, entries: Vec<TreeEntry>) -> Result<String> {
+fn hash_entries(_root: &Path, entries: Vec<TreeEntry>) -> Result<String> {
     let mut hash = FNV_OFFSET;
     for entry in entries {
         update_hash(&mut hash, entry.relative.to_string_lossy().as_bytes());
@@ -197,13 +214,7 @@ fn hash_entries(root: &Path, entries: Vec<TreeEntry>) -> Result<String> {
             update_hash(&mut hash, target.to_string_lossy().as_bytes());
         }
         update_hash(&mut hash, &[0]);
-        let contents = fs::read(root.join(&entry.relative)).with_context(|| {
-            format!(
-                "failed to read {} while computing integrity digest",
-                entry.relative.display()
-            )
-        })?;
-        update_hash(&mut hash, &contents);
+        update_hash(&mut hash, &entry.contents);
         update_hash(&mut hash, &[0xff]);
     }
     Ok(format!("fnv1a64:{hash:016x}"))
@@ -244,17 +255,22 @@ mod tests {
     }
 
     #[test]
-    fn excluded_names_apply_at_any_depth() {
+    fn excluded_names_apply_only_at_the_project_root() {
         let root = temp_tree("exclusions");
+        fs::create_dir_all(root.join("target")).unwrap();
         fs::create_dir_all(root.join("src/target")).unwrap();
         fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join("target/cache.o"), "root junk").unwrap();
         fs::write(root.join("src/target/cache.o"), "junk").unwrap();
 
-        let with_junk = digest_project_tree(&root, &["target"]).unwrap();
+        let before = digest_project_tree(&root, &["target"]).unwrap();
+        fs::write(root.join("target/cache.o"), "different root junk").unwrap();
+        let root_junk_changed = digest_project_tree(&root, &["target"]).unwrap();
+        assert_eq!(before, root_junk_changed);
         fs::write(root.join("src/target/cache.o"), "different junk").unwrap();
-        let with_changed_junk = digest_project_tree(&root, &["target"]).unwrap();
+        let nested_source_changed = digest_project_tree(&root, &["target"]).unwrap();
 
-        assert_eq!(with_junk, with_changed_junk);
+        assert_ne!(before, nested_source_changed);
         let _ = fs::remove_dir_all(root);
     }
 
