@@ -943,7 +943,72 @@ fn validate_languages(pack: &LoadedPack, problems: &mut Vec<String>) {
         {
             problems.push(format!("language {language} bench_run command is empty"));
         }
+
+        validate_template_lockfile_is_settled(language, &template, problems);
     }
+}
+
+/// A shipped lockfile must be one Cargo has nothing left to rewrite. Cargo
+/// completes a partial `Cargo.lock` during the learner's first build, and that
+/// write lands inside the project tree, so it is indistinguishable from a
+/// learner edit: the completion proof `deltaforge test` recorded moments
+/// earlier is already stale when `commit`/`next` verify it, and the learner is
+/// told their project changed when they touched nothing.
+///
+/// Checked statically (no build): every `[package] name` in the template's
+/// `Cargo.toml` must already have a matching `[[package]]` entry in
+/// `Cargo.lock`. A template that ships no lockfile at all is fine — Cargo
+/// generates one before the digest is first taken.
+fn validate_template_lockfile_is_settled(
+    language: &str,
+    template: &Path,
+    problems: &mut Vec<String>,
+) {
+    let lock_path = template.join("Cargo.lock");
+    if !lock_path.is_file() {
+        return;
+    }
+    let (Ok(manifest), Ok(lock)) = (
+        fs::read_to_string(template.join("Cargo.toml")),
+        fs::read_to_string(&lock_path),
+    ) else {
+        return;
+    };
+    let Some(name) = toml_package_name(&manifest) else {
+        return;
+    };
+    let declares_package = lock
+        .split("[[package]]")
+        .skip(1)
+        .any(|entry| toml_package_name(entry).as_deref() == Some(name.as_str()));
+    if !declares_package {
+        problems.push(format!(
+            "language {language} template Cargo.lock does not lock its own package \"{name}\"; \
+             Cargo would rewrite it during the learner's first build and stale their completion \
+             proof. Regenerate it with `cargo generate-lockfile` in the template directory."
+        ));
+    }
+}
+
+/// The `name = "..."` of the nearest preceding table, read without a TOML
+/// parse so a template that does not parse still reports its real problem.
+fn toml_package_name(text: &str) -> Option<String> {
+    let mut in_package = text.trim_start().starts_with("name");
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_package = line == "[package]";
+            continue;
+        }
+        if !in_package {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("name") {
+            let value = value.trim_start().strip_prefix('=')?.trim();
+            return Some(value.trim_matches('"').to_string());
+        }
+    }
+    None
 }
 
 fn validate_stages(pack: &LoadedPack, problems: &mut Vec<String>) {
@@ -1439,6 +1504,69 @@ mod tests {
     fn flashindex_pack_validates() {
         let pack = load_builtin_pack("flashindex").unwrap();
         assert_eq!(validate_pack(&pack), Vec::<String>::new());
+    }
+
+    /// Every bundled pack, not just FlashIndex: three of the four shipped a
+    /// hand-written stub `Cargo.lock` that Cargo completed during the
+    /// learner's first build, staling the completion proof `deltaforge test`
+    /// had just recorded.
+    #[test]
+    fn every_bundled_pack_validates() {
+        for id in ["flashindex", "minikv", "tinyhttp", "byteforgevm"] {
+            let pack = load_builtin_pack(id).unwrap();
+            assert_eq!(validate_pack(&pack), Vec::<String>::new(), "pack {id}");
+        }
+    }
+
+    #[test]
+    fn a_template_lockfile_missing_its_own_package_is_rejected() {
+        let mut problems = Vec::new();
+        let template = tempdir_with(&[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"minikv\"\nversion = \"0.1.0\"\n",
+            ),
+            ("Cargo.lock", "# stub\nversion = 4\n"),
+        ]);
+        validate_template_lockfile_is_settled("rust", &template, &mut problems);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("does not lock its own package"),
+            "{problems:?}"
+        );
+
+        // The settled form Cargo itself generates, and a template that ships
+        // no lockfile at all, are both fine.
+        let mut problems = Vec::new();
+        let settled = tempdir_with(&[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"minikv\"\nversion = \"0.1.0\"\n",
+            ),
+            (
+                "Cargo.lock",
+                "version = 4\n\n[[package]]\nname = \"minikv\"\nversion = \"0.1.0\"\n",
+            ),
+        ]);
+        validate_template_lockfile_is_settled("rust", &settled, &mut problems);
+        let absent = tempdir_with(&[("Cargo.toml", "[package]\nname = \"minikv\"\n")]);
+        validate_template_lockfile_is_settled("rust", &absent, &mut problems);
+        assert_eq!(problems, Vec::<String>::new());
+    }
+
+    fn tempdir_with(files: &[(&str, &str)]) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+        let dir = env::temp_dir().join(format!(
+            "deltaforge-lockcheck-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        for (name, contents) in files {
+            fs::write(dir.join(name), contents).unwrap();
+        }
+        dir
     }
 
     #[test]

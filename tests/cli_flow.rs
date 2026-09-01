@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -19,13 +20,18 @@ fn repo_root() -> PathBuf {
 }
 
 fn temp_project_path(name: &str) -> PathBuf {
+    // pid+nanos alone can collide across parallel test threads on clocks whose
+    // effective resolution is coarser than the call, so the sequence number
+    // (not the clock) is what actually guarantees uniqueness within a process.
+    static PROJECT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "deltaforge-it-{name}-{}-{nanos}",
-        std::process::id()
+        "deltaforge-it-{name}-{}-{nanos}-{}",
+        std::process::id(),
+        PROJECT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ))
 }
 
@@ -2183,6 +2189,79 @@ fn reference_solutions_pass_all_bundled_packs() {
         "tools/reference_solutions/byteforgevm_rust/src/main.rs",
         "06_trace_mode",
     );
+}
+
+/// A learner who edits nothing between `test` and `commit` must be able to
+/// commit. MiniKV, TinyHTTP and ByteForgeVM each shipped a hand-written stub
+/// `Cargo.lock` with no `[[package]]` entry for their own crate; the learner's
+/// first `cargo build` (run by `deltaforge test` itself) completed it, and
+/// because that write lands inside the project tree it was indistinguishable
+/// from a learner edit. The proof recorded moments earlier was already stale,
+/// so a bare `test` -> `commit` failed with "learner project changed since
+/// stage ... passed" on a fresh project nobody had touched.
+///
+/// Deliberately a real Git project (no `--no-git`) with no `--force`, because
+/// that is the flow that broke.
+#[test]
+fn a_build_side_effect_never_stales_the_proof_it_just_recorded() {
+    for (pack, source, subject) in [
+        (
+            "minikv",
+            "tools/reference_solutions/minikv_rust/src/main.rs",
+            "Complete Stage 01: In-memory commands",
+        ),
+        (
+            "tinyhttp",
+            "tools/reference_solutions/tinyhttp_rust/src/main.rs",
+            "Complete Stage 01: Parse HTTP requests",
+        ),
+        (
+            "byteforgevm",
+            "tools/reference_solutions/byteforgevm_rust/src/main.rs",
+            "Complete Stage 01: Disassemble bytecode",
+        ),
+        (
+            "flashindex",
+            "tools/reference_solutions/flashindex_rust/src/main.rs",
+            "Complete Stage 01: Scan files",
+        ),
+    ] {
+        let project = temp_project_path(&format!("lock-drift-{pack}"));
+        assert_success(&run_deltaforge(
+            [
+                "init",
+                pack,
+                "--lang",
+                "rust",
+                "--name",
+                project.to_str().unwrap(),
+            ],
+            &repo_root(),
+        ));
+        assert_success(&run_git(
+            ["config", "user.email", "deltaforge@example.com"],
+            &project,
+        ));
+        assert_success(&run_git(
+            ["config", "user.name", "DeltaForge Tests"],
+            &project,
+        ));
+        fs::copy(repo_root().join(source), project.join("src/main.rs")).unwrap();
+
+        let lockfile = project.join("Cargo.lock");
+        let before = fs::read_to_string(&lockfile).unwrap();
+        assert_success(&run_deltaforge(["test"], &project));
+        assert_eq!(
+            fs::read_to_string(&lockfile).unwrap(),
+            before,
+            "{pack}: cargo rewrote the template Cargo.lock during the first build; \
+             regenerate it with `cargo generate-lockfile` in the template directory"
+        );
+
+        let commit = run_deltaforge(["commit"], &project);
+        assert_success(&commit);
+        assert_stdout_contains(&commit, subject);
+    }
 }
 
 #[test]
