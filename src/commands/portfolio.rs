@@ -9,9 +9,10 @@ use crate::fs_util::atomic_write;
 use crate::reporting;
 
 pub fn run(args: PortfolioArgs, options: &GlobalOptions) -> Result<()> {
-    let context = ProjectContext::load(options)?;
+    let mut context = ProjectContext::load(options)?;
     let report = reporting::build(&context)?;
     atomic_write(&args.output, reporting::render_summary(&report))?;
+    context.exclude_generated_root_file(&args.output)?;
     println!("Wrote portfolio summary: {}", args.output.display());
     Ok(())
 }

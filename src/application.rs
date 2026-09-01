@@ -593,7 +593,7 @@ pub fn create_project(
 
     Ok(CreatedProject {
         project_id: registered.id,
-        path: target.display().to_string(),
+        path: crate::fs_util::display_path(&target),
         pack: request.pack,
         language: request.language,
         stage_id: stage.id.clone(),
@@ -840,16 +840,20 @@ pub fn reveal_next_hint(options: &GlobalOptions) -> Result<crate::capability::Ca
         .get(&stage_id)
         .copied()
         .unwrap_or_default();
+    // The final authored help level is always the retrospective, gated until
+    // the capability is acquired; every level before it is available freely.
+    // A pack with only one help level has no separate retrospective to gate,
+    // so the floor keeps that single level visible pre-completion too.
     let maximum = if context.state.is_completed(&stage_id) {
         help.len()
     } else {
-        help.len().min(4)
+        help.len().saturating_sub(1).max(help.len().min(1))
     };
     if maximum == 0 {
         bail!("this capability has no help levels");
     }
     if current >= maximum {
-        if context.state.is_completed(&stage_id) {
+        if context.state.is_completed(&stage_id) || help.len() <= maximum {
             bail!("all help levels are already revealed");
         }
         bail!("the retrospective unlocks after this capability is acquired");
@@ -1117,7 +1121,7 @@ pub fn export_report(
     let path = context.root.join(format.export_file_name());
     crate::fs_util::atomic_write(&path, &content)?;
     Ok(ExportedReport {
-        path: path.display().to_string(),
+        path: crate::fs_util::display_path(&path),
         markdown: crate::reporting::render_markdown(&report),
         content,
         report,
@@ -1150,7 +1154,8 @@ pub fn preview_stage_snapshot(options: &GlobalOptions) -> Result<crate::snapshot
                 context.state.current_stage
             )
         })?;
-    let message = crate::snapshot::snapshot_message(&stage.id, &stage.title);
+    let position = context.pack.manifest.stage_index(&stage.id).unwrap_or(0) + 1;
+    let message = crate::snapshot::snapshot_message(position, &stage.title);
     let tag = context
         .config
         .git
@@ -1220,7 +1225,8 @@ pub fn create_stage_snapshot(
         }
         context.verify_completion_proof(&stage.id)?;
     }
-    let message = crate::snapshot::snapshot_message(&stage.id, &stage.title);
+    let position = context.pack.manifest.stage_index(&stage.id).unwrap_or(0) + 1;
+    let message = crate::snapshot::snapshot_message(position, &stage.title);
     let tag = context
         .config
         .git

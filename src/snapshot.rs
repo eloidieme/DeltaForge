@@ -66,8 +66,15 @@ pub fn ensure_git_repository(root: &Path) -> Result<()> {
 }
 
 /// Commit message for one stage: `Complete Stage 07: Persist the index`.
-pub fn snapshot_message(stage_id: &str, stage_title: &str) -> String {
-    format!("Complete Stage {}: {stage_title}", stage_number(stage_id))
+///
+/// `position` is the stage's 1-based position in the pack's manifest, not a
+/// number parsed from its id: a pack whose stage ids are not a clean,
+/// consecutive `01`-`NN` sequence (a bundled preview pack renumbered less
+/// carefully than the flagship, or a third-party pack) would otherwise
+/// produce two commits with the same "Complete Stage N" subject for two
+/// different steps.
+pub fn snapshot_message(position: usize, stage_title: &str) -> String {
+    format!("Complete Stage {position:02}: {stage_title}")
 }
 
 pub fn snapshot_tag(stage_id: &str) -> String {
@@ -108,9 +115,12 @@ pub fn changed_files(root: &Path) -> Result<Vec<ChangedFile>> {
 fn classify(index: u8, worktree: u8) -> &'static str {
     match (index, worktree) {
         (b'?', _) => "untracked",
+        // Checked before `(b'A', _)`: a file added to the index and then
+        // deleted in the worktree (porcelain `AD`) is a deletion from the
+        // snapshot's point of view, not an addition.
+        (b'D', _) | (_, b'D') => "deleted",
         (b'A', _) => "added",
         (b'R', _) => "renamed",
-        (b'D', _) | (_, b'D') => "deleted",
         _ => "modified",
     }
 }
@@ -132,15 +142,60 @@ pub fn tag_exists(root: &Path, tag: &str) -> bool {
 /// off, or when the tag already exists.
 pub fn take(root: &Path, message: &str, tag: Option<&str>) -> Result<SnapshotOutcome> {
     ensure_git_repository(root)?;
-    let changed = changed_files(root)?.len();
-    run_git(root, &["add", "-A"])?;
-    // Also protect projects created before DeltaForge wrote .gitignore.
-    // Remove only the live lease path from the index; source changes stay staged.
-    run_git(
-        root,
-        &["rm", "--cached", "--ignore-unmatch", ".deltaforge/run.lock"],
-    )?;
-    run_git(root, &["commit", "-m", message])?;
+    let changed = changed_files(root)?;
+    if changed.is_empty() {
+        // Nothing to add or commit — for instance the learner already
+        // committed by hand. `preview_stage_snapshot` reports this same
+        // condition as "nothing new to snapshot" rather than an error, so
+        // taking the snapshot anyway must agree: tag the commit that is
+        // already there (if it isn't tagged yet) and report honestly instead
+        // of running `git commit` with nothing staged.
+        let commit = git_output(root, &["rev-parse", "HEAD"])?.trim().to_string();
+        let (tag, existing_tag) = match tag {
+            Some(tag) if tag_exists(root, tag) => (None, Some(tag.to_string())),
+            Some(tag) => {
+                run_git(root, &["tag", tag])?;
+                (Some(tag.to_string()), None)
+            }
+            None => (None, None),
+        };
+        return Ok(SnapshotOutcome {
+            commit,
+            message: message.to_string(),
+            tag,
+            existing_tag,
+            changed_files: 0,
+        });
+    }
+
+    // Capture the current index (without touching the working tree) so a
+    // failed commit below can put it back rather than leaving the learner's
+    // staged/unstaged split overwritten by `add -A`.
+    let previous_index_tree = git_output(root, &["write-tree"])
+        .ok()
+        .map(|tree| tree.trim().to_string());
+
+    let attempt: Result<()> = (|| {
+        run_git(root, &["add", "-A"])?;
+        // Also protect projects created before DeltaForge wrote .gitignore.
+        // Remove only the live lease path from the index; source changes stay staged.
+        run_git(
+            root,
+            &["rm", "--cached", "--ignore-unmatch", ".deltaforge/run.lock"],
+        )?;
+        run_git(root, &["commit", "-m", message])
+    })();
+    if let Err(error) = attempt {
+        let restored = previous_index_tree
+            .as_deref()
+            .is_some_and(|tree| run_git(root, &["read-tree", tree]).is_ok());
+        return Err(error.context(if restored {
+            "the git index has been restored to what it was before this snapshot attempt"
+        } else {
+            "the git index was left staged by this failed snapshot attempt; run `git reset` to undo the staging"
+        }));
+    }
+
     let commit = git_output(root, &["rev-parse", "HEAD"])?.trim().to_string();
     let (tag, existing_tag) = match tag {
         Some(tag) if tag_exists(root, tag) => (None, Some(tag.to_string())),
@@ -155,7 +210,7 @@ pub fn take(root: &Path, message: &str, tag: Option<&str>) -> Result<SnapshotOut
         message: message.to_string(),
         tag,
         existing_tag,
-        changed_files: changed,
+        changed_files: changed.len(),
     })
 }
 
@@ -170,20 +225,26 @@ fn git_output(root: &Path, args: &[&str]) -> Result<String> {
         .output()
         .with_context(|| format!("failed to run git {}", args.join(" ")))?;
     if !output.status.success() {
-        bail!(
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = stdout.trim();
+        let reason = if !stderr.is_empty() {
+            stderr.to_string()
+        } else if !stdout.is_empty() {
+            stdout.to_string()
+        } else {
+            format!(
+                "git exited with status {}",
+                output
+                    .status
+                    .code()
+                    .map_or_else(|| "unknown".to_string(), |code| code.to_string())
+            )
+        };
+        bail!("git {} failed: {reason}", args.join(" "));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-/// The numeric prefix of a stage id, used in the commit subject.
-fn stage_number(stage_id: &str) -> &str {
-    stage_id
-        .split_once('_')
-        .map_or(stage_id, |(number, _)| number)
 }
 
 #[cfg(test)]
@@ -191,17 +252,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn messages_and_tags_follow_the_stage_id() {
+    fn messages_follow_manifest_position_not_the_stage_id() {
         assert_eq!(
-            snapshot_message("07_persist_index", "Persist the index"),
+            snapshot_message(7, "Persist the index"),
             "Complete Stage 07: Persist the index"
         );
+        assert_eq!(
+            snapshot_message(14, "Stable ranking"),
+            "Complete Stage 14: Stable ranking"
+        );
+        // Two different steps that happen to share an id prefix (a pack
+        // renumbered less carefully than the flagship) must not collide:
+        // the position, not the id, drives the number.
+        assert_ne!(
+            snapshot_message(2, "Append the log"),
+            snapshot_message(3, "Preserve history")
+        );
+    }
+
+    #[test]
+    fn tags_follow_the_stage_id() {
         assert_eq!(
             snapshot_tag("07_persist_index"),
             "deltaforge-07_persist_index"
         );
-        assert_eq!(stage_number("14_stable_ranking"), "14");
-        assert_eq!(stage_number("nounderscore"), "nounderscore");
     }
 
     #[test]
@@ -211,5 +285,8 @@ mod tests {
         assert_eq!(classify(b' ', b'M'), "modified");
         assert_eq!(classify(b' ', b'D'), "deleted");
         assert_eq!(classify(b'R', b' '), "renamed");
+        // Added to the index, then deleted in the worktree: from the
+        // snapshot's point of view that is a deletion, not an addition.
+        assert_eq!(classify(b'A', b'D'), "deleted");
     }
 }

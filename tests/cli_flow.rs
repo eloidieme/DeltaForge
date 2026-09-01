@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -600,7 +600,7 @@ fn explain_failure_uses_last_failed_test_details() {
     let explain = run_deltaforge(["explain-failure"], &project_dir);
     assert_success(&explain);
     assert_stdout_contains(&explain, "Stage 01_memory_commands");
-    assert_stdout_contains(&explain, "Failed:");
+    assert_stdout_contains(&explain, "Fix this first:");
     assert_stdout_contains(&explain, "Suggested next steps:");
 
     let explain_json = run_deltaforge(["explain-failure", "--json"], &project_dir);
@@ -608,6 +608,75 @@ fn explain_failure_uses_last_failed_test_details() {
     let parsed: serde_json::Value = serde_json::from_slice(&explain_json.stdout).unwrap();
     assert_eq!(parsed["stage_id"], "01_memory_commands");
     assert!(parsed["failed"].as_u64().unwrap() > 0);
+}
+
+#[test]
+fn explain_failure_flags_a_result_recorded_before_the_current_source() {
+    let project_dir = temp_project_path("explain-failure-stale");
+    let init = run_deltaforge(
+        [
+            "init",
+            "minikv",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+
+    let test = run_deltaforge(["test"], &project_dir);
+    assert_failure(&test);
+
+    // Fix the source without re-running `test`: the recorded diagnosis now
+    // describes code that no longer exists.
+    let main_rs = project_dir.join("src/main.rs");
+    fs::copy(
+        repo_root().join("tools/reference_solutions/minikv_rust/src/main.rs"),
+        &main_rs,
+    )
+    .unwrap();
+    // Force a strictly newer mtime regardless of filesystem timestamp
+    // granularity, so cargo's own staleness check reliably rebuilds when
+    // `test` runs again below.
+    fs::File::open(&main_rs)
+        .unwrap()
+        .set_modified(SystemTime::now() + Duration::from_secs(5))
+        .unwrap();
+
+    let explain = run_deltaforge(["explain-failure"], &project_dir);
+    assert_success(&explain);
+    assert_stdout_contains(
+        &explain,
+        "This result is from before your last edit — run `deltaforge test` again.",
+    );
+
+    let explain_json = run_deltaforge(["explain-failure", "--json"], &project_dir);
+    assert_success(&explain_json);
+    let parsed: serde_json::Value = serde_json::from_slice(&explain_json.stdout).unwrap();
+    assert_eq!(parsed["stale"], true);
+
+    let status = run_deltaforge(["status"], &project_dir);
+    assert_success(&status);
+    assert_stdout_contains(
+        &status,
+        "This result is from before your last edit — run `deltaforge test` again.",
+    );
+    let status_json = run_deltaforge(["status", "--json"], &project_dir);
+    assert_success(&status_json);
+    let status_parsed: serde_json::Value = serde_json::from_slice(&status_json.stdout).unwrap();
+    assert_eq!(status_parsed["current_stage_result_stale"], true);
+
+    // Re-running test clears the staleness marker.
+    assert_success(&run_deltaforge(["test"], &project_dir));
+    let fresh = run_deltaforge(["explain-failure", "--json"], &project_dir);
+    assert_success(&fresh);
+    let fresh_parsed: serde_json::Value = serde_json::from_slice(&fresh.stdout).unwrap();
+    assert_eq!(fresh_parsed["stale"], false);
+
+    let _ = fs::remove_dir_all(project_dir);
 }
 
 #[test]
@@ -925,6 +994,60 @@ fn bench_report_and_portfolio_generate_project_artifacts() {
     assert!(portfolio_text.contains("scan_basic_project"));
     assert!(portfolio_text.contains("iterations"));
     assert!(!portfolio_text.contains("Future Improvements"));
+}
+
+#[test]
+fn generating_a_report_or_portfolio_does_not_stale_the_completion_proof() {
+    let project_dir = temp_project_path("report-does-not-stale");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+    fs::copy(
+        repo_root().join("tools/reference_solutions/flashindex_rust/src/main.rs"),
+        project_dir.join("src/main.rs"),
+    )
+    .unwrap();
+    assert_success(&run_deltaforge(["test"], &project_dir));
+
+    // The default `--output` values, exactly as docs/quickstart.md teaches
+    // them, must not invalidate the proof `test` just recorded.
+    assert_success(&run_deltaforge(
+        ["report", "--format", "markdown", "--output", "report.md"],
+        &project_dir,
+    ));
+    assert_success(&run_deltaforge(
+        ["portfolio", "--output", "PORTFOLIO.md"],
+        &project_dir,
+    ));
+    assert!(project_dir.join("report.md").is_file());
+    assert!(project_dir.join("PORTFOLIO.md").is_file());
+
+    let next = run_deltaforge(["next"], &project_dir);
+    assert_success(&next);
+
+    // Re-exporting after the exclusion is already recorded must also stay
+    // harmless.
+    assert_success(&run_deltaforge(
+        ["report", "--format", "markdown", "--output", "report.md"],
+        &project_dir,
+    ));
+    let status = run_deltaforge(["status", "--json"], &project_dir);
+    assert_success(&status);
+    let status: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["stages"][0]["status"], "complete");
+    assert_eq!(status["stages"][1]["status"], "current");
+
+    let _ = fs::remove_dir_all(project_dir);
 }
 
 #[test]
@@ -1562,6 +1685,266 @@ fn commit_requires_git_and_passed_stage_unless_forced() {
 }
 
 #[test]
+fn commit_subjects_stay_unique_when_a_pack_repeats_an_id_prefix() {
+    // MiniKV's stage ids are not a clean 01..N sequence: 02_append_log and
+    // 02_preserve_history both start with "02" (so do the 03, 04, and 05
+    // pairs). The commit subject's number must come from the stage's
+    // position in the pack, not from parsing its id, or two different steps
+    // end up with the same "Complete Stage 02: ..." subject.
+    let project = temp_project_path("commit-subjects-unique");
+    let init = run_deltaforge(
+        [
+            "init",
+            "minikv",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+    assert_success(&run_git(
+        ["config", "user.email", "deltaforge@example.com"],
+        &project,
+    ));
+    assert_success(&run_git(
+        ["config", "user.name", "DeltaForge Tests"],
+        &project,
+    ));
+    fs::copy(
+        repo_root().join("tools/reference_solutions/minikv_rust/src/main.rs"),
+        project.join("src/main.rs"),
+    )
+    .unwrap();
+    // Settle Cargo.lock before the first `deltaforge test` records a project
+    // digest: this pack's checked-in template lockfile is rewritten by the
+    // first `cargo build` on whatever toolchain runs it, which is unrelated
+    // to what this test is about and would otherwise stale the completion
+    // proof between `test` and `commit`/`next`.
+    assert!(
+        Command::new("cargo")
+            .arg("build")
+            .current_dir(&project)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    // Stages 1-3: 01_memory_commands, 02_append_log, 02_preserve_history.
+    // The reference solution is already correct for all of them, so only the
+    // first `commit` has anything new to record; the rest hit the "nothing
+    // to commit" path and just tag the existing HEAD. `commit`'s own stdout
+    // still reports the per-step message either way, which is what carries
+    // the position-derived number under test.
+    let mut subjects = Vec::new();
+    for _ in 0..3 {
+        assert_success(&run_deltaforge(["test"], &project));
+        let commit = run_deltaforge(["commit"], &project);
+        assert_success(&commit);
+        let stdout = String::from_utf8_lossy(&commit.stdout).to_string();
+        let subject = stdout
+            .lines()
+            .find(|line| line.starts_with("Complete Stage"))
+            .unwrap_or_else(|| panic!("no commit subject line in: {stdout}"))
+            .to_string();
+        subjects.push(subject);
+        assert_success(&run_deltaforge(["next"], &project));
+    }
+    assert_eq!(
+        subjects,
+        vec![
+            "Complete Stage 01: In-memory commands",
+            "Complete Stage 02: Write the first log record",
+            "Complete Stage 03: Preserve log history",
+        ],
+        "each step must get its own number even though ids repeat a prefix"
+    );
+
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn a_commit_with_nothing_new_tags_head_instead_of_failing() {
+    let project = temp_project_path("commit-nothing-new");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+    assert_success(&run_git(
+        ["config", "user.email", "deltaforge@example.com"],
+        &project,
+    ));
+    assert_success(&run_git(
+        ["config", "user.name", "DeltaForge Tests"],
+        &project,
+    ));
+    fs::copy(
+        repo_root().join("tools/reference_solutions/flashindex_rust/src/main.rs"),
+        project.join("src/main.rs"),
+    )
+    .unwrap();
+    assert_success(&run_deltaforge(["test"], &project));
+
+    // Commit by hand, bypassing DeltaForge entirely: there is nothing left
+    // for `deltaforge commit` to add or commit, but the stage's tag has never
+    // been created.
+    assert_success(&run_git(["add", "-A"], &project));
+    assert_success(&run_git(["commit", "-m", "manual commit"], &project));
+
+    let commit = run_deltaforge(["commit"], &project);
+    assert_success(&commit);
+    assert!(
+        !String::from_utf8_lossy(&commit.stderr).contains("failed:"),
+        "must not report a bare git failure when there was nothing to commit: {}",
+        output_text(&commit)
+    );
+
+    let tag = run_git(["tag", "--list", "deltaforge-01_scan_files"], &project);
+    assert_success(&tag);
+    assert!(
+        !String::from_utf8_lossy(&tag.stdout).trim().is_empty(),
+        "the stage tag should have been created on the existing HEAD commit"
+    );
+
+    let _ = fs::remove_dir_all(project);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_commit_leaves_the_index_exactly_as_it_was() {
+    let project = temp_project_path("commit-failed-hook");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+    assert_success(&run_git(
+        ["config", "user.email", "deltaforge@example.com"],
+        &project,
+    ));
+    assert_success(&run_git(
+        ["config", "user.name", "DeltaForge Tests"],
+        &project,
+    ));
+
+    // A pre-commit hook that always refuses, standing in for a missing Git
+    // identity, a failed GPG signature, or an org policy hook.
+    let hooks_dir = project.join("custom-hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    let hook_path = hooks_dir.join("pre-commit");
+    fs::write(
+        &hook_path,
+        "#!/bin/sh\necho 'policy: commits blocked' >&2\nexit 1\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&hook_path).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    fs::set_permissions(&hook_path, permissions).unwrap();
+
+    // A deliberate partial staging split: one file staged, one left
+    // unstaged. A failed commit must not disturb either.
+    fs::write(project.join("README.md"), "already staged\n").unwrap();
+    assert_success(&run_git(["add", "README.md"], &project));
+    fs::write(project.join("src/main.rs"), "// unstaged edit\n").unwrap();
+
+    let before = run_git(["status", "--porcelain"], &project);
+    let before_status = String::from_utf8_lossy(&before.stdout).to_string();
+
+    let commit = run_deltaforge_with_env(
+        ["commit", "--force"],
+        &project,
+        &[("GIT_CONFIG_VALUE_0", &hooks_dir)],
+    );
+    assert_failure(&commit);
+    assert_stderr_contains(&commit, "policy: commits blocked");
+
+    let after = run_git(["status", "--porcelain"], &project);
+    let after_status = String::from_utf8_lossy(&after.stdout).to_string();
+    assert_eq!(
+        before_status, after_status,
+        "a failed commit must not change what is staged vs. unstaged"
+    );
+
+    let _ = fs::remove_dir_all(project);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fully_passing_test_run_exits_zero_even_when_the_automatic_snapshot_fails() {
+    let project = temp_project_path("auto-commit-blocked");
+    let init = run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+        ],
+        &repo_root(),
+    );
+    assert_success(&init);
+    assert_success(&run_git(
+        ["config", "user.email", "deltaforge@example.com"],
+        &project,
+    ));
+    assert_success(&run_git(
+        ["config", "user.name", "DeltaForge Tests"],
+        &project,
+    ));
+    let config_path = project.join(".deltaforge/config.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    let config = config.replace("auto_commit = false", "auto_commit = true");
+    fs::write(&config_path, config).unwrap();
+    fs::copy(
+        repo_root().join("tools/reference_solutions/flashindex_rust/src/main.rs"),
+        project.join("src/main.rs"),
+    )
+    .unwrap();
+
+    let hooks_dir = project.join("custom-hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    let hook_path = hooks_dir.join("pre-commit");
+    fs::write(
+        &hook_path,
+        "#!/bin/sh\necho 'policy: commits blocked' >&2\nexit 1\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&hook_path).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    fs::set_permissions(&hook_path, permissions).unwrap();
+
+    let test = run_deltaforge_with_env(["test"], &project, &[("GIT_CONFIG_VALUE_0", &hooks_dir)]);
+    assert_success(&test);
+    assert_stdout_contains(&test, "0 failed");
+    assert_stderr_contains(&test, "automatic snapshot");
+    let head = run_git(["rev-parse", "--verify", "-q", "HEAD"], &project);
+    assert_failure(&head);
+    assert!(
+        head.stdout.is_empty(),
+        "the blocked automatic snapshot must not have produced a commit"
+    );
+
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
 fn pack_lookup_uses_env_override_before_dev_fallback() {
     let packs_root = temp_project_path("external-packs");
     let external_pack = packs_root.join("flashindex");
@@ -2188,7 +2571,7 @@ fn strict_pack_and_config_schemas_reject_typos_and_unsafe_paths() {
 }
 
 #[test]
-fn legacy_schema_v1_state_loads_but_requires_a_fresh_completion_proof() {
+fn state_missing_optional_fields_loads_but_requires_a_fresh_completion_proof() {
     let project = temp_project_path("legacy-state");
     assert_success(&run_deltaforge(
         [
@@ -2239,6 +2622,75 @@ fn legacy_schema_v1_state_loads_but_requires_a_fresh_completion_proof() {
     let migrated: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
     assert!(migrated["completion_proofs"]["01_scan_files"].is_object());
+
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn state_schema_v1_is_rejected_with_actionable_guidance() {
+    let project = temp_project_path("state-schema-v1");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    let state_path = project.join(".deltaforge/state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    state["schema_version"] = serde_json::json!(1);
+    fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+    let status = run_deltaforge(["status"], &project);
+    assert_failure(&status);
+    assert_stderr_contains(&status, "schema_version 1");
+    assert_stderr_contains(&status, "older DeltaForge");
+    assert_stderr_contains(&status, "deltaforge init");
+
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn state_schema_from_a_newer_deltaforge_is_rejected_without_a_field_dump() {
+    let project = temp_project_path("state-schema-future");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+    let state_path = project.join(".deltaforge/state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    state["schema_version"] = serde_json::json!(3);
+    // A field this build has never heard of, exactly what a newer DeltaForge
+    // would add. Without the schema-version pre-check, the strict
+    // `deny_unknown_fields` deserialization would fail on this instead, with
+    // a confusing multi-field serde dump rather than an actionable message.
+    state["brand_new_field"] = serde_json::json!(true);
+    fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
+
+    let status = run_deltaforge(["status"], &project);
+    assert_failure(&status);
+    assert_stderr_contains(&status, "schema_version 3");
+    assert_stderr_contains(&status, "newer version of DeltaForge");
+    assert!(
+        !String::from_utf8_lossy(&status.stderr).contains("unknown field"),
+        "must not surface a raw serde field-list error: {}",
+        output_text(&status)
+    );
 
     let _ = fs::remove_dir_all(project);
 }
@@ -2713,6 +3165,44 @@ fn hint_level_never_lowers_recorded_progress() {
         serde_json::from_str(&fs::read_to_string(project.join(".deltaforge/state.json")).unwrap())
             .unwrap();
     assert_eq!(state["hint_state"]["01_scan_files"], 3);
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn a_three_hint_stage_gates_its_final_hint_as_the_retrospective() {
+    // MiniKV (like TinyHTTP and ByteForgeVM) ships three hints per stage,
+    // unlike FlashIndex's five. The last hint must still be the gated
+    // retrospective — not, as it once was, freely available because the old
+    // gate was a hardcoded "first four levels" rule.
+    let project = temp_project_path("three-hint-gate");
+    assert_success(&run_deltaforge(
+        [
+            "init",
+            "minikv",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+    ));
+
+    let first = run_deltaforge(["hint"], &project);
+    assert_success(&first);
+    assert_stdout_contains(&first, "Hint 1/3:");
+
+    let second = run_deltaforge(["hint"], &project);
+    assert_success(&second);
+    assert_stdout_contains(&second, "Hint 2/3:");
+
+    let third = run_deltaforge(["hint"], &project);
+    assert_failure(&third);
+    assert_stderr_contains(
+        &third,
+        "the retrospective unlocks after this capability is acquired",
+    );
+
     let _ = fs::remove_dir_all(project);
 }
 

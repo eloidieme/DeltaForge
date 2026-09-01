@@ -39,7 +39,7 @@ Packs are discovered from these locations, in order:
 
 1. `--packs-dir <path>` (per invocation).
 2. `DELTAFORGE_PACKS_DIR` (environment override).
-3. The builtin dev-tree packs directory (when running from a source checkout).
+3. The path `packs/` was found under at build time (`env!("CARGO_MANIFEST_DIR")/packs`, baked into the binary), if that path still exists on the machine running it — normally only true on the machine that built the binary, most often a source checkout.
 4. The bundled packs embedded in the binary.
 
 ## Environment variables
@@ -47,9 +47,10 @@ Packs are discovered from these locations, in order:
 - `DELTAFORGE_HOME` overrides the per-user application directory that holds the project registry and private workbench discovery record.
 - `DELTAFORGE_BIN` tells the pack MCP server which `deltaforge` executable to invoke.
 - `DELTAFORGE_PACKS_DIR` overrides pack discovery after the per-invocation flag.
-- `DELTAFORGE_WORKSPACE` changes the browser creation flow's default project parent.
+- `DELTAFORGE_WORKSPACE` changes the browser creation flow's default project parent, and also widens where the browser creation flow is allowed to create a project: a parent directory under `DELTAFORGE_WORKSPACE` is accepted in addition to the learner's home directory.
 - `DELTAFORGE_NO_BROWSER=1` prints the workbench URL instead of opening it.
 - `DELTAFORGE_NO_PAGER=1` disables the terminal pager.
+- `VISUAL` / `EDITOR` choose the editor the workbench's *Open editor* button and `deltaforge design --edit` launch. Without either set, DeltaForge falls back to a short list of known graphical editors and refuses with "no supported graphical editor was found" if none are on `PATH`.
 
 Embedded packs are extracted to a per-user cache directory rather than the shared system temp directory:
 

@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::cli::DesignArgs;
 use crate::context::{GlobalOptions, ProjectContext};
-use crate::fs_util::atomic_write;
+use crate::fs_util::{atomic_write, display_path};
 
 pub fn run(args: DesignArgs, options: &GlobalOptions) -> Result<()> {
     let context = ProjectContext::load(options)?;
@@ -44,7 +44,7 @@ pub fn run(args: DesignArgs, options: &GlobalOptions) -> Result<()> {
     }
 
     println!("Stage {}: {}", stage.id, stage.title);
-    println!("Design notes: {}", note_path.display());
+    println!("Design notes: {}", display_path(&note_path));
     println!();
     if prompt_path.is_file() {
         println!("{}", std::fs::read_to_string(&prompt_path)?.trim_end());

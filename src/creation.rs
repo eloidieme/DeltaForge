@@ -170,8 +170,8 @@ impl CreationPolicy {
             .collect::<Vec<_>>();
         if !roots.iter().any(|root| parent.starts_with(root)) {
             bail!(
-                "DeltaForge only creates projects inside your home directory; {} is outside it",
-                parent.display()
+                "DeltaForge only creates projects inside your home directory, or the directory named by DELTAFORGE_WORKSPACE; {} is outside both",
+                crate::fs_util::display_path(&parent)
             );
         }
         for root in &roots {
@@ -308,13 +308,13 @@ pub fn preflight(
     })?;
     let tools = language_tools(language);
     let displayed_parent = match parent {
-        Some(parent) => parent.display().to_string(),
-        None => default_workspace()?.display().to_string(),
+        Some(parent) => crate::fs_util::display_path(parent),
+        None => crate::fs_util::display_path(&default_workspace()?),
     };
     let location = match resolve_target(parent, name) {
         Ok(target) => LocationStatus {
             parent: displayed_parent,
-            target: Some(target.display().to_string()),
+            target: Some(crate::fs_util::display_path(&target)),
             ok: true,
             problem: None,
         },
@@ -557,7 +557,7 @@ mod tests {
         let refusal = policy
             .resolve_target(Some(&outside), "project")
             .expect_err("a directory outside the permitted roots must be refused");
-        assert!(format!("{refusal:#}").contains("outside it"));
+        assert!(format!("{refusal:#}").contains("is outside both"));
         let _ = fs::remove_dir_all(root);
     }
 

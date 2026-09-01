@@ -25,10 +25,14 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
         return Ok(());
     }
 
+    // The final authored hint is always the retrospective, gated until the
+    // capability is acquired; every hint before it is available freely. A
+    // stage with only one hint has no separate retrospective to gate, so the
+    // floor keeps that single hint visible pre-completion too.
     let maximum = if context.state.is_completed(&stage_id) {
         hints.len()
     } else {
-        hints.len().min(4)
+        hints.len().saturating_sub(1).max(hints.len().min(1))
     };
 
     if args.all {
@@ -47,6 +51,9 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
                 + 1
         });
         if level > maximum {
+            if hints.len() <= maximum {
+                anyhow::bail!("all help levels are already revealed");
+            }
             anyhow::bail!("the retrospective unlocks after this capability is acquired");
         }
         let capped_level = level.min(maximum);

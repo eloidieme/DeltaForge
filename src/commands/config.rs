@@ -11,7 +11,10 @@ pub fn run(command: ConfigCommand, options: &GlobalOptions) -> Result<()> {
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&context.config)?);
             } else {
-                println!("Config: {}", context.config_path.display());
+                println!(
+                    "Config: {}",
+                    crate::fs_util::display_path(&context.config_path)
+                );
                 println!("{}", toml::to_string_pretty(&context.config)?);
             }
         }
@@ -22,12 +25,15 @@ pub fn run(command: ConfigCommand, options: &GlobalOptions) -> Result<()> {
                     "{}",
                     serde_json::to_string_pretty(&ConfigValidation {
                         valid: true,
-                        path: context.config_path.display().to_string(),
+                        path: crate::fs_util::display_path(&context.config_path),
                     })?
                 );
             } else {
                 println!("✓ config is valid");
-                println!("Path: {}", context.config_path.display());
+                println!(
+                    "Path: {}",
+                    crate::fs_util::display_path(&context.config_path)
+                );
             }
         }
     }

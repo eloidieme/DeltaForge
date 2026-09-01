@@ -22,6 +22,10 @@ pub fn run(args: ExplainFailureArgs, options: &GlobalOptions) -> Result<()> {
         .manifest
         .stage(stage_id)
         .with_context(|| format!("pack does not contain stage {stage_id}"))?;
+    // The recorded diagnosis describes the project as it was at the last run,
+    // not necessarily as it is now: an edit since then can already have fixed
+    // (or introduced) the failure this would otherwise confidently restate.
+    let stale = run.project_digest != context.project_digest()?;
 
     let explanation = FailureExplanation {
         stage_id: stage.id.clone(),
@@ -29,6 +33,7 @@ pub fn run(args: ExplainFailureArgs, options: &GlobalOptions) -> Result<()> {
         passed: run.passed,
         failed: run.failed,
         timestamp: run.timestamp.clone(),
+        stale,
         failed_tests: run.failed_tests.clone(),
         suggestions: suggestions(run),
     };
@@ -40,6 +45,9 @@ pub fn run(args: ExplainFailureArgs, options: &GlobalOptions) -> Result<()> {
             "Stage {}: {}",
             explanation.stage_id, explanation.stage_title
         );
+        if explanation.stale {
+            println!("This result is from before your last edit — run `deltaforge test` again.");
+        }
         println!(
             "Last run: {} passed, {} failed at {}",
             explanation.passed, explanation.failed, explanation.timestamp
@@ -55,7 +63,6 @@ pub fn run(args: ExplainFailureArgs, options: &GlobalOptions) -> Result<()> {
                     .map_or(u32::MAX, |diagnosis| diagnosis.priority)
             });
             if let Some(failed_test) = primary {
-                println!("Failed: {}", failed_test.name);
                 println!("Fix this first: {}", failed_test.name);
                 if let Some(diagnosis) = &failed_test.diagnosis {
                     println!("{}", diagnosis.headline);
@@ -157,6 +164,9 @@ struct FailureExplanation {
     passed: usize,
     failed: usize,
     timestamp: String,
+    /// True when the project has changed since this run, so the diagnosis
+    /// below may no longer describe the current source.
+    stale: bool,
     failed_tests: Vec<crate::state::LastFailedTest>,
     suggestions: Vec<String>,
 }

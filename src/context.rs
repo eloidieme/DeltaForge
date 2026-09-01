@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::config::ProjectConfig;
 use crate::integrity::{digest_pack_tree, digest_project_tree};
@@ -91,6 +91,48 @@ impl ProjectContext {
 
     pub fn save_state(&self) -> Result<()> {
         self.state.write_to(&self.state_path)
+    }
+
+    /// Register a file this process just wrote at the project root as
+    /// generated evidence, so writing it never stales the completion proof it
+    /// describes. Only a plain file directly inside the project root is
+    /// covered (like the built-in `deltaforge-report.*` exclusions and the
+    /// existing `integrity.exclude` mechanism, exclusion matching is
+    /// root-only); a nested `--output` path is left alone. Safe to call
+    /// repeatedly: the name is added to `integrity.exclude` at most once.
+    pub fn exclude_generated_root_file(&mut self, output: &Path) -> Result<()> {
+        let resolved = if output.is_absolute() {
+            output.to_path_buf()
+        } else {
+            self.root.join(output)
+        };
+        let Some(parent) = resolved.parent() else {
+            return Ok(());
+        };
+        let root = self
+            .root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.clone());
+        let parent = parent
+            .canonicalize()
+            .unwrap_or_else(|_| parent.to_path_buf());
+        if parent != root {
+            return Ok(());
+        }
+        let Some(name) = resolved.file_name().and_then(|name| name.to_str()) else {
+            return Ok(());
+        };
+        if self
+            .config
+            .integrity
+            .exclude
+            .iter()
+            .any(|entry| entry == name)
+        {
+            return Ok(());
+        }
+        self.config.integrity.exclude.push(name.to_string());
+        self.config.write_to(&self.config_path)
     }
 
     pub fn pack_digest(&self) -> Result<String> {
@@ -344,9 +386,15 @@ pub fn locate_project_root(options: &GlobalOptions) -> Result<PathBuf> {
         );
     }
 
-    find_project_root(&start).with_context(|| {
-        format!(
-            "not inside a DeltaForge project: searched upward from {}\nRun `deltaforge init <project> --lang <language>` to create one.",
+    // `find_project_root`'s own error carries no information beyond what is
+    // folded into this sentence, so it is replaced rather than chained:
+    // chaining it via `with_context` would tack a stray
+    // `: could not find .deltaforge/state.json` onto the end of the
+    // actionable "Run `deltaforge init`" sentence instead of leaving that
+    // sentence last, where a reader expects the advice to land.
+    find_project_root(&start).map_err(|_| {
+        anyhow!(
+            "not inside a DeltaForge project: searched upward from {} without finding .deltaforge/state.json\nRun `deltaforge init <project> --lang <language>` to create one.",
             start.display()
         )
     })

@@ -11,9 +11,10 @@ use crate::fs_util::atomic_write;
 use crate::reporting;
 
 pub fn run(args: ReportArgs, options: &GlobalOptions) -> Result<()> {
-    let context = ProjectContext::load(options)?;
+    let mut context = ProjectContext::load(options)?;
     let report = reporting::build(&context)?;
     atomic_write(&args.output, reporting::render(&report, args.format)?)?;
+    context.exclude_generated_root_file(&args.output)?;
     println!("Wrote report: {}", args.output.display());
     Ok(())
 }

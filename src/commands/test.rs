@@ -39,10 +39,17 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
                 for failure in &result.failures {
                     println!("  {failure}");
                 }
-                if !verbose && !result.stdout.is_empty() {
-                    println!("  actual stdout:");
-                    for line in result.stdout.lines().take(20) {
-                        println!("    {line}");
+                if !verbose {
+                    // The redacted form (fixture/temp paths replaced with
+                    // `{fixture_path}`) so this block matches the `failures`
+                    // lines above it instead of contradicting them; `--verbose`
+                    // shows the raw streams via `print_streams` instead.
+                    let shown = result.report_stdout.as_deref().unwrap_or(&result.stdout);
+                    if !shown.is_empty() {
+                        println!("  actual stdout:");
+                        for line in shown.lines().take(20) {
+                            println!("    {line}");
+                        }
                     }
                 }
                 if verbose {
@@ -93,8 +100,15 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
 
     if outcome.newly_completed_current && !tests_failed {
         let context = ProjectContext::load(options)?;
-        if context.config.git.auto_commit {
-            super::commit::run_automatic(options, json)?;
+        if context.config.git.auto_commit
+            && let Err(error) = super::commit::run_automatic(options, json)
+        {
+            // Best-effort: the checks genuinely passed, so the exit code must
+            // say so. A failed automatic snapshot (a pre-commit hook, a
+            // missing Git identity, a full disk) is reported but does not
+            // turn a green run into a failing one; `deltaforge commit` is
+            // always available to retry it by hand.
+            eprintln!("warning: automatic snapshot after passing this step failed: {error:#}");
         }
     }
 
