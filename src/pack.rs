@@ -974,13 +974,15 @@ fn validate_template_lockfile_is_settled(
     ) else {
         return;
     };
-    let Some(name) = toml_package_name(&manifest) else {
+    // The manifest starts outside any table; each fragment after splitting the
+    // lockfile on `[[package]]` starts inside one.
+    let Some(name) = toml_package_name(&manifest, false) else {
         return;
     };
     let declares_package = lock
         .split("[[package]]")
         .skip(1)
-        .any(|entry| toml_package_name(entry).as_deref() == Some(name.as_str()));
+        .any(|entry| toml_package_name(entry, true).as_deref() == Some(name.as_str()));
     if !declares_package {
         problems.push(format!(
             "language {language} template Cargo.lock does not lock its own package \"{name}\"; \
@@ -990,10 +992,17 @@ fn validate_template_lockfile_is_settled(
     }
 }
 
-/// The `name = "..."` of the nearest preceding table, read without a TOML
-/// parse so a template that does not parse still reports its real problem.
-fn toml_package_name(text: &str) -> Option<String> {
-    let mut in_package = text.trim_start().starts_with("name");
+/// The `name` key of a `[package]` table, read without a TOML parse so a
+/// template that does not parse still reports its real problem rather than a
+/// parse error. `starts_inside_table` says whether the text begins already
+/// inside the table of interest, which a `[[package]]` fragment does and a
+/// whole `Cargo.toml` does not.
+///
+/// Deliberately conservative: an unrecognised line is skipped rather than
+/// aborting the scan, because giving up here means silently skipping the
+/// lockfile check.
+fn toml_package_name(text: &str, starts_inside_table: bool) -> Option<String> {
+    let mut in_package = starts_inside_table;
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with('[') {
@@ -1003,12 +1012,30 @@ fn toml_package_name(text: &str) -> Option<String> {
         if !in_package {
             continue;
         }
-        if let Some(value) = line.strip_prefix("name") {
-            let value = value.trim_start().strip_prefix('=')?.trim();
-            return Some(value.trim_matches('"').to_string());
+        let Some(rest) = line.strip_prefix("name") else {
+            continue;
+        };
+        // `name` exactly, not `name_suffix`.
+        let Some(value) = rest.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        if let Some(name) = toml_string_value(value.trim()) {
+            return Some(name);
         }
     }
     None
+}
+
+/// The contents of a single-line TOML string, ignoring whatever follows it.
+/// Both quote styles are valid TOML, and a trailing `# comment` is legal after
+/// the value — reading to the closing quote handles all three, where trimming
+/// quote characters off the whole line does not.
+fn toml_string_value(value: &str) -> Option<String> {
+    let mut characters = value.chars();
+    let quote = characters.next().filter(|c| *c == '"' || *c == '\'')?;
+    let body = characters.as_str();
+    let end = body.find(quote)?;
+    Some(body[..end].to_string())
 }
 
 fn validate_stages(pack: &LoadedPack, problems: &mut Vec<String>) {
@@ -1552,6 +1579,40 @@ mod tests {
         let absent = tempdir_with(&[("Cargo.toml", "[package]\nname = \"minikv\"\n")]);
         validate_template_lockfile_is_settled("rust", &absent, &mut problems);
         assert_eq!(problems, Vec::<String>::new());
+    }
+
+    /// The name is read out of TOML the author actually wrote, not out of an
+    /// assumed one-shape-only line: a trailing comment and a literal
+    /// (single-quoted) string are both valid TOML, and reading either wrongly
+    /// would reject a perfectly good pack with a baffling message.
+    #[test]
+    fn a_package_name_is_read_through_comments_and_both_quote_styles() {
+        let lock = "version = 4\n\n[[package]]\nname = \"minikv\"\nversion = \"0.1.0\"\n";
+        for manifest in [
+            "[package]\nname = \"minikv\"\nversion = \"0.1.0\"\n",
+            "[package]\nname = \"minikv\"  # keep in sync with the lockfile\n",
+            "[package]\nname = 'minikv'\nversion = \"0.1.0\"\n",
+            "[package]\nname='minikv'\n",
+            // A key merely starting with "name" must not derail the scan.
+            "[package]\nnamespace = \"x\"\nname = \"minikv\"\n",
+            // Only the [package] table's name counts.
+            "[dependencies]\nname = \"wrong\"\n\n[package]\nname = \"minikv\"\n",
+        ] {
+            let mut problems = Vec::new();
+            let template = tempdir_with(&[("Cargo.toml", manifest), ("Cargo.lock", lock)]);
+            validate_template_lockfile_is_settled("rust", &template, &mut problems);
+            assert_eq!(problems, Vec::<String>::new(), "manifest: {manifest:?}");
+        }
+
+        // A genuinely different name is still caught.
+        let mut problems = Vec::new();
+        let template = tempdir_with(&[
+            ("Cargo.toml", "[package]\nname = \"other\"  # comment\n"),
+            ("Cargo.lock", lock),
+        ]);
+        validate_template_lockfile_is_settled("rust", &template, &mut problems);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("\"other\""), "{problems:?}");
     }
 
     fn tempdir_with(files: &[(&str, &str)]) -> PathBuf {
