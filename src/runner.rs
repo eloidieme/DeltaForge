@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use regex::Regex;
@@ -1259,21 +1259,12 @@ fn run_command_with_input_and_env(
 }
 
 fn create_temp_dir(stage: &StageSpec, test_name: &str) -> Result<PathBuf> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before the Unix epoch")?
-        .as_nanos();
-    let name = format!(
-        "deltaforge-{}-{}-{}-{}",
+    crate::fs_util::create_private_scratch_dir(&format!(
+        "deltaforge-{}-{}-{}",
         std::process::id(),
-        timestamp,
         stage.id,
         sanitize_name(test_name)
-    );
-    let path = std::env::temp_dir().join(name);
-    fs::create_dir_all(&path)
-        .with_context(|| format!("failed to create temp dir {}", path.display()))?;
-    Ok(path)
+    ))
 }
 
 fn sanitize_name(name: &str) -> String {
@@ -1552,8 +1543,8 @@ stderr_contains: ["work: {temp_dir}"]
     fn tempfile_dir_for_test() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "deltaforge-runner-test-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));

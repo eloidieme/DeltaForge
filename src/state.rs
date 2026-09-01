@@ -284,6 +284,20 @@ impl ProjectState {
     pub fn read_from(path: &Path) -> Result<Self> {
         let source = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read state file {}", path.display()))?;
+        // Check the schema version with a two-field probe before the strict,
+        // `deny_unknown_fields` deserialization below: a state file written
+        // by a *newer* DeltaForge carries fields this build doesn't know
+        // about, and without this probe that would fail as an "unknown
+        // field" serde error rather than the actionable version mismatch it
+        // actually is.
+        #[derive(Deserialize)]
+        struct SchemaProbe {
+            #[serde(default)]
+            schema_version: u32,
+        }
+        if let Ok(probe) = serde_json::from_str::<SchemaProbe>(&source) {
+            check_schema_version(probe.schema_version, path)?;
+        }
         let mut state: Self = serde_json::from_str(&source)
             .with_context(|| format!("failed to parse state file {}", path.display()))?;
         state.validate(path)?;
@@ -294,14 +308,7 @@ impl ProjectState {
     }
 
     pub fn validate(&self, path: &Path) -> Result<()> {
-        if self.schema_version != current_state_schema_version() {
-            bail!(
-                "unsupported state schema_version {} in {}; expected {}",
-                self.schema_version,
-                path.display(),
-                current_state_schema_version()
-            );
-        }
+        check_schema_version(self.schema_version, path)?;
         if self.project.trim().is_empty() {
             bail!("invalid state {}: project is empty", path.display());
         }
@@ -576,6 +583,23 @@ impl ProjectState {
 
 fn current_state_schema_version() -> u32 {
     2
+}
+
+fn check_schema_version(found: u32, path: &Path) -> Result<()> {
+    let expected = current_state_schema_version();
+    if found == expected {
+        return Ok(());
+    }
+    if found < expected {
+        bail!(
+            "state schema_version {found} in {} is from an older DeltaForge and is not supported; recreate the project with `deltaforge init`",
+            path.display()
+        );
+    }
+    bail!(
+        "state schema_version {found} in {} was written by a newer version of DeltaForge (this build supports {expected}); upgrade DeltaForge to open this project",
+        path.display()
+    );
 }
 
 fn current_timestamp() -> Result<String> {

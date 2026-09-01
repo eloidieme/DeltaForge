@@ -416,10 +416,9 @@ pub fn render_markdown(report: &ProjectReport) -> String {
         ));
     }
     if !report.snapshots.is_empty() {
-        out.push_str(&format!(
-            "- {} step snapshots recorded in Git history.\n",
-            report.snapshots.len()
-        ));
+        let count = report.snapshots.len();
+        let noun = if count == 1 { "snapshot" } else { "snapshots" };
+        out.push_str(&format!("- {count} step {noun} recorded in Git history.\n"));
     }
     out.push('\n');
 

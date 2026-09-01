@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -1081,19 +1081,12 @@ fn run_timed_command(
 }
 
 fn create_temp_dir(stage: &StageSpec, name: &str) -> Result<PathBuf> {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before the Unix epoch")?
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "deltaforge-bench-{}-{}-{}-{}",
+    crate::fs_util::create_private_scratch_dir(&format!(
+        "deltaforge-bench-{}-{}-{}",
         std::process::id(),
-        nanos,
         stage.id,
         sanitize_name(name)
-    ));
-    fs::create_dir_all(&path)?;
-    Ok(path)
+    ))
 }
 
 fn sanitize_name(name: &str) -> String {

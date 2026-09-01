@@ -169,9 +169,18 @@ fn page(output: &str) -> Result<()> {
     };
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(output.as_bytes())
-            .with_context(|| format!("failed to write output to pager {program}"))?;
+        // A reader that quits before the pipe drains (pressing `q` in `less`
+        // before it has read everything) closes the pipe from the other end;
+        // that is a normal early exit, not a failure, so a broken pipe here
+        // is ignored rather than reported.
+        match stdin.write_all(output.as_bytes()) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to write output to pager {program}"));
+            }
+        }
     }
 
     let status = child
@@ -193,16 +202,21 @@ fn is_numbered_item(value: &str) -> bool {
 fn wrap(value: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();
+    let mut current_chars = 0;
 
     for word in value.split_whitespace() {
+        let word_chars = word.chars().count();
         if current.is_empty() {
             current.push_str(word);
-        } else if current.len() + 1 + word.len() <= width {
+            current_chars = word_chars;
+        } else if current_chars + 1 + word_chars <= width {
             current.push(' ');
             current.push_str(word);
+            current_chars += 1 + word_chars;
         } else {
             lines.push(current);
             current = word.to_string();
+            current_chars = word_chars;
         }
     }
 
@@ -210,4 +224,20 @@ fn wrap(value: &str, width: usize) -> Vec<String> {
         lines.push(current);
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_measures_characters_not_bytes() {
+        // Each "café" is 4 characters but 5 bytes (the é is a 2-byte UTF-8
+        // sequence); a byte-counting wrap would break this line one word
+        // early.
+        let words = ["café"; 4].join(" ");
+        assert_eq!(words.chars().count(), 19);
+        assert_eq!(wrap(&words, 19), vec![words.clone()]);
+        assert_eq!(wrap(&words, 18), vec!["café café café", "café"]);
+    }
 }

@@ -10,6 +10,51 @@ pub fn lock_unavailable(error: &std::io::Error) -> bool {
         || cfg!(windows) && matches!(error.raw_os_error(), Some(32 | 33))
 }
 
+/// Create a fresh, unpredictable, owner-only scratch directory under the
+/// system temp directory. Unlike a plain `create_dir_all`, an existing path
+/// (whether a stale leftover, a symlink another local user planted there, or
+/// a directory a watcher pre-created to race the caller) is refused rather
+/// than silently adopted, and 128 bits of randomness in the name make the
+/// path impossible to predict from the pid and the clock alone. On Unix the
+/// directory is created `0700` so other local accounts on a shared host
+/// cannot read fixture content copied into it or anything a learner's
+/// program writes there.
+pub fn create_private_scratch_dir(prefix: &str) -> Result<PathBuf> {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random)
+        .map_err(|error| anyhow::anyhow!("operating system randomness is unavailable: {error}"))?;
+    let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let path = std::env::temp_dir().join(format!("{prefix}-{suffix}"));
+
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(&path)
+        .with_context(|| format!("failed to create scratch directory {}", path.display()))?;
+    Ok(path)
+}
+
+/// Render a path the way a human should see it, stripping the
+/// extended-length prefixes (`\\?\C:\...`, `\\?\UNC\server\share\...`)
+/// `Path::canonicalize` adds on Windows. DeltaForge needs the prefixed form
+/// for its own filesystem calls, but it is not a spelling a learner ever
+/// typed, and it does not paste cleanly into most tools; child processes like
+/// cargo print the ordinary form for the same path.
+pub fn display_path(path: &Path) -> String {
+    let native = path.to_string_lossy();
+    if let Some(rest) = native.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = native.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        native.into_owned()
+    }
+}
+
 pub fn atomic_write(path: &Path, contents: impl AsRef<[u8]>) -> Result<()> {
     atomic_write_with_mode(path, contents, false)
 }
@@ -120,4 +165,33 @@ fn temporary_path(path: &Path) -> Result<PathBuf> {
         .context("system clock is before the Unix epoch")?
         .as_nanos();
     Ok(parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nanos)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_path_strips_extended_length_windows_prefixes() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\C:\Users\learner\ws\project")),
+            r"C:\Users\learner\ws\project"
+        );
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\project")),
+            r"\\server\share\project"
+        );
+    }
+
+    #[test]
+    fn display_path_leaves_ordinary_paths_alone() {
+        assert_eq!(
+            display_path(Path::new("/home/learner/ws/project")),
+            "/home/learner/ws/project"
+        );
+        assert_eq!(
+            display_path(Path::new(r"C:\Users\learner")),
+            r"C:\Users\learner"
+        );
+    }
 }
