@@ -74,9 +74,20 @@ fn start_service(label: &str) -> Service {
     let child = Command::new(deltaforge_bin())
         .env("DELTAFORGE_HOME", &home)
         .env("DELTAFORGE_WORKSPACE", &workspace)
-        .env("GIT_CONFIG_COUNT", "1")
+        // Hooks disabled, and a Git identity set explicitly: `cli_flow.rs`
+        // configures a repo-local identity before its own snapshot tests, but
+        // the real `git commit` here (via POST /api/v1/snapshots) has no
+        // repo yet to configure one into, and a minimal environment (no
+        // global identity, unlike this machine or the CI runners) makes Git
+        // refuse with "unable to auto-detect email address" for reasons
+        // unrelated to what this test is checking.
+        .env("GIT_CONFIG_COUNT", "3")
         .env("GIT_CONFIG_KEY_0", "core.hooksPath")
         .env("GIT_CONFIG_VALUE_0", "NUL")
+        .env("GIT_CONFIG_KEY_1", "user.name")
+        .env("GIT_CONFIG_VALUE_1", "DeltaForge Tests")
+        .env("GIT_CONFIG_KEY_2", "user.email")
+        .env("GIT_CONFIG_VALUE_2", "deltaforge@example.com")
         .args(["__workbench", "--token", TOKEN])
         .stdin(Stdio::null())
         .stdout(Stdio::null())

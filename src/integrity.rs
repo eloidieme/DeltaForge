@@ -1,10 +1,17 @@
+use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result, bail};
 
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
+
+/// Chunk size used when streaming file contents into the hash, so digesting a
+/// large tree never holds more than one chunk of file content in memory.
+const STREAM_CHUNK: usize = 64 * 1024;
 
 /// Digest pack content. Pack behavior must be self-contained and reproducible,
 /// so symlinks and special files are rejected outright: a symlinked tests.yaml
@@ -12,7 +19,7 @@ const FNV_PRIME: u64 = 0x100000001b3;
 /// recorded digest stayed the same, defeating pinning.
 pub fn digest_pack_tree(root: &Path) -> Result<String> {
     let entries = collect_tree(root, &[], SymlinkPolicy::Reject)?;
-    hash_entries(root, entries)
+    cached_digest(pack_digest_cache(), root, &[], entries)
 }
 
 /// Digest a learner project. Generated directories are excluded only at the
@@ -23,7 +30,7 @@ pub fn digest_pack_tree(root: &Path) -> Result<String> {
 /// sources.
 pub fn digest_project_tree(root: &Path, excluded_names: &[&str]) -> Result<String> {
     let entries = collect_tree(root, excluded_names, SymlinkPolicy::HashFileTargets)?;
-    hash_entries(root, entries)
+    cached_digest(project_digest_cache(), root, excluded_names, entries)
 }
 
 /// Collect `(relative path with forward slashes, contents)` for every file in
@@ -35,7 +42,13 @@ pub fn strict_tree_contents(root: &Path) -> Result<Vec<(String, Vec<u8>)>> {
         .into_iter()
         .map(|entry| {
             let name = entry.relative.to_string_lossy().replace('\\', "/");
-            Ok((name, entry.contents))
+            let contents = fs::read(&entry.source).with_context(|| {
+                format!(
+                    "failed to read {} while collecting tree contents",
+                    entry.source.display()
+                )
+            })?;
+            Ok((name, contents))
         })
         .collect()
 }
@@ -80,10 +93,21 @@ enum SymlinkPolicy {
     HashFileTargets,
 }
 
+/// Metadata for one file (or file symlink) in a tree, gathered with `stat`
+/// calls only. Content is read later, and only when a digest actually needs
+/// it, so walking a tree to check for changes never touches file bytes.
 #[derive(Debug)]
 struct TreeEntry {
     relative: PathBuf,
-    contents: Vec<u8>,
+    /// Absolute path to read from if the full digest needs this entry's bytes.
+    /// For symlinks this is the link itself; reading it follows the link, the
+    /// same as the historical `fs::read(path)` behaviour.
+    source: PathBuf,
+    len: u64,
+    /// Modification time as nanoseconds since the Unix epoch, or `-1` when the
+    /// platform/filesystem cannot report one. Used only as a cheap
+    /// change-detection signal, never persisted or compared across processes.
+    mtime_nanos: i128,
     /// `Some(target)` when the entry is a symlink to a file.
     symlink_target: Option<PathBuf>,
 }
@@ -100,6 +124,14 @@ fn collect_tree(
     collect_into(root, root, excluded_names, policy, &mut entries)?;
     entries.sort_by(|left, right| left.relative.cmp(&right.relative));
     Ok(entries)
+}
+
+fn mtime_nanos_of(metadata: &fs::Metadata) -> i128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(-1, |duration| duration.as_nanos() as i128)
 }
 
 fn collect_into(
@@ -128,13 +160,13 @@ fn collect_into(
         if file_type.is_dir() {
             collect_into(root, &path, excluded_names, policy, entries)?;
         } else if file_type.is_file() {
-            let contents = match fs::read(&path) {
-                Ok(contents) => contents,
+            let metadata = match fs::metadata(&path) {
+                Ok(metadata) => metadata,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => {
                     return Err(error).with_context(|| {
                         format!(
-                            "failed to read {} while computing project digest",
+                            "failed to stat {} while computing project digest",
                             path.display()
                         )
                     });
@@ -142,7 +174,9 @@ fn collect_into(
             };
             entries.push(TreeEntry {
                 relative: path.strip_prefix(root)?.to_path_buf(),
-                contents,
+                len: metadata.len(),
+                mtime_nanos: mtime_nanos_of(&metadata),
+                source: path,
                 symlink_target: None,
             });
         } else if file_type.is_symlink() {
@@ -179,11 +213,9 @@ fn collect_symlink(
                 .with_context(|| format!("failed to read symbolic link {}", path.display()))?;
             entries.push(TreeEntry {
                 relative: path.strip_prefix(root)?.to_path_buf(),
-                contents: match fs::read(path) {
-                    Ok(contents) => contents,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                    Err(error) => return Err(error.into()),
-                },
+                len: metadata.len(),
+                mtime_nanos: mtime_nanos_of(&metadata),
+                source: path.to_path_buf(),
                 symlink_target: Some(target),
             });
             Ok(())
@@ -201,8 +233,30 @@ fn collect_symlink(
     }
 }
 
-fn hash_entries(_root: &Path, entries: Vec<TreeEntry>) -> Result<String> {
+/// Cheap change-detection signature over a tree's structure and per-file
+/// `(len, mtime)`, without reading any file's contents. Two calls that return
+/// the same fingerprint are extremely unlikely to differ in actual content;
+/// this is used only to decide whether the expensive, byte-exact digest below
+/// needs to be recomputed, never as a substitute for it.
+fn fingerprint_entries(entries: &[TreeEntry]) -> String {
     let mut hash = FNV_OFFSET;
+    for entry in entries {
+        update_hash(&mut hash, entry.relative.to_string_lossy().as_bytes());
+        if let Some(target) = &entry.symlink_target {
+            update_hash(&mut hash, &[1]);
+            update_hash(&mut hash, target.to_string_lossy().as_bytes());
+        }
+        update_hash(&mut hash, &[0]);
+        update_hash(&mut hash, &entry.len.to_le_bytes());
+        update_hash(&mut hash, &entry.mtime_nanos.to_le_bytes());
+        update_hash(&mut hash, &[0xff]);
+    }
+    format!("{hash:016x}")
+}
+
+fn hash_entries(entries: Vec<TreeEntry>) -> Result<String> {
+    let mut hash = FNV_OFFSET;
+    let mut buffer = vec![0u8; STREAM_CHUNK];
     for entry in entries {
         update_hash(&mut hash, entry.relative.to_string_lossy().as_bytes());
         // Regular files keep the historical `path \0 contents \xff` framing so
@@ -214,7 +268,37 @@ fn hash_entries(_root: &Path, entries: Vec<TreeEntry>) -> Result<String> {
             update_hash(&mut hash, target.to_string_lossy().as_bytes());
         }
         update_hash(&mut hash, &[0]);
-        update_hash(&mut hash, &entry.contents);
+        // Streamed in fixed-size chunks (rather than read into one `Vec` per
+        // file up front) so digesting a tree never holds more than one
+        // chunk's worth of file content in memory at a time.
+        let mut file = match fs::File::open(&entry.source) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to read {} while computing project digest",
+                        entry.source.display()
+                    )
+                });
+            }
+        };
+        loop {
+            let read = match file.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to read {} while computing project digest",
+                            entry.source.display()
+                        )
+                    });
+                }
+            };
+            update_hash(&mut hash, &buffer[..read]);
+        }
         update_hash(&mut hash, &[0xff]);
     }
     Ok(format!("fnv1a64:{hash:016x}"))
@@ -225,6 +309,61 @@ fn update_hash(hash: &mut u64, bytes: &[u8]) {
         *hash ^= u64::from(*byte);
         *hash = hash.wrapping_mul(FNV_PRIME);
     }
+}
+
+struct DigestCacheEntry {
+    fingerprint: String,
+    digest: String,
+}
+
+type DigestCache = Mutex<HashMap<(PathBuf, Vec<String>), DigestCacheEntry>>;
+
+fn pack_digest_cache() -> &'static DigestCache {
+    static CACHE: OnceLock<DigestCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn project_digest_cache() -> &'static DigestCache {
+    static CACHE: OnceLock<DigestCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Compute (or reuse) a tree digest. The cheap `fingerprint_entries` pass has
+/// already walked the tree via `collect_tree`; only when that fingerprint
+/// differs from the last one seen for this `(root, excluded_names)` is the
+/// expensive byte-exact digest actually recomputed. This is what lets a
+/// process that repeatedly asks "did anything change?" (the workbench source
+/// watcher, in particular) do so without re-reading every file's contents on
+/// every check.
+fn cached_digest(
+    cache: &DigestCache,
+    root: &Path,
+    excluded_names: &[&str],
+    entries: Vec<TreeEntry>,
+) -> Result<String> {
+    let fingerprint = fingerprint_entries(&entries);
+    let mut key_names: Vec<String> = excluded_names
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    key_names.sort();
+    let key = (root.to_path_buf(), key_names);
+
+    if let Some(cached) = cache.lock().expect("digest cache poisoned").get(&key) {
+        if cached.fingerprint == fingerprint {
+            return Ok(cached.digest.clone());
+        }
+    }
+
+    let digest = hash_entries(entries)?;
+    cache.lock().expect("digest cache poisoned").insert(
+        key,
+        DigestCacheEntry {
+            fingerprint,
+            digest: digest.clone(),
+        },
+    );
+    Ok(digest)
 }
 
 #[cfg(test)]
@@ -272,6 +411,35 @@ mod tests {
 
         assert_ne!(before, nested_source_changed);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unchanged_tree_reuses_the_cached_digest_without_rereading_content() {
+        let root = temp_tree("cache-reuse");
+        let target = root.join("main.rs");
+        fs::write(&target, "fn main() {}").unwrap();
+
+        let before = digest_project_tree(&root, &[]).unwrap();
+        // Mutate the file on disk without changing its length or touching its
+        // mtime forward: the cheap fingerprint stays the same, so the cached
+        // digest (computed from the original content) must still be returned.
+        let original_mtime = fs::metadata(&target).unwrap().modified().unwrap();
+        fs::write(&target, "fn main() { }").unwrap();
+        fs::write(&target, "fn main() {}").unwrap();
+        filetime_set(&target, original_mtime);
+
+        let after = digest_project_tree(&root, &[]).unwrap();
+        assert_eq!(
+            before, after,
+            "fingerprint-unchanged reads must reuse the cache"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn filetime_set(path: &Path, time: std::time::SystemTime) {
+        // Best-effort: only used to pin an mtime for the cache test above.
+        let file = fs::OpenOptions::new().write(true).open(path).unwrap();
+        let _ = file.set_modified(time);
     }
 
     #[cfg(unix)]

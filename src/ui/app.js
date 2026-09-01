@@ -55,14 +55,26 @@ function cycleTheme() {
 
 /* ------------------------------------------------------------ transport */
 
+// The token never appears in a URL this function builds: it is sent as a
+// header instead (see `fetchJson`/`post`) so it never reaches the address
+// bar, browser history, or a "copy link address". The one exception is
+// `EventSource`, which cannot set custom headers at all — `eventSourceUrl`
+// below is the only place the token still travels in a query string.
 function api(path, project = true) {
+  const params = new URLSearchParams();
+  if (project && activeProject) params.set("project", activeProject);
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
+}
+
+function eventSourceUrl(path, project = true) {
   const params = new URLSearchParams({ token });
   if (project && activeProject) params.set("project", activeProject);
   return `${path}?${params}`;
 }
 
 async function fetchJson(path, project = true) {
-  const response = await fetch(api(path, project));
+  const response = await fetch(api(path, project), { headers: { "X-DeltaForge-Token": token } });
   if (!response.ok) throw new Error(`${path} is unavailable`);
   return response.json();
 }
@@ -70,7 +82,7 @@ async function fetchJson(path, project = true) {
 async function post(path, body = {}, project = true) {
   const response = await fetch(api(path, project), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-DeltaForge-Token": token },
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -88,7 +100,10 @@ function routeLink(element, path) {
   element.dataset.route = path;
 }
 function navigate(path) {
-  history.pushState({}, "", `${path}?token=${encodeURIComponent(token)}`);
+  // No token here: every fetch this page makes sends it as a header instead
+  // (see `fetchJson`/`post`), so the address bar and the browser's history
+  // never carry it.
+  history.pushState({}, "", path);
   renderRoute();
 }
 function setScreen(id) {
@@ -835,7 +850,7 @@ function duration(run) {
 /* ---------------------------------------------------------------- events */
 
 function connectEvents(cursor) {
-  events = new EventSource(api("/api/v1/events") + `&after=${cursor}`);
+  events = new EventSource(eventSourceUrl("/api/v1/events") + `&after=${cursor}`);
   events.addEventListener("state", (event) => {
     state = JSON.parse(event.data);
     if (currentView === "build") renderState();
@@ -843,6 +858,9 @@ function connectEvents(cursor) {
     if (currentView === "runs") renderRuns();
   });
   events.addEventListener("run", (event) => handleRun(JSON.parse(event.data)));
+  events.addEventListener("gap", () => {
+    if ($("#activity")) $("#activity").textContent = "Earlier output was dropped; showing what's current.";
+  });
   events.addEventListener("focus", (event) => {
     const data = JSON.parse(event.data || "{}");
     if (data.route && data.route !== location.pathname) navigate(data.route);
@@ -852,7 +870,7 @@ function connectEvents(cursor) {
 }
 
 function connectAppEvents() {
-  events = new EventSource(api("/api/v1/app-events", false));
+  events = new EventSource(eventSourceUrl("/api/v1/app-events", false));
   events.addEventListener("focus", (event) => {
     const data = JSON.parse(event.data || "{}");
     if (data.route && data.route !== location.pathname) navigate(data.route);
@@ -1076,6 +1094,15 @@ document.addEventListener("click", (event) => {
 });
 window.addEventListener("popstate", renderRoute);
 setInterval(() => { if (currentView === "build") renderMeter(); }, 1000);
+
+// The launcher's URL (and any bookmarked/reloaded one) carries the token in
+// the query string, since that is the only way to authorize the request
+// that fetched this page in the first place. The token is already captured
+// above; strip it from what the address bar shows and what this load adds
+// to history, now that nothing further needs it there.
+if (location.search.includes("token=")) {
+  history.replaceState(history.state, "", location.pathname);
+}
 
 applyTheme(readTheme());
 renderRoute().catch((error) => {

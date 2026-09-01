@@ -1,4 +1,5 @@
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -9,11 +10,18 @@ use serde_json::Value;
 use crate::application::RunEvent;
 use crate::fs_util::atomic_write;
 
-const JOURNAL_FILE: &str = "workbench-events.json";
+const JOURNAL_FILE: &str = "workbench-events.jsonl";
+const JOURNAL_META_FILE: &str = "workbench-events-meta.json";
 const JOURNAL_LOCK_FILE: &str = "workbench-events.lock";
 const MAX_EVENTS: usize = 256;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_STRING_BYTES: usize = 16 * 1024;
+/// Compact once the append-only file crosses either bound, rather than on
+/// every append: the O(events) rewrite this requires is then amortized over
+/// many appends (each compaction pays for roughly the appends since the last
+/// one) instead of paid in full by every single one.
+const COMPACTION_TRIGGER_BYTES: u64 = MAX_BYTES as u64 * 2;
+const COMPACTION_EVENT_TRIGGER: u64 = MAX_EVENTS as u64 * 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalEntry {
@@ -23,38 +31,64 @@ pub struct JournalEntry {
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Journal {
+struct JournalMeta {
     #[serde(default)]
     next_id: u64,
     #[serde(default)]
-    events: Vec<JournalEntry>,
+    event_count: u64,
 }
 
+/// Append one event to the journal. In the common case this costs one small,
+/// non-atomic write to a tiny metadata file (to allocate the id) plus one
+/// `O_APPEND` write of the new line — no read, no rewrite, and no fsync of
+/// prior events. The journal is compacted back down to
+/// `MAX_EVENTS`/`MAX_BYTES` only occasionally (see `COMPACTION_EVENT_TRIGGER`
+/// / `COMPACTION_TRIGGER_BYTES`), not on every call, so the cost of one
+/// append no longer scales with how much output a run has produced so far.
+///
+/// Losing the last write to either file (a hard crash, not a clean process
+/// exit) can drop the most recent event or two, or force a one-time rescan to
+/// recover the id counter; it can never hand out an id that collides with one
+/// already on disk. That is an acceptable trade for a live progress stream
+/// that is not the source of truth for anything durable (that role belongs to
+/// `state.json` and Git history).
 pub fn append(project_root: &Path, event: &RunEvent) -> Result<u64> {
     with_journal_lock(project_root, || {
         let path = journal_path(project_root);
-        let mut journal = read_unlocked(&path)?;
-        let id = journal.next_id.max(1);
-        journal.next_id = id.saturating_add(1);
+        let meta_path = journal_meta_path(project_root);
+
+        let quarantined = ensure_appendable(&path)?;
+        let mut meta = read_meta_unlocked(&meta_path, &path)?;
+        if quarantined {
+            meta.event_count = 0;
+        }
+
+        let id = meta.next_id.max(1);
+        meta.next_id = id.saturating_add(1);
+        meta.event_count = meta.event_count.saturating_add(1);
+
         let mut value = serde_json::to_value(event)?;
         truncate_value(&mut value);
-        journal.events.push(JournalEntry { id, event: value });
-        if journal.events.len() > MAX_EVENTS {
-            let excess = journal.events.len() - MAX_EVENTS;
-            journal.events.drain(..excess);
+        let entry = JournalEntry { id, event: value };
+        let mut line = serde_json::to_vec(&entry)?;
+        line.push(b'\n');
+        append_line(&path, &line)?;
+
+        let bytes = fs::metadata(&path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        if meta.event_count > COMPACTION_EVENT_TRIGGER || bytes > COMPACTION_TRIGGER_BYTES {
+            meta.event_count = compact(&path)? as u64;
         }
-        while journal.events.len() > 1 && serde_json::to_vec(&journal)?.len() > MAX_BYTES {
-            journal.events.remove(0);
-        }
-        atomic_write(&path, serde_json::to_vec(&journal)?)?;
+
+        write_meta_unlocked(&meta_path, &meta)?;
         Ok(id)
     })
 }
 
 pub fn entries_after(project_root: &Path, cursor: u64) -> Result<Vec<JournalEntry>> {
     with_journal_lock(project_root, || {
-        Ok(read_unlocked(&journal_path(project_root))?
-            .events
+        Ok(read_entries_unlocked(&journal_path(project_root))?
             .into_iter()
             .filter(|entry| entry.id > cursor)
             .collect())
@@ -63,15 +97,16 @@ pub fn entries_after(project_root: &Path, cursor: u64) -> Result<Vec<JournalEntr
 
 pub fn cursor(project_root: &Path) -> Result<u64> {
     with_journal_lock(project_root, || {
-        let journal = read_unlocked(&journal_path(project_root))?;
-        Ok(journal.next_id.saturating_sub(1))
+        let path = journal_path(project_root);
+        Ok(read_meta_unlocked(&journal_meta_path(project_root), &path)?
+            .next_id
+            .saturating_sub(1))
     })
 }
 
 pub fn contains_source_revision(project_root: &Path, revision: u64) -> Result<bool> {
     with_journal_lock(project_root, || {
-        Ok(read_unlocked(&journal_path(project_root))?
-            .events
+        Ok(read_entries_unlocked(&journal_path(project_root))?
             .iter()
             .any(|entry| {
                 entry.event.get("type").and_then(Value::as_str) == Some("source_changed")
@@ -82,6 +117,10 @@ pub fn contains_source_revision(project_root: &Path, revision: u64) -> Result<bo
 
 fn journal_path(project_root: &Path) -> PathBuf {
     project_root.join(".deltaforge").join(JOURNAL_FILE)
+}
+
+fn journal_meta_path(project_root: &Path) -> PathBuf {
+    project_root.join(".deltaforge").join(JOURNAL_META_FILE)
 }
 
 fn with_journal_lock<T>(project_root: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -114,32 +153,175 @@ fn with_journal_lock<T>(project_root: &Path, operation: impl FnOnce() -> Result<
     result
 }
 
-fn read_unlocked(path: &Path) -> Result<Journal> {
+/// If the journal file exists and its last byte is not a newline, an earlier
+/// write was torn (or the file predates the append-only format), so appending
+/// to it verbatim would corrupt the new line onto the old tail. Quarantine it
+/// and report that the caller is starting from empty. Costs one `stat` plus a
+/// one-byte read in the common (already-clean) case.
+fn ensure_appendable(path: &Path) -> Result<bool> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.len() == 0 {
+        return Ok(false);
+    }
+    let mut file = File::open(path)
+        .with_context(|| format!("failed to open event journal {}", path.display()))?;
+    file.seek(SeekFrom::End(-1))?;
+    let mut last = [0u8; 1];
+    file.read_exact(&mut last)?;
+    if last[0] == b'\n' {
+        return Ok(false);
+    }
+    quarantine(path)?;
+    Ok(true)
+}
+
+/// Append one already-newline-terminated line to the journal file without
+/// reading or rewriting anything already in it. Not fsynced: this is a live
+/// progress stream, not durable state, and paying for a sync on every line
+/// would reintroduce the per-event cost this format change removes.
+fn append_line(path: &Path, line: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let is_new = !path.exists();
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("failed to open event journal {}", path.display()))?;
+    file.write_all(line)
+        .with_context(|| format!("failed to append to event journal {}", path.display()))?;
+    if is_new
+        && let Some(parent) = path.parent()
+        && let Ok(dir) = File::open(parent)
+    {
+        let _ = dir.sync_all();
+    }
+    Ok(())
+}
+
+/// Write the small metadata file directly (no temp file, no fsync): losing
+/// this write recovers cleanly via the journal rescan in `read_meta_unlocked`
+/// below, so paying for atomic-write durability on every append is not worth
+/// it here.
+fn write_meta_unlocked(path: &Path, meta: &JournalMeta) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_vec(meta)?)
+        .with_context(|| format!("failed to write event journal metadata {}", path.display()))
+}
+
+fn read_meta_unlocked(meta_path: &Path, journal_path: &Path) -> Result<JournalMeta> {
+    if let Ok(source) = fs::read(meta_path)
+        && let Ok(meta) = serde_json::from_slice::<JournalMeta>(&source)
+    {
+        return Ok(meta);
+    }
+    // Metadata is missing or unreadable (first run, or a crash lost the last
+    // write to it). Recover a safe id counter from the journal itself so a
+    // reset to 0 can never hand out an id that already exists on disk.
+    let entries = read_entries_unlocked(journal_path)?;
+    let next_id = entries
+        .iter()
+        .map(|entry| entry.id)
+        .max()
+        .map_or(0, |max| max + 1);
+    Ok(JournalMeta {
+        next_id,
+        event_count: entries.len() as u64,
+    })
+}
+
+/// Read and parse every line of the journal file. A file that fails to parse
+/// line-by-line (garbage, or a truncated write `ensure_appendable` did not
+/// catch) is quarantined and treated as empty, the same recovery
+/// `deltaforge` has always applied to a corrupt journal.
+fn read_entries_unlocked(path: &Path) -> Result<Vec<JournalEntry>> {
     let source = match fs::read(path) {
         Ok(source) => source,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Journal::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("failed to read event journal {}", path.display()));
         }
     };
-    match serde_json::from_slice(&source) {
-        Ok(journal) => Ok(journal),
-        Err(_) => {
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let backup = path.with_file_name(format!("workbench-events.corrupt-{stamp}.json"));
-            fs::rename(path, &backup).with_context(|| {
-                format!(
-                    "failed to quarantine corrupt event journal {}",
-                    path.display()
-                )
-            })?;
-            Ok(Journal::default())
+    match parse_lines(&source) {
+        Some(entries) => Ok(entries),
+        None => {
+            quarantine(path)?;
+            Ok(Vec::new())
         }
     }
+}
+
+fn quarantine(path: &Path) -> Result<()> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let backup = path.with_file_name(format!("workbench-events.corrupt-{stamp}.json"));
+    fs::rename(path, &backup).with_context(|| {
+        format!(
+            "failed to quarantine corrupt event journal {}",
+            path.display()
+        )
+    })
+}
+
+fn parse_lines(source: &[u8]) -> Option<Vec<JournalEntry>> {
+    let mut entries = Vec::new();
+    for line in source.split(|byte| *byte == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        entries.push(serde_json::from_slice::<JournalEntry>(line).ok()?);
+    }
+    Some(entries)
+}
+
+/// Trim the journal back down to `MAX_EVENTS`/`MAX_BYTES` and rewrite it,
+/// fsync-ing the result since this is the (infrequent) point at which the
+/// journal's on-disk content is condensed. Returns the number of entries kept.
+fn compact(path: &Path) -> Result<usize> {
+    let source = match fs::read(path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read event journal {}", path.display()));
+        }
+    };
+    let Some(mut entries) = parse_lines(&source) else {
+        // A concurrent read will quarantine this; nothing to compact.
+        return Ok(0);
+    };
+    if entries.len() > MAX_EVENTS {
+        let excess = entries.len() - MAX_EVENTS;
+        entries.drain(..excess);
+    }
+    let mut lines: Vec<Vec<u8>> = entries
+        .iter()
+        .map(|entry| {
+            let mut line = serde_json::to_vec(entry)?;
+            line.push(b'\n');
+            Ok(line)
+        })
+        .collect::<Result<_>>()?;
+    while lines.len() > 1 && lines.iter().map(Vec::len).sum::<usize>() > MAX_BYTES {
+        lines.remove(0);
+    }
+    let kept = lines.len();
+    let mut buffer = Vec::with_capacity(lines.iter().map(Vec::len).sum());
+    for line in lines {
+        buffer.extend_from_slice(&line);
+    }
+    atomic_write(path, buffer)?;
+    Ok(kept)
 }
 
 fn truncate_value(value: &mut Value) {
@@ -163,8 +345,10 @@ mod tests {
     use super::*;
 
     fn temp_root() -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         std::env::temp_dir().join(format!(
-            "deltaforge-journal-{}-{}",
+            "deltaforge-journal-{}-{}-{sequence}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -174,9 +358,10 @@ mod tests {
     }
 
     #[test]
-    fn journal_is_bounded_and_supports_cursor_replay() {
+    fn journal_compacts_and_supports_cursor_replay() {
         let root = temp_root();
-        for index in 0..(MAX_EVENTS + 8) {
+        let total = COMPACTION_EVENT_TRIGGER as usize + 8;
+        for index in 0..total {
             append(
                 &root,
                 &RunEvent::BuildOutput {
@@ -196,7 +381,11 @@ mod tests {
         )
         .unwrap();
         let entries = entries_after(&root, 0).unwrap();
-        assert_eq!(entries.len(), MAX_EVENTS);
+        assert!(
+            entries.len() <= COMPACTION_EVENT_TRIGGER as usize,
+            "enough appends to cross the compaction trigger must trim back down, got {}",
+            entries.len()
+        );
         assert!(contains_source_revision(&root, 7).unwrap());
         assert!(!contains_source_revision(&root, 6).unwrap());
         let cursor = entries[entries.len() - 2].id;
@@ -228,6 +417,29 @@ mod tests {
     }
 
     #[test]
+    fn a_crash_that_loses_the_metadata_file_cannot_reuse_an_existing_id() {
+        let root = temp_root();
+        for _ in 0..5 {
+            append(&root, &RunEvent::ProjectStateChanged).unwrap();
+        }
+        // Simulate losing the metadata file to a crash between writes: the
+        // journal file (with ids 1..=5) survives, the counter does not.
+        fs::remove_file(journal_meta_path(&root)).unwrap();
+        let id = append(&root, &RunEvent::ProjectStateChanged).unwrap();
+        assert_eq!(
+            id, 6,
+            "recovery must continue past the highest id already on disk"
+        );
+        let entries = entries_after(&root, 0).unwrap();
+        let ids: Vec<u64> = entries.iter().map(|entry| entry.id).collect();
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "no id may repeat: {ids:?}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn concurrent_appends_keep_unique_ordered_ids() {
         let root = temp_root();
         let workers = (0..8)
@@ -243,6 +455,78 @@ mod tests {
         ids.sort_unstable();
         assert_eq!(ids, (1..=8).collect::<Vec<_>>());
         assert_eq!(entries_after(&root, 0).unwrap().len(), 8);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn appends_do_not_rewrite_prior_events() {
+        // Regression guard for the O(events) rewrite this file used to do on
+        // every append: within one compaction window, appends must cost
+        // roughly the same regardless of how much has already been written.
+        // Compared against a baseline (rather than an absolute wall-clock
+        // bound) so this stays meaningful under whatever load happens to be
+        // on the machine running it: the old O(events) rewrite made each
+        // batch many times slower than the last, not merely a bit slower.
+        let root = temp_root();
+        let append_batch = |root: &Path, offset: usize| {
+            let start = std::time::Instant::now();
+            for index in 0..200 {
+                append(
+                    root,
+                    &RunEvent::BuildOutput {
+                        stream: "stdout",
+                        text: format!("line {}", offset + index),
+                    },
+                )
+                .unwrap();
+            }
+            start.elapsed()
+        };
+        let baseline = append_batch(&root, 0);
+        for index in 0..2000 {
+            append(
+                &root,
+                &RunEvent::BuildOutput {
+                    stream: "stdout",
+                    text: format!("padding line {index} {}", "x".repeat(200)),
+                },
+            )
+            .unwrap();
+        }
+        let after = append_batch(&root, 10_000);
+        assert!(
+            after < baseline * 10 + std::time::Duration::from_millis(200),
+            "200 appends cost {after:?} after a large journal vs {baseline:?} on an empty one; \
+             expected the cost per append not to grow with journal size"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compaction_trims_to_bounds_and_keeps_ids_contiguous() {
+        let root = temp_root();
+        // Force several compactions by writing enough events to cross
+        // COMPACTION_EVENT_TRIGGER (and COMPACTION_TRIGGER_BYTES) repeatedly.
+        for index in 0..4000 {
+            append(
+                &root,
+                &RunEvent::BuildOutput {
+                    stream: "stdout",
+                    text: format!("line {index} {}", "x".repeat(300)),
+                },
+            )
+            .unwrap();
+        }
+        let entries = entries_after(&root, 0).unwrap();
+        assert!(entries.len() <= COMPACTION_EVENT_TRIGGER as usize);
+        for pair in entries.windows(2) {
+            assert_eq!(
+                pair[1].id,
+                pair[0].id + 1,
+                "surviving ids must stay contiguous"
+            );
+        }
+        assert_eq!(super::cursor(&root).unwrap(), 4000);
         let _ = fs::remove_dir_all(root);
     }
 }

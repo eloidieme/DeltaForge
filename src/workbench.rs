@@ -22,9 +22,20 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(4);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// How often the source watcher checks registered projects for changes while
+/// no browser client is connected. There is nobody to notify of a change at
+/// this cadence, so the watcher backs off to this interval instead of
+/// `EVENT_POLL_INTERVAL`; a poll for an unchanged project is now cheap (see
+/// `integrity::cached_digest`), so this backoff only needs to be large enough
+/// to matter, not large enough to make a learner who reloads the page or
+/// switches to the terminal notice the delay.
+const IDLE_SOURCE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_BODY_BYTES: usize = 8 * 1024;
+/// Header the page sends the capability token in once it has loaded, instead
+/// of the query string. Lower-cased to match `read_request`'s header keys.
+const CAPABILITY_HEADER: &str = "x-deltaforge-token";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +44,11 @@ struct ServiceRecord {
     pid: u32,
     token: String,
     version: String,
+    /// A random value, not itself a capability, that only the process which
+    /// wrote this (owner-only) record file could have read. Used to confirm
+    /// the listener on `port` is this same service before the capability
+    /// token is ever sent to it. See `verify_identity`.
+    probe_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +98,7 @@ impl Drop for StartupLease {
 struct Shared {
     default_project_id: Option<String>,
     token: String,
+    probe_id: String,
     session_id: String,
     port: u16,
     clients: AtomicUsize,
@@ -203,7 +220,7 @@ struct ProjectSummary {
     name: String,
     description: String,
     language: String,
-    path: PathBuf,
+    path: String,
     current_step: String,
     current_step_number: usize,
     total_steps: usize,
@@ -229,7 +246,7 @@ pub fn launch(options: &GlobalOptions) -> Result<()> {
     let mut service = read_compatible_record(&record_path)?;
 
     if service.is_none() {
-        let token = capability_token(root.as_deref().unwrap_or_else(|| Path::new("deltaforge")))?;
+        let token = capability_token()?;
         spawn_service(root.as_deref(), options, &token)?;
         service = wait_for_service(&record_path)?;
     }
@@ -368,7 +385,7 @@ fn read_compatible_record(record_path: &Path) -> Result<Option<(ServiceRecord, S
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let mut record: ServiceRecord = match serde_json::from_str(&source) {
+    let record: ServiceRecord = match serde_json::from_str(&source) {
         Ok(record) => record,
         Err(_) => {
             let _ = fs::remove_file(record_path);
@@ -384,13 +401,38 @@ fn read_compatible_record(record_path: &Path) -> Result<Option<(ServiceRecord, S
         return Ok(None);
     }
     if record.pid != status.pid {
-        record.pid = status.pid;
-        atomic_write_private(record_path, serde_json::to_string(&record)?)?;
+        // The listener passed identity verification (it knew `probe_id`, a
+        // value only readable from this owner-only record file) yet reports a
+        // pid different from the one recorded at startup. That should never
+        // happen for a legitimate, unmodified service; treat it as absent
+        // rather than trusting either the stale local value or the remote
+        // claim.
+        remove_record_if_matches(record_path, &record);
+        return Ok(None);
     }
     Ok(Some((record, status)))
 }
 
+/// Confirm the process listening on `record.port` is the DeltaForge service
+/// that wrote this record, before ever sending it the capability token or
+/// treating its responses (version, pid, clients) as authoritative.
+///
+/// `probe_id` is not a capability — it is served to anyone who asks, with no
+/// token required — but only the process that created this exact
+/// owner-only-readable record file could have read it back off disk. An
+/// unrelated (or hostile) process that happens to be listening on the
+/// recorded port cannot know it, so a mismatch here means "this is not our
+/// service" and the token must not be sent to it.
+fn verify_identity(record: &ServiceRecord) -> Option<()> {
+    let body = http_get(record.port, &format!("/api/{API_VERSION}/identity"))?;
+    let value = serde_json::from_str::<serde_json::Value>(&body).ok()?;
+    (value.get("service")?.as_str()? == "deltaforge"
+        && value.get("probe_id")?.as_str()? == record.probe_id)
+        .then_some(())
+}
+
 fn probe(record: &ServiceRecord) -> Option<ServiceStatus> {
+    verify_identity(record)?;
     let path = format!("/api/{API_VERSION}/health?token={}", record.token);
     let body = http_get(record.port, &path)?;
     let value = serde_json::from_str::<serde_json::Value>(&body).ok()?;
@@ -532,11 +574,13 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
     let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .context("failed to bind the DeltaForge workbench to loopback")?;
     let port = listener.local_addr()?.port();
+    let probe_id = random_hex_id(16)?;
     let record = ServiceRecord {
         port,
         pid: std::process::id(),
         token: token.clone(),
         version: SERVICE_VERSION.to_string(),
+        probe_id: probe_id.clone(),
     };
     crate::project_registry::ensure_private_application_home()?;
     atomic_write_private(&record_path, serde_json::to_string(&record)?)?;
@@ -544,6 +588,7 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
     let shared = Arc::new(Shared {
         default_project_id: registered.map(|project| project.id),
         token,
+        probe_id,
         session_id,
         port,
         clients: AtomicUsize::new(0),
@@ -588,7 +633,12 @@ fn spawn_source_watcher(shared: Arc<Shared>) {
                     .lock()
                     .expect("workbench lock poisoned") = Instant::now();
             }
-            std::thread::sleep(EVENT_POLL_INTERVAL);
+            let interval = if shared.clients.load(Ordering::SeqCst) == 0 {
+                IDLE_SOURCE_POLL_INTERVAL
+            } else {
+                EVENT_POLL_INTERVAL
+            };
+            std::thread::sleep(interval);
         }
     });
 }
@@ -639,6 +689,34 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
         .lock()
         .expect("workbench lock poisoned") = Instant::now();
 
+    let path = request
+        .target
+        .split_once('?')
+        .map_or(request.target.as_str(), |(path, _)| path);
+
+    // Deliberately unauthenticated: a launcher must be able to confirm which
+    // service is listening on this port *before* it sends the capability
+    // token. See `verify_identity`. Host is still checked so a cross-origin
+    // page cannot use this to fingerprint what is running on loopback.
+    if request.method == "GET" && path == "/api/v1/identity" {
+        let expected_host = format!("127.0.0.1:{}", shared.port);
+        if request.headers.get("host") != Some(&expected_host) {
+            return respond(
+                &mut stream,
+                "403 Forbidden",
+                "application/json",
+                r#"{"error":"forbidden"}"#,
+            );
+        }
+        let body = serde_json::json!({
+            "service": "deltaforge",
+            "api": API_VERSION,
+            "probe_id": shared.probe_id,
+        })
+        .to_string();
+        return respond(&mut stream, "200 OK", "application/json", &body);
+    }
+
     if !authorized(&request, shared) {
         return respond(
             &mut stream,
@@ -648,10 +726,6 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
         );
     }
 
-    let path = request
-        .target
-        .split_once('?')
-        .map_or(request.target.as_str(), |(path, _)| path);
     if request.method != "GET" && request.method != "POST" {
         return respond(
             &mut stream,
@@ -1261,7 +1335,7 @@ fn authorized(request: &HttpRequest, shared: &Shared) -> bool {
     if request.headers.get("host") != Some(&expected_host) {
         return false;
     }
-    let token = request
+    let query_token = request
         .target
         .split_once('?')
         .and_then(|(_, query)| {
@@ -1270,7 +1344,22 @@ fn authorized(request: &HttpRequest, shared: &Shared) -> bool {
                 .find_map(|pair| pair.strip_prefix("token="))
         })
         .unwrap_or_default();
-    if !constant_time_eq(token.as_bytes(), shared.token.as_bytes()) {
+    // The page removes the token from its own URL (and so from the address
+    // bar and browser history) after its first load, keeping it only in
+    // memory and sending it in this header for every request it makes
+    // itself from then on. The query string stays accepted because it is
+    // the only way to authorize that first page load, and because
+    // `EventSource` (used for the live event stream) cannot set a custom
+    // header at all. Both checks always run, so which one matched is not
+    // observable from timing.
+    let header_token = request
+        .headers
+        .get(CAPABILITY_HEADER)
+        .map(String::as_str)
+        .unwrap_or_default();
+    let query_ok = constant_time_eq(query_token.as_bytes(), shared.token.as_bytes());
+    let header_ok = constant_time_eq(header_token.as_bytes(), shared.token.as_bytes());
+    if !(query_ok || header_ok) {
         return false;
     }
     let expected_origin = format!("http://{expected_host}");
@@ -1891,6 +1980,19 @@ fn serve_events(
             }
         }
         for entry in crate::run_journal::entries_after(project_root(&options)?, cursor)? {
+            if entry.id != cursor + 1 {
+                // The journal trimmed events between what this client last
+                // saw and what survives now (it was disconnected too long, or
+                // a very large run compacted past it). Say so explicitly
+                // rather than silently jumping the sequence.
+                let gap_payload = format!(
+                    "event: gap\ndata: {}\n\n",
+                    serde_json::json!({"after": cursor, "next": entry.id})
+                );
+                if stream.write_all(gap_payload.as_bytes()).is_err() {
+                    return Ok(());
+                }
+            }
             let serialized = serde_json::to_string(&entry.event)?;
             let payload = format!("id: {}\nevent: run\ndata: {serialized}\n\n", entry.id);
             if stream.write_all(payload.as_bytes()).is_err() {
@@ -2020,7 +2122,7 @@ fn load_project_summaries() -> Result<Vec<ProjectSummary>> {
                     .as_ref()
                     .map(|state| state.language.clone())
                     .unwrap_or_default(),
-                path: project.path,
+                path: crate::fs_util::display_path(&project.path),
                 current_step: content
                     .as_ref()
                     .map(|content| content.title.clone())
@@ -2094,8 +2196,12 @@ fn http_exchange(port: u16, request: &str) -> Option<String> {
     Some(response)
 }
 
-fn capability_token(_root: &Path) -> Result<String> {
-    let mut bytes = [0_u8; 32];
+fn capability_token() -> Result<String> {
+    random_hex_id(32)
+}
+
+fn random_hex_id(bytes_len: usize) -> Result<String> {
+    let mut bytes = vec![0_u8; bytes_len];
     getrandom::fill(&mut bytes)
         .map_err(|error| anyhow::anyhow!("operating system randomness is unavailable: {error}"))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
@@ -2119,6 +2225,7 @@ mod tests {
         Shared {
             default_project_id: None,
             token: "secret-token".to_string(),
+            probe_id: "test-probe-id".to_string(),
             session_id: "test-session".to_string(),
             port,
             clients: AtomicUsize::new(0),
@@ -2134,8 +2241,8 @@ mod tests {
 
     #[test]
     fn capability_tokens_are_random_and_fixed_length() {
-        let first = capability_token(Path::new("project")).unwrap();
-        let second = capability_token(Path::new("project")).unwrap();
+        let first = capability_token().unwrap();
+        let second = capability_token().unwrap();
         assert_eq!(first.len(), 64);
         assert_eq!(second.len(), 64);
         assert_ne!(first, second);
@@ -2201,6 +2308,44 @@ mod tests {
                 "127.0.0.1:43123",
                 Some("http://127.0.0.1:43123")
             ),
+            &shared
+        ));
+    }
+
+    #[test]
+    fn authorized_accepts_the_capability_header_in_place_of_the_query_string() {
+        // Every request the page makes after its first load sends the token
+        // as a header instead of a query parameter, so the address bar and
+        // browser history never carry it (see docs/safety.md).
+        let port = 43124;
+        let shared = test_shared(port);
+        let request_with = |target: &str, header: Option<&str>| HttpRequest {
+            method: "GET".to_string(),
+            target: target.to_string(),
+            headers: [
+                ("host".to_string(), format!("127.0.0.1:{port}")),
+                ("origin".to_string(), format!("http://127.0.0.1:{port}")),
+            ]
+            .into_iter()
+            .chain(header.map(|value| (CAPABILITY_HEADER.to_string(), value.to_string())))
+            .collect(),
+            body: Vec::new(),
+        };
+
+        assert!(authorized(
+            &request_with("/", Some("secret-token")),
+            &shared
+        ));
+        assert!(!authorized(
+            &request_with("/", Some("wrong-token")),
+            &shared
+        ));
+        assert!(!authorized(&request_with("/", None), &shared));
+        // Either credential alone is enough: the query string still works
+        // (for the initial page load and `EventSource`) even once a header
+        // is also accepted.
+        assert!(authorized(
+            &request_with("/?token=secret-token", None),
             &shared
         ));
     }

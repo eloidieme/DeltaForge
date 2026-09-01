@@ -1,10 +1,10 @@
 use std::fs;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, TcpStream};
+use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 static PROJECT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -156,6 +156,39 @@ fn wait_for_record_at(home: &Path) -> serde_json::Value {
     panic!("workbench service record was not created");
 }
 
+/// A local TCP listener that answers every request as if it were the
+/// DeltaForge service, but never knows the real `probe_id` a genuine service
+/// would have persisted alongside it. Models the D4 threat: some other local
+/// process ends up listening on a port a stale discovery record still names.
+fn spawn_impostor_service() -> (u16, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&requests);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut buffer = [0u8; 4096];
+            let read = stream.read(&mut buffer).unwrap_or(0);
+            let request_text = String::from_utf8_lossy(&buffer[..read]).to_string();
+            captured.lock().unwrap().push(request_text.clone());
+            let body = if request_text.starts_with("GET /api/v1/identity") {
+                r#"{"service":"deltaforge","api":"v1","probe_id":"impostor-does-not-know-the-real-probe-id"}"#
+            } else {
+                r#"{"service":"deltaforge","api":"v1","version":"impostor","pid":999999,"clients":0}"#
+            };
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    (port, requests)
+}
+
 fn wait_for_run_lease_release(project: &Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while deltaforge::run_lease::active(project) {
@@ -185,12 +218,11 @@ fn wait_for_new_record(project: &Path, previous_pid: u64) -> serde_json::Value {
 }
 
 fn source_event_count(project: &Path) -> usize {
-    let source = fs::read_to_string(project.join(".deltaforge/workbench-events.json")).unwrap();
-    let journal: serde_json::Value = serde_json::from_str(&source).unwrap();
-    journal["events"]
-        .as_array()
-        .unwrap()
-        .iter()
+    let source = fs::read_to_string(project.join(".deltaforge/workbench-events.jsonl")).unwrap();
+    source
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
         .filter(|entry| entry["event"]["type"] == "source_changed")
         .count()
 }
@@ -1420,6 +1452,72 @@ fn lifecycle_recovers_stale_metadata_and_replaces_an_incompatible_service() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+
+    let _ = fs::remove_dir_all(project);
+}
+
+#[test]
+fn bare_launch_refuses_a_listener_that_cannot_prove_its_identity() {
+    let _guard = workbench_test_guard();
+    let project = temp_project_path();
+    let init = deltaforge_command(&project)
+        .args([
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project.to_str().unwrap(),
+            "--no-git",
+        ])
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+
+    let (impostor_port, impostor_requests) = spawn_impostor_service();
+    let real_token = "SUPER-SECRET-CAPABILITY-TOKEN-abc123";
+    let record_path = workbench_home(&project).join("workbench.json");
+    fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+    let stale = serde_json::json!({
+        "port": impostor_port,
+        "pid": 999_999_u64,
+        "token": real_token,
+        "version": "does-not-matter-identity-is-checked-first",
+        "probe_id": "the-real-probe-id-the-impostor-does-not-know",
+    });
+    fs::write(&record_path, serde_json::to_vec(&stale).unwrap()).unwrap();
+
+    let launch = wait_for_captured_launch(spawn_captured_launch(&project, "impostor-launch"));
+    assert!(
+        launch.status.success(),
+        "{}",
+        String::from_utf8_lossy(&launch.stderr)
+    );
+
+    let captured = impostor_requests.lock().unwrap().clone();
+    assert!(
+        captured
+            .iter()
+            .any(|request| request.starts_with("GET /api/v1/identity")),
+        "the launcher must probe identity before doing anything else: {captured:?}"
+    );
+    assert!(
+        !captured.iter().any(|request| request.contains(real_token)),
+        "the capability token must never be sent to a listener that failed identity verification: {captured:?}"
+    );
+
+    let record = wait_for_new_record(&project, 999_999);
+    let final_port = record["port"].as_u64().unwrap() as u16;
+    assert_ne!(
+        final_port, impostor_port,
+        "DeltaForge must start its own service rather than trust the impostor"
+    );
+
+    let stdout = String::from_utf8_lossy(&launch.stdout);
+    assert!(
+        !stdout.contains(&impostor_port.to_string()),
+        "the learner's browser must never be pointed at the impostor's port: {stdout}"
+    );
 
     let _ = fs::remove_dir_all(project);
 }
