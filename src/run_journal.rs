@@ -13,6 +13,10 @@ use crate::fs_util::atomic_write;
 const JOURNAL_FILE: &str = "workbench-events.jsonl";
 const JOURNAL_META_FILE: &str = "workbench-events-meta.json";
 const JOURNAL_LOCK_FILE: &str = "workbench-events.lock";
+const QUARANTINE_PREFIX: &str = "workbench-events.corrupt-";
+/// How many quarantined copies of a corrupt journal to keep. Enough to
+/// diagnose a recurring corruption, bounded so it cannot accumulate forever.
+const MAX_QUARANTINED_JOURNALS: usize = 5;
 const MAX_EVENTS: usize = 256;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_STRING_BYTES: usize = 16 * 1024;
@@ -264,13 +268,51 @@ fn quarantine(path: &Path) -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let backup = path.with_file_name(format!("workbench-events.corrupt-{stamp}.json"));
+    let backup = path.with_file_name(format!("{QUARANTINE_PREFIX}{stamp}.json"));
     fs::rename(path, &backup).with_context(|| {
         format!(
             "failed to quarantine corrupt event journal {}",
             path.display()
         )
-    })
+    })?;
+    // Quarantined journals are diagnostic keepsakes, not durable state. Without
+    // a cap, a repeatedly corrupted journal leaves one file per occurrence in
+    // `.deltaforge/` forever.
+    prune_quarantined(path);
+    Ok(())
+}
+
+/// Keep only the `MAX_QUARANTINED_JOURNALS` most recent quarantine files.
+/// Best-effort: failing to prune must never turn into a failure to recover the
+/// journal, which is the operation the learner is actually waiting on.
+fn prune_quarantined(path: &Path) {
+    let Some(dir) = path.parent() else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut quarantined = entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            // Order by the parsed stamp, not the filename: string ordering
+            // would put a shorter number after a longer one and drop the
+            // wrong file.
+            let stamp = name
+                .strip_prefix(QUARANTINE_PREFIX)?
+                .strip_suffix(".json")?
+                .parse::<u128>()
+                .ok()?;
+            Some((stamp, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    if quarantined.len() <= MAX_QUARANTINED_JOURNALS {
+        return;
+    }
+    quarantined.sort_by_key(|(stamp, _)| *stamp);
+    let excess = quarantined.len() - MAX_QUARANTINED_JOURNALS;
+    for (_, stale) in quarantined.into_iter().take(excess) {
+        let _ = fs::remove_file(stale);
+    }
 }
 
 fn parse_lines(source: &[u8]) -> Option<Vec<JournalEntry>> {
@@ -412,6 +454,55 @@ mod tests {
                         .to_string_lossy()
                         .starts_with("workbench-events.corrupt-")
                 })
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A journal that keeps getting corrupted must not leave one quarantine
+    /// file per occurrence behind forever.
+    #[test]
+    fn quarantined_journals_are_capped_keeping_the_newest() {
+        let root = temp_root();
+        fs::create_dir_all(root.join(".deltaforge")).unwrap();
+        let quarantine_stamps = || {
+            let mut stamps = fs::read_dir(root.join(".deltaforge"))
+                .unwrap()
+                .flatten()
+                .filter_map(|entry| {
+                    entry
+                        .file_name()
+                        .into_string()
+                        .ok()?
+                        .strip_prefix(QUARANTINE_PREFIX)?
+                        .strip_suffix(".json")?
+                        .parse::<u128>()
+                        .ok()
+                })
+                .collect::<Vec<_>>();
+            stamps.sort_unstable();
+            stamps
+        };
+
+        for _ in 0..MAX_QUARANTINED_JOURNALS + 4 {
+            fs::write(journal_path(&root), "not json").unwrap();
+            append(&root, &RunEvent::ProjectStateChanged).unwrap();
+        }
+        let stamps = quarantine_stamps();
+        assert_eq!(
+            stamps.len(),
+            MAX_QUARANTINED_JOURNALS,
+            "quarantine files must be capped, got {stamps:?}"
+        );
+
+        // The survivors must be the newest: keeping an older stamp over a newer
+        // one would discard the evidence closest to the failure.
+        fs::write(journal_path(&root), "not json").unwrap();
+        append(&root, &RunEvent::ProjectStateChanged).unwrap();
+        let after = quarantine_stamps();
+        assert_eq!(after.len(), MAX_QUARANTINED_JOURNALS);
+        assert!(
+            !after.contains(&stamps[0]),
+            "the oldest quarantine file must be the one dropped"
         );
         let _ = fs::remove_dir_all(root);
     }

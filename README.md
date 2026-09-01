@@ -116,6 +116,9 @@ deltaforge validate-pack example --strict
 `deltaforge-pack-mcp` is a stdio MCP server exposing the same operations to an AI agent.
 It returns structured `ok`/`blocked` reports with problems and next actions, so an agent
 creates packs through scaffolding and constrained edits rather than guessing the format.
+It is maintainer tooling that runs at your own privilege level and does not confine pack
+paths, so never expose it to a client you trust less than your own shell — see the trust
+boundary in [docs/authoring-packs.md](docs/authoring-packs.md).
 
 Reference solutions under `tools/reference_solutions/` prove the bundled packs are
 passable. They are never copied into a learner's project.

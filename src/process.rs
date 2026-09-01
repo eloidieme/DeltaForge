@@ -30,9 +30,11 @@ pub struct MeasuredOutput {
     /// Wall-clock execution time beginning immediately after the OS creates
     /// the child, excluding DeltaForge's command construction and spawn call.
     pub elapsed: Duration,
-    /// Approximate peak resident set size of the child process, sampled from
-    /// the poll loop (Linux `VmHWM`, macOS `proc_pid_rusage` resident size,
-    /// Windows `PeakWorkingSetSize`). `None` when sampling is unsupported on
+    /// Peak memory of the child process, read from the kernel's own
+    /// high-water mark (Linux `VmHWM`, macOS
+    /// `ri_lifetime_max_phys_footprint`, Windows `PeakWorkingSetSize`) rather
+    /// than accumulated from instantaneous samples, so a spike shorter than
+    /// the poll interval still counts. `None` when sampling is unsupported on
     /// this OS or every sample failed; a very short-lived process may exit
     /// before the first sample lands.
     pub peak_rss_bytes: Option<u64>,
@@ -271,9 +273,12 @@ fn run_command_impl(
     })
 }
 
-/// Best-effort snapshot of the child's memory usage. Linux reports the kernel
-/// high-water mark directly; macOS reports current resident size (the caller's
-/// poll loop keeps the max); Windows reports the peak working set.
+/// Best-effort read of the child's peak memory. Every platform reports a true
+/// kernel-maintained high-water mark, not an instantaneous sample: Linux's
+/// `VmHWM`, macOS's `ri_lifetime_max_phys_footprint`, and Windows'
+/// `PeakWorkingSetSize`. That matters because the caller polls — an
+/// instantaneous reading would miss any allocation spike that begins and ends
+/// between two polls, and would report a number quietly lower than the truth.
 #[cfg(target_os = "linux")]
 fn sample_peak_rss(child: &std::process::Child) -> Option<u64> {
     let status = std::fs::read_to_string(format!("/proc/{}/status", child.id())).ok()?;
@@ -286,10 +291,16 @@ fn sample_peak_rss(child: &std::process::Child) -> Option<u64> {
 
 #[cfg(target_os = "macos")]
 fn sample_peak_rss(child: &std::process::Child) -> Option<u64> {
-    // Mirrors struct rusage_info_v0 from <libproc.h> (flavor RUSAGE_INFO_V0).
+    // Mirrors struct rusage_info_v4 from <sys/resource.h>. V4 is the earliest
+    // flavor carrying ri_lifetime_max_phys_footprint, the kernel's own
+    // high-water mark; the v0 flavor used before only offers
+    // ri_resident_size, which is the instantaneous value and so silently
+    // under-reports any spike shorter than the poll interval. The whole struct
+    // is transcribed because proc_pid_rusage fills it by flavor, so every
+    // preceding field has to occupy exactly its C offset.
     #[repr(C)]
     #[derive(Default)]
-    struct RusageInfoV0 {
+    struct RusageInfoV4 {
         ri_uuid: [u8; 16],
         ri_user_time: u64,
         ri_system_time: u64,
@@ -301,16 +312,49 @@ fn sample_peak_rss(child: &std::process::Child) -> Option<u64> {
         ri_phys_footprint: u64,
         ri_proc_start_abstime: u64,
         ri_proc_exit_abstime: u64,
+        ri_child_user_time: u64,
+        ri_child_system_time: u64,
+        ri_child_pkg_idle_wkups: u64,
+        ri_child_interrupt_wkups: u64,
+        ri_child_pageins: u64,
+        ri_child_elapsed_abstime: u64,
+        ri_diskio_bytesread: u64,
+        ri_diskio_byteswritten: u64,
+        ri_cpu_time_qos_default: u64,
+        ri_cpu_time_qos_maintenance: u64,
+        ri_cpu_time_qos_background: u64,
+        ri_cpu_time_qos_utility: u64,
+        ri_cpu_time_qos_legacy: u64,
+        ri_cpu_time_qos_user_initiated: u64,
+        ri_cpu_time_qos_user_interactive: u64,
+        ri_billed_system_time: u64,
+        ri_serviced_system_time: u64,
+        ri_logical_writes: u64,
+        ri_lifetime_max_phys_footprint: u64,
+        ri_instructions: u64,
+        ri_cycles: u64,
+        ri_billed_energy: u64,
+        ri_serviced_energy: u64,
+        ri_interval_max_phys_footprint: u64,
+        ri_runnable_time: u64,
     }
-    const RUSAGE_INFO_V0: i32 = 0;
+    const RUSAGE_INFO_V4: i32 = 4;
     unsafe extern "C" {
-        fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut RusageInfoV0) -> i32;
+        fn proc_pid_rusage(pid: i32, flavor: i32, buffer: *mut RusageInfoV4) -> i32;
     }
 
     let pid = i32::try_from(child.id()).ok()?;
-    let mut info = RusageInfoV0::default();
-    let result = unsafe { proc_pid_rusage(pid, RUSAGE_INFO_V0, &mut info) };
-    (result == 0 && info.ri_resident_size > 0).then_some(info.ri_resident_size)
+    let mut info = RusageInfoV4::default();
+    let result = unsafe { proc_pid_rusage(pid, RUSAGE_INFO_V4, &mut info) };
+    if result != 0 {
+        return None;
+    }
+    // Fall back to the instantaneous reading only if the kernel gave no
+    // high-water mark at all, so an unexpected zero degrades to the old
+    // behavior rather than to "not measured".
+    [info.ri_lifetime_max_phys_footprint, info.ri_resident_size]
+        .into_iter()
+        .find(|value| *value > 0)
 }
 
 #[cfg(windows)]
@@ -458,6 +502,38 @@ mod tests {
         assert!(
             measured.peak_rss_bytes.unwrap_or(0) > 0,
             "expected a peak memory sample on this OS"
+        );
+    }
+
+    /// "Peak mem" is presented to learners as a real figure they tune against,
+    /// so it has to track actual allocation rather than merely be non-zero.
+    /// `dd` allocates a buffer of exactly one block, so a 64 MiB block size
+    /// makes the expected magnitude known rather than machine-dependent. The
+    /// size is spelled in bytes because the `64m` suffix is BSD-only — GNU
+    /// `dd` rejects the lowercase form.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn peak_memory_tracks_the_size_actually_allocated() {
+        let measured = run_command_measured(
+            &[
+                "dd".to_string(),
+                "if=/dev/zero".to_string(),
+                "of=/dev/null".to_string(),
+                "bs=67108864".to_string(),
+                "count=2".to_string(),
+            ],
+            Path::new("/"),
+            30_000,
+            None,
+            &BTreeMap::new(),
+            None,
+        )
+        .unwrap();
+        assert!(measured.output.status.success());
+        let peak = measured.peak_rss_bytes.unwrap_or(0);
+        assert!(
+            peak >= 32 * 1024 * 1024,
+            "a 64 MiB buffer must show up in the peak, got {peak} bytes"
         );
     }
 

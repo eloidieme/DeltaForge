@@ -26,6 +26,26 @@ DeltaForge also ships a stdio MCP server:
 deltaforge-pack-mcp
 ```
 
+### Trust boundary
+
+This server is maintainer tooling. It is meant to be started by an MCP host on
+the author's own machine, driven by an agent already running at the author's
+privilege level, and it is built on that assumption: `packs_dir` and the other
+pack-root arguments are ordinary filesystem paths taken from the caller, with no
+containment to any particular directory. Relative paths *within* a pack are
+checked, but nothing stops a caller from naming a pack root anywhere the
+process can read or write.
+
+So a caller that can reach these tools can read and write files as you. Do not
+expose `deltaforge-pack-mcp` to a client you trust less than your own shell: do
+not put it behind a network transport, do not attach it to a shared or
+multi-tenant agent, and do not point it at packs whose content comes from
+somewhere you would not run code from. Learners never need it — nothing in the
+learner-facing flow (`init`, `test`, `bench`, `commit`, the workbench) uses this
+server.
+
+### Tools
+
 It exposes pack-authoring tools for AI agents:
 
 - `inspect_packs`

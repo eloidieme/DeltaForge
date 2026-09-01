@@ -31,6 +31,11 @@ const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// switches to the terminal notice the delay.
 const IDLE_SOURCE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// How many accepted-but-unauthenticated connections may be in flight at once.
+/// Far above what a browser opens for the workbench (a handful of fetches plus
+/// one SSE stream per tab, and the stream stops counting as soon as it
+/// authenticates), and far below unbounded.
+const MAX_PRE_AUTH_CONNECTIONS: usize = 128;
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_BODY_BYTES: usize = 8 * 1024;
 /// Header the page sends the capability token in once it has loaded, instead
@@ -109,6 +114,58 @@ struct Shared {
     idle_timeout: Duration,
     focus_revision: AtomicUsize,
     focus_target: Mutex<String>,
+    /// Connections accepted but not yet past the token check. Bounded by
+    /// `MAX_PRE_AUTH_CONNECTIONS`; see `PreAuthSlot`.
+    pre_auth: AtomicUsize,
+}
+
+/// A permit to occupy one of the bounded pre-authentication slots, released
+/// the moment a connection proves it holds the capability token.
+///
+/// The service accepts a connection and spawns a thread for it before knowing
+/// whether the peer is the learner's browser or anything else that can reach
+/// loopback, so without a bound an unauthenticated peer can make the service
+/// hold arbitrarily many threads and sockets just by connecting. A plain
+/// worker pool is the wrong shape here: `/api/v1/events` is a long-lived SSE
+/// stream that holds its thread for as long as the tab is open, so a fixed
+/// pool would be filled by legitimate readers and stop serving anyone. Bounding
+/// only the *unauthenticated* window keeps that from happening — an authorized
+/// client gives its slot back immediately and then streams for as long as it
+/// likes, and the cap it left behind still applies to everyone who has not
+/// proved anything.
+struct PreAuthSlot {
+    shared: Arc<Shared>,
+    held: bool,
+}
+
+impl PreAuthSlot {
+    /// Reserve a slot, or return `None` when the cap is already reached.
+    fn reserve(shared: &Arc<Shared>) -> Option<Self> {
+        let previous = shared
+            .pre_auth
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                (count < MAX_PRE_AUTH_CONNECTIONS).then_some(count + 1)
+            });
+        previous.ok().map(|_| Self {
+            shared: Arc::clone(shared),
+            held: true,
+        })
+    }
+
+    /// Give the slot back now: this connection has authenticated, so whatever
+    /// it does next is a legitimate client's business and must not be counted
+    /// against the unauthenticated bound.
+    fn release(&mut self) {
+        if std::mem::take(&mut self.held) {
+            self.shared.pre_auth.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for PreAuthSlot {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 #[derive(Debug)]
@@ -599,6 +656,7 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
         idle_timeout,
         focus_revision: AtomicUsize::new(0),
         focus_target: Mutex::new("/projects".to_string()),
+        pre_auth: AtomicUsize::new(0),
     });
     spawn_idle_watchdog(Arc::clone(&shared));
     spawn_source_watcher(Arc::clone(&shared));
@@ -607,9 +665,17 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
         let Ok(stream) = stream else {
             continue;
         };
+        // Shed the connection before spending a thread on it. Closing without
+        // a reply is deliberate: the accept loop is single-threaded, so writing
+        // even a short 503 to a peer that never reads would stall every
+        // subsequent accept — exactly the outcome the cap exists to prevent.
+        let Some(slot) = PreAuthSlot::reserve(&shared) else {
+            drop(stream);
+            continue;
+        };
         let shared = Arc::clone(&shared);
         std::thread::spawn(move || {
-            let _ = handle_connection(stream, &shared);
+            let _ = handle_connection(stream, &shared, slot);
         });
     }
     Ok(())
@@ -679,7 +745,11 @@ fn spawn_idle_watchdog(shared: Arc<Shared>) {
         }
     });
 }
-fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> {
+fn handle_connection(
+    mut stream: TcpStream,
+    shared: &Arc<Shared>,
+    mut pre_auth: PreAuthSlot,
+) -> Result<()> {
     stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
     let Some(request) = read_request(&mut stream)? else {
         return Ok(());
@@ -725,6 +795,10 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
             r#"{"error":"forbidden"}"#,
         );
     }
+    // Past the token check. Everything below may block for as long as the
+    // client wants (`/api/v1/events` streams until the tab closes), so the
+    // pre-authentication slot has to come back now rather than at return.
+    pre_auth.release();
 
     if request.method != "GET" && request.method != "POST" {
         return respond(
@@ -2236,7 +2310,49 @@ mod tests {
             idle_timeout: IDLE_TIMEOUT,
             focus_revision: AtomicUsize::new(0),
             focus_target: Mutex::new("/projects".to_string()),
+            pre_auth: AtomicUsize::new(0),
         }
+    }
+
+    /// Accepting a connection costs a thread and a socket before the peer has
+    /// proved anything, so the unauthenticated window has to be bounded — and
+    /// authenticating has to hand the slot straight back, or a few open tabs
+    /// holding SSE streams would exhaust the bound and lock everyone out.
+    #[test]
+    fn pre_authentication_connections_are_bounded_and_freed_by_authenticating() {
+        let shared = Arc::new(test_shared(0));
+
+        let mut slots = (0..MAX_PRE_AUTH_CONNECTIONS)
+            .map(|index| {
+                PreAuthSlot::reserve(&shared)
+                    .unwrap_or_else(|| panic!("slot {index} within the cap must be available"))
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            PreAuthSlot::reserve(&shared).is_none(),
+            "a connection over the cap must be shed, not accepted"
+        );
+
+        // Authenticating returns the slot, so a long-lived authorized stream
+        // never occupies the unauthenticated bound.
+        slots[0].release();
+        let recovered = PreAuthSlot::reserve(&shared).expect("released slot must be reusable");
+        assert!(PreAuthSlot::reserve(&shared).is_none());
+
+        // Releasing twice must not double-count the slot back.
+        slots[1].release();
+        slots[1].release();
+        let _one = PreAuthSlot::reserve(&shared).expect("slot freed once must be reusable");
+        assert!(
+            PreAuthSlot::reserve(&shared).is_none(),
+            "a second release of the same slot must not manufacture capacity"
+        );
+
+        // Dropping a connection's guard frees its slot too, so a peer that
+        // stalls and times out cannot leak the bound away.
+        drop(recovered);
+        drop(slots);
+        assert!(PreAuthSlot::reserve(&shared).is_some());
     }
 
     #[test]
@@ -2256,7 +2372,12 @@ mod tests {
         let shared_for_server = Arc::clone(&shared);
         let server = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            handle_connection(stream, &shared_for_server).unwrap();
+            handle_connection(
+                stream,
+                &shared_for_server,
+                PreAuthSlot::reserve(&shared_for_server).unwrap(),
+            )
+            .unwrap();
         });
 
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
@@ -2415,7 +2536,12 @@ mod tests {
         let shared_for_server = Arc::clone(&shared);
         let server = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            handle_connection(stream, &shared_for_server).unwrap();
+            handle_connection(
+                stream,
+                &shared_for_server,
+                PreAuthSlot::reserve(&shared_for_server).unwrap(),
+            )
+            .unwrap();
         });
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
         let request = format!(

@@ -88,7 +88,7 @@ Benchmark commands are direct argument vectors and do not receive stdin. A comma
 
 ## Peak memory
 
-`peak_memory_mb` is a best-effort, approximate peak resident set size of the benchmarked process, taken as the maximum across a point's measured iterations. It is sampled from the runner's 1 ms benchmark poll loop: Linux reads the kernel high-water mark (`VmHWM` in `/proc/<pid>/status`), macOS samples resident size via `proc_pid_rusage`, and Windows reads `PeakWorkingSetSize`. It is `null` on other platforms, when every sample fails, or when the process exits before the first sample lands — a failed sample never fails the benchmark. Treat it as indicative (sampling granularity, OS accounting differences), not as an exact measurement.
+`peak_memory_mb` is the peak memory of the benchmarked process, taken as the maximum across a point's measured iterations. Every supported platform reports a high-water mark the kernel maintains itself, rather than an instantaneous reading: Linux uses `VmHWM` from `/proc/<pid>/status`, macOS uses `ri_lifetime_max_phys_footprint` from `proc_pid_rusage`, and Windows uses `PeakWorkingSetSize`. Because the value is a high-water mark, the runner's 1 ms poll interval does not bound its accuracy — an allocation spike that begins and ends between two polls is still counted. It is `null` on other platforms, when every sample fails, or when the process exits before the first sample lands; a failed sample never fails the benchmark. The three platforms account for memory differently (macOS's phys_footprint is not the same quantity as Linux's resident high-water mark), so compare figures across machines only with that in mind.
 
 ## Comparing runs
 

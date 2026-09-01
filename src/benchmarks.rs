@@ -47,6 +47,10 @@ impl BenchmarkOptions {
 }
 
 pub const HISTORY_SCHEMA_VERSION: u64 = 2;
+/// Upper bound on records kept in `benchmark_history.json`. Generous enough to
+/// hold a long comparison trail across every stage and matrix point, bounded so
+/// the file cannot grow without limit over a project's life.
+const MAX_HISTORY_RECORDS: usize = 1000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1006,11 +1010,24 @@ pub fn append_history(context: &ProjectContext, records: &[BenchmarkRecord]) -> 
     let path = history_path(context);
     let mut runs = read_history(&path)?;
     runs.extend_from_slice(records);
+    trim_history(&mut runs);
     let history = VersionedHistory {
         schema_version: HISTORY_SCHEMA_VERSION,
         runs,
     };
     atomic_write(&path, serde_json::to_string_pretty(&history)?)
+}
+
+/// Bound the history to `MAX_HISTORY_RECORDS` by dropping the oldest records.
+/// Every consumer — the comparison against the prior run, the latest-per-gate
+/// views, the report — reads from the newest end, so this bounds the file
+/// without changing what any of them see. A single `bench --matrix` run
+/// appends one record per benchmark, so the cap counts records, not runs.
+fn trim_history(runs: &mut Vec<BenchmarkRecord>) {
+    if runs.len() > MAX_HISTORY_RECORDS {
+        let excess = runs.len() - MAX_HISTORY_RECORDS;
+        runs.drain(..excess);
+    }
 }
 
 /// Read benchmark history, converting the legacy bare-array format (written
@@ -1269,6 +1286,32 @@ mod tests {
         assert_eq!(point.params.get("threads").map(String::as_str), Some("4"));
         assert_eq!(point.peak_memory_mb, Some(64.5));
         assert_eq!(point.params_label(), "threads=4");
+    }
+
+    /// `benchmark_history.json` is rewritten in full on every save, so an
+    /// uncapped history is a file that grows for the life of the project.
+    #[test]
+    fn history_is_capped_by_dropping_the_oldest_records() {
+        let mut runs = (0..MAX_HISTORY_RECORDS + 25)
+            .map(|index| BenchmarkRecord {
+                benchmark: format!("bench-{index}"),
+                ..sample_record()
+            })
+            .collect::<Vec<_>>();
+        trim_history(&mut runs);
+
+        assert_eq!(runs.len(), MAX_HISTORY_RECORDS);
+        // The newest record must survive: it is the one every consumer reads.
+        assert_eq!(
+            runs.last().unwrap().benchmark,
+            format!("bench-{}", MAX_HISTORY_RECORDS + 24)
+        );
+        assert_eq!(runs.first().unwrap().benchmark, "bench-25");
+
+        // A history under the cap is left exactly as it is.
+        let mut short = vec![sample_record(), sample_record()];
+        trim_history(&mut short);
+        assert_eq!(short.len(), 2);
     }
 
     #[test]
