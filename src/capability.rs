@@ -73,6 +73,10 @@ pub struct RoadmapCapability {
     pub summary: String,
     pub position: usize,
     pub status: RoadmapStatus,
+    /// Whether this is the step the learner is on. Orthogonal to `status`: a
+    /// step that has passed but has not been advanced past is both complete
+    /// and current, and the interface needs to say both.
+    pub current: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -413,6 +417,7 @@ fn load_roadmap(context: &ProjectContext) -> Result<Vec<RoadmapCapability>> {
                 summary: first_paragraph(required_section(&sections, "Goal")?),
                 position: index + 1,
                 status,
+                current: stage.id == context.state.current_stage,
             })
         })
         .collect()

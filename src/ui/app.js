@@ -388,9 +388,11 @@ function renderOverview() {
   $("#overview-name").textContent = overview.name;
   $("#overview-description").textContent = overview.description;
   $("#overview-topics").replaceChildren(...(overview.topics || []).map((topic) => text(element("span", "tag"), topic)));
-  const current = content.roadmap.find((step) => step.status === "current");
+  const current = content.roadmap.find((step) => step.current);
   $("#overview-progress").textContent = `${completedSteps()} of ${content.roadmap.length} steps complete`;
-  $("#overview-current").textContent = current ? `Next: ${current.title}` : "Every project step is complete.";
+  $("#overview-current").textContent = current
+    ? (current.status === "complete" ? `Ready to continue past: ${current.title}` : `Next: ${current.title}`)
+    : "Every project step is complete.";
   $("#overview-step-count").textContent = `${content.roadmap.length} project steps`;
   renderRail("#overview-rail");
   $("#overview-guide").replaceChildren(...(overview.sections || []).map(renderGuideSection));
@@ -425,8 +427,10 @@ function gateMarkerFor(stageId) {
 
 function renderRail(selector) {
   $(selector).replaceChildren(...content.roadmap.map((step) => {
-    const row = element("li", `rail-step ${step.status}`);
-    const node = text(element("span", "rail-node"), step.status === "complete" ? "✓" : step.status === "current" ? "●" : "");
+    // A passed step the learner has not yet advanced past is both complete and
+    // where they are, so the rail carries both marks.
+    const row = element("li", `rail-step ${step.status}${step.current ? " here" : ""}`);
+    const node = text(element("span", "rail-node"), step.status === "complete" ? "✓" : step.current ? "●" : "");
     node.setAttribute("aria-hidden", "true");
     const copy = element("div", "rail-copy");
     const title = element("div", "rail-title");
@@ -442,7 +446,10 @@ function renderRail(selector) {
     copy.append(title, text(element("div", "rail-summary"), step.summary));
     row.append(node, copy);
     // The status word is what a screen reader gets; the node glyph is decorative.
-    row.setAttribute("aria-label", `Step ${step.position}, ${step.title}, ${step.status}`);
+    row.setAttribute(
+      "aria-label",
+      `Step ${step.position}, ${step.title}, ${step.status}${step.current ? ", current step" : ""}`,
+    );
     return row;
   }));
 }
@@ -451,8 +458,10 @@ function renderRail(selector) {
 
 function renderBuild() {
   renderRail("#build-rail");
-  const current = content.roadmap.find((step) => step.status === "current");
-  $("#step-position").textContent = current ? `Step ${current.position} of ${content.roadmap.length}` : "Project complete";
+  const current = content.roadmap.find((step) => step.current);
+  $("#step-position").textContent = current
+    ? `Step ${current.position} of ${content.roadmap.length}`
+    : "Project complete";
   $("#instruction-title").textContent = content.title;
   $("#instruction-summary").textContent = content.mission;
   // Each authored section goes into the panel named for it. A pack that adds
@@ -623,13 +632,12 @@ function renderMeter() {
 
 function renderPerformance() {
   const performance = state.performance || {};
-  const stepTitle = content.title;
-  $("#performance-title").textContent = performance.has_benchmarks
-    ? `Measure “${stepTitle}”`
-    : `“${stepTitle}” is not measured`;
+  // The heading is the step's own name. Several step titles already begin with
+  // a verb, so prefixing one here reads as a stutter.
+  $("#performance-title").textContent = content.title;
   $("#performance-lede").textContent = performance.has_benchmarks
-    ? "Benchmarks run against a fixed corpus on this machine. Results are saved so later runs can be compared with earlier ones."
-    : "This step has no benchmark. Measured steps are listed below.";
+    ? "Benchmarks run against a fixed corpus on this machine. Results are saved, so every later run is compared with the one before it."
+    : "This step has no benchmark. The steps that are measured are listed below.";
 
   const running = live.active && live.kind === "benchmarks";
   const otherRunning = Boolean(state.active_job) && !running;
@@ -710,8 +718,8 @@ function renderMeasurements(performance) {
     empty.append(
       text(element("h2"), performance.has_benchmarks ? "No measurement saved yet" : "Nothing to measure here"),
       text(element("p"), performance.has_benchmarks
-        ? "Run the benchmark and the numbers will appear here, with a comparison against every later run."
-        : "Steps that carry a benchmark are listed below."),
+        ? "Run the benchmark and the numbers appear here. Every later run is then compared against the one before it."
+        : "The steps that carry a benchmark are listed below."),
     );
     container.replaceChildren(empty);
     $("#measurement-timestamp").textContent = "";
@@ -767,7 +775,7 @@ function renderPerformanceRoadmap(performance) {
   if (section.hidden) return;
   $("#performance-roadmap").replaceChildren(...measured.map((marker) => {
     const step = content.roadmap.find((candidate) => candidate.id === marker.stage_id);
-    const row = element("li", `rail-step ${step ? step.status : "upcoming"}`);
+    const row = element("li", `rail-step ${step ? step.status : "upcoming"}${step && step.current ? " here" : ""}`);
     const node = text(element("span", "rail-node"), step && step.status === "complete" ? "✓" : "");
     node.setAttribute("aria-hidden", "true");
     const copy = element("div", "rail-copy");

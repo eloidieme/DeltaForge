@@ -601,6 +601,24 @@ pub fn create_project(
     })
 }
 
+/// How long a learner action waits for the run lease before giving up.
+///
+/// The source watcher takes the lease briefly every poll interval to observe
+/// project changes, so an action that failed the instant the lease was busy
+/// could be refused for a reason that had nothing to do with the learner —
+/// pressing *Begin next step* at the wrong moment would report that checks
+/// were running when none were. Waiting is bounded so a genuinely active run
+/// still produces a prompt, honest refusal.
+const LEARNER_ACTION_LEASE_WAIT: std::time::Duration = std::time::Duration::from_millis(750);
+
+fn acquire_for_learner_action(
+    root: &Path,
+    doing: &'static str,
+) -> Result<crate::run_lease::RunLease> {
+    crate::run_lease::RunLease::acquire_with_timeout(root, LEARNER_ACTION_LEASE_WAIT)
+        .with_context(|| format!("could not {doing} while checks are running"))
+}
+
 pub fn load_project_health(options: &GlobalOptions) -> Result<ProjectHealth> {
     let root = crate::context::locate_project_root(options)?;
     match ProjectContext::load(options) {
@@ -667,8 +685,7 @@ pub fn repin_current_pack(options: &GlobalOptions) -> Result<ProjectHealth> {
         bail!("the project does not require pack recovery");
     }
     let root = crate::context::locate_project_root(options)?;
-    let _lease = crate::run_lease::RunLease::acquire(&root)
-        .context("could not recover the pack while checks are running")?;
+    let _lease = acquire_for_learner_action(&root, "recover the pack")?;
     let mut context = ProjectContext::load_unpinned(options)?;
     context.state.pack_version = context.pack.manifest.version.clone();
     context.state.pack_source = pack_source_label(&context.pack.root);
@@ -811,8 +828,7 @@ pub fn load_capability_content(
 
 pub fn reveal_next_hint(options: &GlobalOptions) -> Result<crate::capability::CapabilityContent> {
     let mut context = ProjectContext::load(options)?;
-    let _lease = crate::run_lease::RunLease::acquire(&context.root)
-        .context("could not update help while checks are running")?;
+    let _lease = acquire_for_learner_action(&context.root, "update help")?;
     // Serialize every project-state mutation with test runs, then reload so a
     // queued help request cannot overwrite state saved by the run it followed.
     context = ProjectContext::load(options)?;
@@ -847,8 +863,7 @@ pub fn reveal_next_hint(options: &GlobalOptions) -> Result<crate::capability::Ca
 
 pub fn begin_next_capability(options: &GlobalOptions) -> Result<WorkbenchState> {
     let context = ProjectContext::load(options)?;
-    let _lease = crate::run_lease::RunLease::acquire(&context.root)
-        .context("could not advance while checks are running")?;
+    let _lease = acquire_for_learner_action(&context.root, "advance")?;
     let mut context = ProjectContext::load(options)?;
     let current_stage = context.state.current_stage.clone();
     if !context.state.is_completed(&current_stage) {
@@ -1184,8 +1199,7 @@ pub fn create_stage_snapshot(
 ) -> Result<crate::snapshot::SnapshotOutcome> {
     let context = ProjectContext::load(options)?;
     crate::snapshot::ensure_git_repository(&context.root)?;
-    let _lease = crate::run_lease::RunLease::acquire(&context.root)
-        .context("could not snapshot while checks are running")?;
+    let _lease = acquire_for_learner_action(&context.root, "snapshot")?;
     let context = ProjectContext::load(options)?;
     let stage = context
         .pack
@@ -1437,8 +1451,7 @@ fn record_learner_note(
         bail!("write a prediction or skip it");
     }
     let context = ProjectContext::load(options)?;
-    let _lease = crate::run_lease::RunLease::acquire(&context.root)
-        .context("could not save the note while checks are running")?;
+    let _lease = acquire_for_learner_action(&context.root, "save the note")?;
     let mut context = ProjectContext::load(options)?;
     let stage_id = context.state.current_stage.clone();
     match kind {

@@ -72,6 +72,18 @@ or `deltaforge next` in **thirty-nine places** across the four packs. Every one 
 dead end for a reader in the browser. Decision 4 had been made and the content had not
 been swept for it.
 
+### Two defects the browser journey test found on its own
+
+Reloading the Performance page returned 404. The route was added to the page's own
+router and never to the service's, so in-app navigation worked and a bookmark or a
+refresh did not. A test now pins the two lists against each other.
+
+Under a full parallel test run, *Begin next step* intermittently reported that checks
+were running when none were. The source watcher takes the run lease briefly on every
+poll, and five learner actions failed the instant the lease was busy rather than waiting
+for it. They now wait, briefly and boundedly, so a genuinely active run still produces a
+prompt refusal.
+
 ### Three refusals nobody had specified
 
 Creation's path policy needed answers to questions the contract did not raise: a project

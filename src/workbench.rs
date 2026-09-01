@@ -666,12 +666,7 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
             "text/html; charset=utf-8",
             &workbench_html(&shared.token),
         ),
-        ("GET", route)
-            if route.starts_with("/projects/")
-                && (route.ends_with("/overview")
-                    || route.ends_with("/build")
-                    || route.ends_with("/runs")) =>
-        {
+        ("GET", route) if project_page_route(route) => {
             let project_id = route.split('/').nth(2).unwrap_or_default();
             if crate::project_registry::resolve(project_id).is_err() {
                 return respond(
@@ -1126,6 +1121,19 @@ fn handle_connection(mut stream: TcpStream, shared: &Arc<Shared>) -> Result<()> 
             r#"{"error":"not_found"}"#,
         ),
     }
+}
+
+/// The project pages the browser can be pointed at directly. Every route the
+/// page's own router understands must be here too, or a reload or a bookmark
+/// on that page returns 404 while in-app navigation works.
+const PROJECT_PAGES: [&str; 4] = ["overview", "build", "performance", "runs"];
+
+fn project_page_route(route: &str) -> bool {
+    let mut parts = route.strip_prefix("/projects/").unwrap_or("").split('/');
+    let (Some(project), Some(page), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !project.is_empty() && PROJECT_PAGES.contains(&page)
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<Option<HttpRequest>> {
@@ -1935,11 +1943,7 @@ fn load_project_summaries() -> Result<Vec<ProjectSummary>> {
             let content = application::load_capability_content(&options).ok();
             let current_position = content
                 .as_ref()
-                .and_then(|content| {
-                    content.roadmap.iter().find(|step| {
-                        matches!(step.status, crate::capability::RoadmapStatus::Current)
-                    })
-                })
+                .and_then(|content| content.roadmap.iter().find(|step| step.current))
                 .map_or(0, |step| step.position);
             let healthy = matches!(health.status, application::ProjectHealthStatus::Healthy);
             Ok(ProjectSummary {
@@ -2278,6 +2282,23 @@ mod tests {
         ] {
             assert!(html.contains(route), "page never calls {route}");
         }
+
+        // Every project page the page's own router understands must also be a
+        // route the service serves, or a reload on that page returns 404.
+        for page in PROJECT_PAGES {
+            assert!(
+                html.contains(page),
+                "the page router does not know about {page}"
+            );
+            assert!(
+                project_page_route(&format!("/projects/some-id/{page}")),
+                "the service does not serve /projects/<id>/{page}"
+            );
+        }
+        assert!(!project_page_route("/projects//build"));
+        assert!(!project_page_route("/projects/some-id/build/extra"));
+        assert!(!project_page_route("/projects/some-id/unknown"));
+        assert!(!project_page_route("/elsewhere/some-id/build"));
 
         // Light and dark are both first-class, and motion respects the
         // learner's preference.
