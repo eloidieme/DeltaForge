@@ -64,7 +64,7 @@ x-mode: KeepThisCase
 
 ## Success criteria
 
-All `deltaforge test` cases pass and each printed line represents exactly one valid input header.
+Every check for this stage passes and each printed line represents exactly one valid input header.
 
 ## Non-goals
 

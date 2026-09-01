@@ -77,7 +77,7 @@ Both logs recover `alpha` as `three` and `beta` as `two`.
 
 ## Success criteria
 
-All `deltaforge test` cases pass, replaying input and output yields equal live state, and the compaction benchmark completes.
+Every check for this stage passes, replaying input and output yields equal live state, and the compaction benchmark completes.
 
 ### Reading the benchmark
 

@@ -52,7 +52,7 @@ The exact surrounding diagnostic may vary, but the process fails and identifies 
 
 ## Success criteria
 
-All `deltaforge test` cases pass and every accepted request produces exactly three defined fields.
+Every check for this stage passes and every accepted request produces exactly three defined fields.
 
 ## Non-goals
 

@@ -82,11 +82,11 @@ SET title hello world
 
 ## Success criteria
 
-All `deltaforge test` cases pass, repeated writes form a readable chronological history, and the append benchmark completes.
+Every check for this stage passes, repeated writes form a readable chronological history, and the append benchmark completes.
 
 ### Reading the benchmark
 
-After `deltaforge bench`, record the existing fixture size, median, and p95. Then ask:
+After the benchmark has run, record the existing fixture size, median, and p95. Then ask:
 
 1. Does the measured operation rewrite old bytes or add only new bytes?
 2. How much of a very small measurement may be process startup and file opening?

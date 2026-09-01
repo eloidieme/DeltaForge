@@ -64,7 +64,7 @@ Both logs recover `alpha` as absent and `beta` as `two`.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and compaction cannot resurrect any key whose latest operation is deletion.
+Every check for this stage passes and compaction cannot resurrect any key whose latest operation is deletion.
 
 ## Non-goals
 

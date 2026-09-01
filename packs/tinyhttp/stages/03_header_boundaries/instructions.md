@@ -65,7 +65,7 @@ host: example.test
 
 ## Success criteria
 
-All `deltaforge test` cases pass and body bytes can never become header output merely because they contain a colon.
+Every check for this stage passes and body bytes can never become header output merely because they contain a colon.
 
 ## Non-goals
 

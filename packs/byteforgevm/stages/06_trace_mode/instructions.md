@@ -45,11 +45,11 @@ ip=4 op=HALT stack=[]
 
 ## Success criteria
 
-All tests pass, trace order is deterministic, and `deltaforge bench` can measure the supplied trace workload.
+All tests pass, trace order is deterministic, and the benchmark can measure the supplied trace workload.
 
 ### Benchmark interpretation worksheet
 
-After running `deltaforge bench`, record the median and p95, then consider:
+After running the benchmark, record the median and p95, then consider:
 
 1. How much work belongs to instruction dispatch, and how much to formatting and writing text?
 2. Would an arithmetic-only program measure the same bottleneck as one containing many `PRINT` instructions?

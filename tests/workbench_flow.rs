@@ -450,7 +450,7 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
         "",
     ));
     assert!(final_state["active_job"].is_null());
-    assert_eq!(final_state["latest_run"]["failed"].as_u64(), Some(9));
+    assert_eq!(final_state["latest_run"]["failed"].as_u64(), Some(10));
     assert_eq!(
         final_state["primary_failure"]["name"],
         "scans files in a basic project"
@@ -517,7 +517,7 @@ fn cli_run_reaches_the_open_workbench_event_stream() {
         None,
         "",
     ));
-    assert_eq!(after_focused["latest_run"]["failed"].as_u64(), Some(9));
+    assert_eq!(after_focused["latest_run"]["failed"].as_u64(), Some(10));
 
     let secondary_name = final_state["latest_run"]["failed_tests"][1]["name"]
         .as_str()

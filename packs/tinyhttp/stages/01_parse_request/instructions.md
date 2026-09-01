@@ -69,7 +69,7 @@ The command describes the request line only; serving files is outside this comma
 
 ## Success criteria
 
-All `deltaforge test` cases pass and the request-file benchmark completes with the same parsing behavior.
+Every check for this stage passes and the request-file benchmark completes with the same parsing behavior.
 
 ### Reading the benchmark
 

@@ -62,7 +62,7 @@ The quotation marks belong to the shell command; they are not part of the stored
 
 ## Success criteria
 
-All `deltaforge test` cases pass and successful output is byte-stable for the same arguments.
+Every check for this stage passes and successful output is byte-stable for the same arguments.
 
 ## Non-goals
 

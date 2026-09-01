@@ -57,7 +57,7 @@ error: unsafe path
 
 ## Success criteria
 
-All `deltaforge test` cases pass and every successfully served file remains beneath the chosen document root under the component policy.
+Every check for this stage passes and every successfully served file remains beneath the chosen document root under the component policy.
 
 ## Non-goals
 

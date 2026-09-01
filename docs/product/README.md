@@ -1,7 +1,8 @@
 # DeltaForge product direction
 
-Status: **Phase 1 and Phase 2 complete; 1.0 scope frozen in
-[release-1-0-contract.md](release-1-0-contract.md)**
+Status: **1.0 shipped.** The scope is frozen in
+[release-1-0-contract.md](release-1-0-contract.md) with recorded amendments; what it
+became is in [release-1-0-closeout.md](release-1-0-closeout.md).
 Drafted: 2026-07-15  
 Branch: `codex/product-workbench`
 
@@ -31,7 +32,19 @@ and historical context.
   simplified interface vocabulary.
 - [release-1-0-contract.md](release-1-0-contract.md) -- the frozen 1.0 scope: what
   ships, what is deliberately cut, how it is validated without external learner
-  research, and the success measures that replace the observed-participant ones.
+  research, and the success measures that replace the observed-participant ones. Read its
+  *Amendments* and *Status* sections with it.
+- [release-1-0-gap.md](release-1-0-gap.md) -- the implementation gap measured against
+  that contract. Historical; closed.
+- [release-1-0-closeout.md](release-1-0-closeout.md) -- what shipped against each
+  contract item, what the work turned up that the gap analysis had not predicted, the
+  deviations, and the known limits at 1.0.
+- [design-1-0.md](design-1-0.md) -- the visual system as built: its three organising
+  ideas, colour semantics, the step rail, motion, and keyboard behaviour.
+- [content-sufficiency.md](content-sufficiency.md) -- validation practice B: whether a
+  stage is implementable from published content alone. Protocol and results.
+- [cold-dogfood.md](cold-dogfood.md) -- validation practice A: the journey script, the
+  activation measurement, and one execution recorded with its limits.
 
 ## Frozen decisions
 

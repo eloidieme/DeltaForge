@@ -1,8 +1,125 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
 
-### Coherent FlashIndex stage numbering (FlashIndex 2.0.0)
+The first public release. DeltaForge 1.0 is a product another programmer can install and
+use to build a serious systems project locally: the whole learner journey happens in the
+browser, and the terminal is for writing code.
+
+### The journey is completable in the browser
+
+- **Creating a project.** A catalog with what each project builds, how many steps it has,
+  roughly how long it takes, and whether this machine already has the toolchain. A
+  creation flow with a live environment preflight that says what it found before anything
+  is written. `deltaforge init` remains, as the automation form; both share one engine, so
+  a scripted project and a created one are identical.
+- **Measuring performance.** Benchmarks run from the browser as jobs on the same run
+  lease, event journal, and cancellation path as checks. A run started from either
+  surface is indistinguishable to project state and to the event stream. Predictions and
+  reflections are offered per step, and both are skippable.
+- **Seeing a target before hitting the wall.** Every step that carries a measurement is
+  marked in the step rail from the beginning, with its status. Previously the only
+  browser-reachable code touching performance gates was the one that refused progression,
+  so a gate could only ever appear as a wall.
+- **Snapshotting a completed step.** Offered at the pass moment, showing the files it
+  would record before recording them. Never automatic.
+- **Exporting the record.** An engineering record whose every line traces to a completion
+  proof, a saved measurement, a gate result, a commit, or a note the learner wrote.
+
+### Content
+
+- The five-level help ladder — Observation, Concept, Experiment, Structure,
+  Retrospective — now covers all fourteen FlashIndex stages rather than one.
+- Every test case on FlashIndex stages 02–14 carries the diagnosis metadata that decides
+  which contradiction a stuck learner is shown first. Previously only stage 01 did, so
+  thirteen stages fell back to a generic headline.
+- Prediction prompts for the four benchmark-carrying stages.
+- Learner-facing prose no longer instructs the reader to run a terminal command, in any
+  of the four packs.
+- MiniKV, TinyHTTP, and ByteForgeVM are marked `tier: preview` and presented as such.
+
+### A new interface
+
+The frontend was one 460-line file of inline CSS and JS — honest scaffolding for the
+correctness loop, not a design. It is replaced by a visual system built around three
+ideas: one ground and few surfaces, evidence ruled rather than boxed, and exactly one
+dominant action on screen. Light and dark are both first-class with a three-way toggle;
+motion respects `prefers-reduced-motion`; there is a skip link and a visible focus ring
+on everything interactive. The signature element is the step rail, a connected line of
+nodes with a diamond on every measured step. Recorded in `docs/product/design-1-0.md`.
+
+### Fixed: the workbench was not showing what the packs said
+
+Stage content reached the browser through two flatteners — the first paragraph of the
+background, and the bullet items of everything else. Packs write requirements as prose
+with a fenced list about as often as they write them as bullets, so *"What your program
+must do"* and *"Done when"* rendered **empty on thirteen of fourteen FlashIndex stages**,
+and every Background lost all but its first paragraph. Nothing had surfaced it because
+the vertical slice was built on stage 01, the one stage written entirely in bullets.
+Sections are now parsed into paragraphs, lists, and code blocks and rendered whole.
+
+### Fixed: exporting the record invalidated the record
+
+Writing an export into the project changed the project digest, invalidating the
+completion proof the export described and refusing the next step. DeltaForge's own
+exports are now excluded from the digest.
+
+### Fixed: a second snapshot of the same step failed
+
+`git tag` failing on an existing tag was reported as an error. A second snapshot of a
+step is a legitimate action; the existing tag is now reported and left alone.
+
+### Validation
+
+The 1.0 contract replaced external learner research with three practices, all now
+executed and recorded under `docs/product/`:
+
+- **Failure corpus:** thirty-one deliberately wrong implementations across all fourteen
+  stages, each asserting the exact primary diagnosis a stuck learner is shown. Was seven,
+  on one stage.
+- **Content sufficiency:** five stages spanning the curriculum attempted from published
+  content alone, by agents that saw no tests, fixtures, or reference solution. All five
+  passed; the six specification gaps they reported are fixed or explicitly named as open.
+  `deltaforge pack content` and `tools/content_sufficiency/` make it repeatable.
+- **Cold dogfood:** a written script, an activation harness, and one execution recorded
+  with its contamination stated. Activation is 3.5 seconds of machine time against a
+  five-minute target.
+
+`tests/browser_journey.rs` is the standing evidence for the surface-completeness claim:
+it drives the whole journey as the exact HTTP exchanges the page makes, and the only
+terminal-shaped action in it is writing source.
+
+### Distribution
+
+Prebuilt binaries for macOS (Intel and Apple Silicon), Linux, and Windows, published
+with checksums by a tag-triggered workflow, alongside `cargo install deltaforge`.
+
+### Breaking
+
+- **State schema 2.** `state.json` carries a job kind on the active job and every
+  attempt, and per-stage prediction and reflection notes. Projects on schema 1 will not
+  load.
+- **FlashIndex 2.0.0** (from the renumber below) keys every progress map and stage tag by
+  stage ID. Existing FlashIndex projects should be recreated.
+- `deltaforge report` and `deltaforge portfolio` emit a different document. The old one
+  printed fixed advisory text regardless of what had happened; `portfolio` literally
+  wrote *"Profile benchmark hot paths before optimizing."* into every summary.
+
+### Internal
+
+- `benchmarks.rs` is to `bench` what `runner.rs` is to `test`: it measures and evaluates,
+  emits events, and never prints. `commands/bench.rs` keeps only rendering. This was the
+  last major command that had never gone through the Phase 1 application extraction.
+- `creation.rs`, `snapshot.rs`, and `reporting.rs` give creation, snapshots, and the
+  record the same application boundary tests already had.
+- Manifests declare what a language requires on `PATH`; `doctor` and the creation
+  preflight both read it, so adding a language no longer means editing `doctor`.
+- Removed four nested `if false` blocks and sixty unreachable lines left in `runner.rs`
+  by the EventSink refactor.
+
+### Also in 1.0.0
+
+#### Coherent FlashIndex stage numbering (FlashIndex 2.0.0)
 
 - Renumbered FlashIndex stage IDs to a continuous `01`–`14`. The IDs previously ran `01`–`10` with four doubled pairs (`05_inverted`/`05_canonical`, `06_persist`/`06_query`, `09_indexing`/`09_performance`, `10_ranked`/`10_stable`) while the stage guides numbered themselves `01`–`14`, so the step a learner was told they were on was not the step the tooling recorded.
 - Synced manifest titles to the stage guide headings, which had diverged on ten of fourteen stages. The guide headings are the newer editorial baseline and are verb-led and concrete, so they won: `Filter source files` became `Choose searchable files`, `Benchmark mode` became `Describe a scan as data`, `Preserve results in parallel` became `Build the index with several workers`, and so on.
@@ -10,12 +127,12 @@
 - Bumped FlashIndex to `2.0.0`. This is a breaking pack change: stage IDs key every progress map in `state.json` and the `deltaforge-<stage_id>` tags. Existing FlashIndex projects will not load and should be recreated.
 - MiniKV, TinyHTTP, and ByteForgeVM keep their repeating IDs until they are brought to flagship quality.
 
-### Fixed: Windows project paths leaked into diagnoses
+#### Fixed: Windows project paths leaked into diagnoses
 
 - Stopped persisted failure diagnoses, the workbench event journal, and the browser from showing the learner's absolute project path on Windows. `locate_project_root` canonicalizes, which yields an extended-length path (`\\?\C:\...`), while child processes such as cargo print the ordinary `C:\...` form; the redaction matched only the canonical spelling, so build failures and timeouts embedded the real path. Both spellings are now redacted, longest first, including `\\?\UNC\` network roots.
 - This affected Windows only, which is why it survived a release audit whose full native test run was macOS.
 
-### Live viewer server
+#### Live viewer server
 
 - Added `deltaforge serve`: a dependency-free local HTTP server on `127.0.0.1` that serves the generated learning and test-report pages and pushes a server-sent event whenever a command regenerates them. One browser tab now follows the terminal — `deltaforge test` refreshes the report in place and `deltaforge instructions`/`overview` navigate the connected tab — instead of a new tab opening on every failed run.
 - Interactive commands that would open a browser now start the viewer automatically when none is running (auto-started viewers shut themselves down after thirty idle minutes) and reuse an already-connected tab instead of opening another. When no viewer can be started, the previous file-based opening remains the fallback.
@@ -27,13 +144,13 @@
 - Unified the learning page and test report under one shared theme (`web_theme`): a single warm paper/ember palette with matching light and dark variants that both pages resolve from the system preference — the report previously shipped light-only and clashed with the dark learning page. The shared layer also unifies the header, pill navigation, serif display headings, and card treatment, and adds motion: entrance transitions, staggered card reveals, hover lift, a pulsing failure indicator, and cross-document view transitions between the two pages, all disabled under `prefers-reduced-motion`.
 - Fixed invisible command text in the learning page's console examples under the light theme: an inline-code background rule also matched code inside dark code blocks.
 
-### Exhaustive FlashIndex contracts (FlashIndex 1.1.0)
+#### Exhaustive FlashIndex contracts (FlashIndex 1.1.0)
 
 - Expanded FlashIndex black-box coverage from 61 to 94 tests so every requirement and edge-case bullet in the stage guides has a corresponding deterministic case: missing/unreadable roots for `scan`, `search`, `summary`, and persisted `index --out`; all nine corpus extensions with case-sensitive suffix matching; tokens at end-of-file without a trailing newline; CRLF line endings; byte-counted columns around multi-byte characters; lone-underscore tokens; posting dedup, bytewise token order, and per-posting path order; tab-separated multi-path persisted records; prefix/suffix non-matches against a saved index; negative and two-thread worker counts; whitespace-only ranked queries; and rank limits applied only after the complete sort.
 - Corrected two Stage 05 (inverted index) tests that pinned path order inside a posting even though canonical ordering is explicitly deferred to the next stage; membership is now asserted order-insensitively.
 - Bumped FlashIndex to `1.1.0`. Existing projects should run `deltaforge sync-pack`; the strengthened tests intentionally require affected completed stages to be revalidated.
 
-### Browser test reports
+#### Browser test reports
 
 - Added a self-contained `.deltaforge/ui/test-report.html` for failed human-readable test runs. Interactive failures open it automatically; redirected runs print its path without launching a browser.
 - Made test failures easier to diagnose with failure-first grouping, structured expected/actual comparisons for text, exit codes, files, patterns, and JSON, separate stdout/stderr views, visible whitespace, stage-instruction links, runtimes, and copyable filtered rerun commands.
@@ -41,14 +158,14 @@
 - Added `deltaforge test --open` to show a report after successful runs and `deltaforge test --terminal` to retain detailed terminal-only behavior. `--json`, `DELTAFORGE_NO_BROWSER=1`, and non-interactive output remain safe for automation.
 - Reduced interactive terminal noise to test progress and the final summary when a browser report is available. Detailed output remains the fallback for redirected commands and terminal-only environments.
 
-### Natural-language editorial pass (all bundled packs 1.0.1)
+#### Natural-language editorial pass (all bundled packs 1.0.1)
 
 - Removed authoring-history language from pack overviews, guides, hints, and design prompts so the material reads as one coherent explanation rather than a commentary on curriculum revisions.
 - Reframed fixed policies in terms of each tool's purpose and tradeoffs. FlashIndex's corpus examples now use ordinary `.txt`, `.md`, and `.cmake` files to demonstrate the documented extension policy directly.
 - Made FlashIndex's persisted index contract explicit: UTF-8 token records, tab-separated fields, newline-separated records, and sorted deduplicated portable paths. Its persistence test now verifies the token-to-path record rather than merely looking for a token substring.
 - Existing projects should run `deltaforge sync-pack`. Documentation-only changes preserve completion proofs. FlashIndex's changed Stage 02 fixture/test and Stage 07 persistence test require those completed stages to be revalidated.
 
-### Gentler curricula and full content rewrite (all bundled packs 1.0.0)
+#### Gentler curricula and full content rewrite (all bundled packs 1.0.0)
 
 - Split the four bundled projects from 28 broad stages into 45 smaller stages: FlashIndex now has 14, MiniKV 10, TinyHTTP 10, and ByteForgeVM 11. Original stage IDs remain available, with follow-up IDs inserted beside the concepts they separate.
 - Rewrote every overview, stage guide, and hint set in the new editorial baseline: begin with a concrete situation, make the problem clear before naming the solution, introduce terminology only when it becomes useful, explain arbitrary teaching policies honestly, and keep exactly three progressive hints per stage.
@@ -57,7 +174,7 @@
 - Added `docs/content-style.md` as the pack-writing standard and `docs/curriculum-map.md` as the canonical new sequence and migration guide.
 - Existing learner projects must run `deltaforge sync-pack`. Because tests and fixtures moved or changed, behavioral proofs for affected completed stages intentionally require revalidation. Original IDs remain loadable, but a fresh project is recommended to experience every inserted stage in order.
 
-### Browser learning surface and approachable FlashIndex opening (FlashIndex 0.4.0)
+#### Browser learning surface and approachable FlashIndex opening (FlashIndex 0.4.0)
 
 - Changed interactive `overview` and `instructions` from a long terminal document to a self-contained local learning page. It opens in the system browser with stage navigation, progress state, task/example/rationale/reference tabs, neighboring-stage previews, copyable examples, responsive layout, and accessible keyboard-friendly controls. No pack content or external asset leaves the machine.
 - Added `--terminal` for the original renderer, `--no-open` for generating `.deltaforge/ui/learning.html` without launching a browser, and `DELTAFORGE_NO_BROWSER=1` for terminal-only environments. Redirected and piped commands retain terminal behavior, and `overview --json` is unchanged.
@@ -65,14 +182,14 @@
 - Corrected the Stage 02 corpus contract: removed an unexplained niche extension, made `.cmake` support real and tested, and removed redundant filename special cases already covered by the `.txt` and `.md` rules.
 - Bumped FlashIndex to `0.4.0`. The Stage 02 fixture and tests changed, so existing FlashIndex learners should run `deltaforge sync-pack`; a previously completed Stage 02 intentionally requires revalidation. Instruction-only changes to Stages 01 and 03 do not invalidate their proofs.
 
-### Curriculum study aids (all bundled packs 0.3.1)
+#### Curriculum study aids (all bundled packs 0.3.1)
 
 - Expanded every pack overview with a cumulative concept map or protocol/opcode reference, a focused glossary, historical field notes, diagnostic failure-analysis labs, and optional extensions. Corrected the MiniKV, TinyHTTP, and ByteForgeVM summaries so their final-stage capabilities match the actual roadmaps.
 - Added post-stage reflection questions at the major design boundaries: recovery and compaction, HTTP parsing/security/connection/range semantics, VM stack/control/error/call/trace semantics, and search token/index/persistence/parallel/ranking semantics.
 - Added interpretation worksheets to every targeted benchmark stage. Learners now record fixture shape and observed metrics, distinguish startup/output/I/O effects from the algorithm under study, and check correctness before drawing performance conclusions.
 - Bumped all bundled packs to `0.3.1`. This release changes only manifests and learner-facing documentation: existing projects should run `deltaforge sync-pack`, but completed stages retain valid behavioral proofs and require no revalidation.
 
-### Content depth pass (all bundled packs 0.3.0)
+#### Content depth pass (all bundled packs 0.3.0)
 
 - Rewrote all 28 stage guides across FlashIndex, MiniKV, TinyHTTP, and ByteForgeVM into the seven-section learning template, with deeper conceptual background, historical context, precise observable contracts, worked examples, explicit tested edge cases, success criteria, and bounded non-goals. Every stage now has exactly three progressive hints.
 - Expanded black-box coverage for malformed inputs, empty corpora, deterministic ordering, persistence replacement, tombstone replay, HTTP framing and traversal, VM operand/control failures, tokenizer boundaries, and ranked-result limits. Reference solutions were extended to prove the strengthened contracts on every stage.
@@ -81,7 +198,7 @@
 - Extended `pack doctor` / `validate-pack --strict` authoring findings for missing `Edge cases` or `Non-goals` headings, fewer than three hints, and fewer than two tests.
 - Bumped every bundled pack to `0.3.0`. Existing learner projects must run `deltaforge sync-pack`; documentation-only edits do not invalidate completion, but the changed tests and fixtures intentionally require affected completed stages to be revalidated with `deltaforge test`.
 
-### FlashIndex performance stages (pack 0.2.0)
+#### FlashIndex performance stages (pack 0.2.0)
 
 - Added FlashIndex stage `09_parallel_indexing`: `index <path> --threads N` produces byte-identical output to the single-threaded `index` for any N, with a `threads:[1,2,4,8]` benchmark matrix and a conservative `speedup >= 1.5` performance gate (with tuning advice). Ships a committed, deterministic ~1.3 MiB synthetic benchmark fixture generated by `tools/gen_flashindex_bench_fixture.py` (run by hand, never at build time).
 - Added FlashIndex stage `10_ranked_search`: `rank <path> "<tokens>"` ranks files by distinct query tokens matched, then total occurrences, then ascending path as the deterministic tie-break, printing the top 10. Ranked search takes a directory (building the index in memory) rather than a persisted index file, because Stage 06's on-disk format is learner-defined and cannot serve as a shared black-box fixture. It uses the `rank` verb so it does not collide with Stage 04's occurrence-printing `search`.

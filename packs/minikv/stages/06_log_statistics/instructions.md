@@ -75,7 +75,7 @@ tombstones: 1
 
 ## Success criteria
 
-All `deltaforge test` cases pass and each counter agrees with normal replay semantics for the same bytes.
+Every check for this stage passes and each counter agrees with normal replay semantics for the same bytes.
 
 ## Non-goals
 

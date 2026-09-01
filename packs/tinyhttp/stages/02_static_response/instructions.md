@@ -71,7 +71,7 @@ The visible blank line separates the header section from the file body.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and each response's framing agrees with the body bytes that follow it.
+Every check for this stage passes and each response's framing agrees with the body bytes that follow it.
 
 ## Non-goals
 

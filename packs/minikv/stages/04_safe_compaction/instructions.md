@@ -65,7 +65,7 @@ The nested destination is created, and it contains only the current compacted re
 
 ## Success criteria
 
-All `deltaforge test` cases pass and the destination bytes describe exactly one current compacted artifact.
+Every check for this stage passes and the destination bytes describe exactly one current compacted artifact.
 
 ## Non-goals
 

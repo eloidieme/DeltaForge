@@ -64,7 +64,7 @@ The earlier value remains in the file but no longer determines the current state
 
 ## Success criteria
 
-All `deltaforge test` cases pass and replaying unchanged valid bytes always produces the same current value.
+Every check for this stage passes and replaying unchanged valid bytes always produces the same current value.
 
 ## Non-goals
 

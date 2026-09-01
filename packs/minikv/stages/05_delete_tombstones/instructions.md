@@ -69,7 +69,7 @@ The second command succeeds without printing a value.
 
 ## Success criteria
 
-All `deltaforge test` cases pass and restart recovery never returns a value whose latest operation is `DEL`.
+Every check for this stage passes and restart recovery never returns a value whose latest operation is `DEL`.
 
 ## Non-goals
 

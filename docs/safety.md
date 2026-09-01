@@ -8,4 +8,12 @@ Learner output is drained concurrently and capped in captured diagnostics. Timeo
 
 Projects pin the selected pack version, source directory, and content digest. A completed stage also records the pack and learner-tree digests that passed; changing either requires a fresh complete test run before `next` or `commit`.
 
-Existing schema-version-1 projects created before integrity proofs remain readable. Their historical completed-stage entries are not accepted for progression until the learner reruns the complete stage tests, which records the missing proof without requiring a state-file migration.
+Projects on state schema 1 do not load in 1.0; recreate them. Frozen decision 11 permits the break, and the renumbered FlashIndex stage IDs would invalidate their progress maps regardless.
+
+## The browser boundary
+
+The workbench service can execute pack-defined build and run commands, so its browser boundary is security-sensitive. It binds only to the loopback interface on an ephemeral port, requires a per-service capability token on every request, validates the `Host` header against its own address, and rejects any request whose `Origin` is not exactly its own. Mutating requests additionally require that `Origin` header and an `application/json` content type, so an unrelated page in the same browser cannot induce one. Request headers and bodies are bounded. No endpoint executes an arbitrary command, and none serves a file from the repository.
+
+Browser requests name projects by opaque registry identifier and never carry a filesystem path — with one exception. Creating a project necessarily lets the learner choose where their code goes. That endpoint accepts a parent directory and a leaf name, never a full path, and one guarded function decides whether the pair is acceptable: the leaf must be a single restricted component, the parent must already exist and canonicalize inside the learner's home directory, no component below that root may be hidden, the parent must not be inside an existing DeltaForge project, and the target must not exist. Each refusal has a test. The reasoning is recorded as an amendment in [product/architecture.md](product/architecture.md).
+
+`deltaforge init` keeps its freedom to write anywhere the shell can reach. It is invoked by a person at a prompt or by CI, not by a web page.

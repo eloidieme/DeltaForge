@@ -70,7 +70,7 @@ SET language Rust
 
 ## Success criteria
 
-All `deltaforge test` cases pass and a later process can read the complete record from the requested path.
+Every check for this stage passes and a later process can read the complete record from the requested path.
 
 ## Non-goals
 

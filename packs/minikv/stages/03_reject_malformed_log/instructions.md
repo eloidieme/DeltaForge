@@ -67,7 +67,7 @@ The precise diagnostic may contain more context, but it must identify the malfor
 
 ## Success criteria
 
-All `deltaforge test` cases pass and no damaged non-empty record is reported as an ordinary empty or successful lookup.
+Every check for this stage passes and no damaged non-empty record is reported as an ordinary empty or successful lookup.
 
 ## Non-goals
 

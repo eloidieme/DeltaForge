@@ -9,4 +9,4 @@ Before implementing compaction, write a short note answering:
 5. How would your design change if the input and output paths were allowed to be the same?
 6. Which benchmark cost do you expect to dominate: replay, allocation, sorting, or writing?
 
-Revisit the note after `deltaforge bench`. Record which expectation was wrong and what evidence changed your mind.
+Revisit the note once the workload has been measured. Record which expectation was wrong and what evidence changed your mind.
