@@ -1,0 +1,13 @@
+{
+  "name": "deltaforge-browser-journey",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Drives the real workbench page in a headless browser, end to end.",
+  "type": "module",
+  "scripts": {
+    "journey": "node journey.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

@@ -40,3 +40,36 @@ jobs:
             exit "$test_status"
           fi
       - run: cargo run -- validate-pack --strict
+
+  page:
+    # The workbench page is the entire product surface, and until now nothing
+    # in CI executed a line of it: `tests/browser_journey.rs` sends the
+    # requests the page is supposed to send, which is not the same thing. This
+    # job runs the page itself.
+    name: Workbench page (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Fast, and enough on its own to have caught the 1.0 creation bug.
+      - name: Unit-test the page's pure decisions
+        run: node --test "tests/ui/**/*.test.js"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build deltaforge
+        run: cargo build --locked
+
+      - name: Install Playwright
+        working-directory: tests/browser
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # A workspace and a DeltaForge home that have never existed, which is the
+      # state of a new learner's machine and the state no harness reproduced.
+      - name: Drive the whole journey in a headless browser
+        timeout-minutes: 20
+        run: node tests/browser/journey.mjs
