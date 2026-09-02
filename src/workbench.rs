@@ -1043,13 +1043,7 @@ fn dispatch(
                 }
             };
             let (project_id, options) = project_request(shared, request)?;
-            start_run(
-                stream,
-                Arc::clone(shared),
-                project_id,
-                options,
-                body.filter,
-            )
+            start_run(stream, Arc::clone(shared), project_id, options, body.filter)
         }
         ("POST", "/api/v1/runs/rerun") => {
             if !authorized_mutation(request, shared) {
@@ -1101,13 +1095,7 @@ fn dispatch(
                 }
             };
             let (project_id, options) = project_request(shared, request)?;
-            start_benchmark_run(
-                stream,
-                Arc::clone(shared),
-                project_id,
-                options,
-                body.save,
-            )
+            start_benchmark_run(stream, Arc::clone(shared), project_id, options, body.save)
         }
         ("POST", "/api/v1/predictions") | ("POST", "/api/v1/reflections") => {
             if !authorized_mutation(request, shared) {
@@ -1326,23 +1314,11 @@ fn dispatch(
         }
         ("POST", "/api/v1/project/open-editor") => {
             let (_, options) = project_request(shared, request)?;
-            open_project(
-                stream,
-                shared,
-                request,
-                &options,
-                ProjectOpenKind::Editor,
-            )
+            open_project(stream, shared, request, &options, ProjectOpenKind::Editor)
         }
         ("POST", "/api/v1/project/open-folder") => {
             let (_, options) = project_request(shared, request)?;
-            open_project(
-                stream,
-                shared,
-                request,
-                &options,
-                ProjectOpenKind::Folder,
-            )
+            open_project(stream, shared, request, &options, ProjectOpenKind::Folder)
         }
         ("POST", "/api/v1/service/shutdown") => shutdown_service(stream, shared, request),
         ("POST", _) | ("GET", _) => respond(
@@ -1365,9 +1341,13 @@ fn dispatch(
 /// one in the browser is told what to fix rather than left with a dead page.
 fn respond_internal_error(stream: &mut TcpStream, error: &anyhow::Error) -> Result<()> {
     let body = serde_json::json!({"error": format!("{error:#}")}).to_string();
-    respond(stream, "500 Internal Server Error", "application/json", &body)
+    respond(
+        stream,
+        "500 Internal Server Error",
+        "application/json",
+        &body,
+    )
 }
-
 
 /// The project pages the browser can be pointed at directly. Every route the
 /// page's own router understands must be here too, or a reload or a bookmark

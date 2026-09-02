@@ -279,9 +279,9 @@ pub fn missing_stage_sections(source: &str) -> Vec<&'static str> {
     REQUIRED_STAGE_SECTIONS
         .into_iter()
         .filter(|heading| {
-            sections.get(*heading).is_none_or(|body| {
-                parse_blocks(&body.lines().collect::<Vec<_>>()).is_empty()
-            })
+            sections
+                .get(*heading)
+                .is_none_or(|body| parse_blocks(&body.lines().collect::<Vec<_>>()).is_empty())
         })
         .collect()
 }
@@ -777,9 +777,13 @@ mod tests {
 
         // A ladder numbered 1, 2, 4 still climbs 1, 2, 3: `hint_state` counts
         // rungs, so a level that skipped would never be revealed.
-        let misnumbered = parse_help("# Hint 1\n\nfirst\n\n# Hint 2\n\nsecond\n\n# Hint 4\n\nthird\n");
+        let misnumbered =
+            parse_help("# Hint 1\n\nfirst\n\n# Hint 2\n\nsecond\n\n# Hint 4\n\nthird\n");
         assert_eq!(
-            misnumbered.iter().map(|hint| hint.level).collect::<Vec<_>>(),
+            misnumbered
+                .iter()
+                .map(|hint| hint.level)
+                .collect::<Vec<_>>(),
             [1, 2, 3]
         );
         assert_eq!(authored_help_numbers("# Hint 1\na\n# Hint 4\nb\n"), [1, 4]);

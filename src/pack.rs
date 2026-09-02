@@ -459,9 +459,8 @@ impl LoadedPack {
 }
 
 /// `(stage directory, language identity) -> (stat signature, digest)`.
-type BehavioralDigestCache = std::sync::Mutex<
-    std::collections::HashMap<(PathBuf, String), (String, String)>,
->;
+type BehavioralDigestCache =
+    std::sync::Mutex<std::collections::HashMap<(PathBuf, String), (String, String)>>;
 
 fn behavioral_digest_cache() -> &'static BehavioralDigestCache {
     static CACHE: std::sync::OnceLock<BehavioralDigestCache> = std::sync::OnceLock::new();

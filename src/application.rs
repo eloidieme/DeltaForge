@@ -865,10 +865,8 @@ pub fn reveal_next_hint(options: &GlobalOptions) -> Result<crate::capability::Ca
         .unwrap_or_default();
     // The final authored help level is always the retrospective, gated until
     // the capability is acquired; every level before it is available freely.
-    let maximum = crate::capability::available_help_levels(
-        help.len(),
-        context.state.is_completed(&stage_id),
-    );
+    let maximum =
+        crate::capability::available_help_levels(help.len(), context.state.is_completed(&stage_id));
     if maximum == 0 {
         bail!("this capability has no help levels");
     }
@@ -1596,7 +1594,12 @@ fn workbench_state(
         // learner looking in the wrong place.
         let build_failed = error.contains("build failed");
         primary_failure = Some(LastFailedTest {
-            name: if build_failed { "Build project" } else { "Run checks" }.to_string(),
+            name: if build_failed {
+                "Build project"
+            } else {
+                "Run checks"
+            }
+            .to_string(),
             failures: vec![error.clone()],
             diagnosis: Some(FailureDiagnosis {
                 priority: 0,
