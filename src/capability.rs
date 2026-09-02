@@ -62,12 +62,397 @@ pub struct OverviewSection {
     pub blocks: Vec<OverviewBlock>,
 }
 
+/// A run of inline text, in reading order.
+pub type InlineText = Vec<InlineSpan>;
+
+/// One inline run inside a block.
+///
+/// 1.0 had no such thing. Inline markup was deleted by a blanket
+/// `replace(['`', '*'], "")`, which is how ByteForgeVM's multiplication stage
+/// came to teach `push left right`: the operator lived inside a code span and
+/// the strip took it with the backticks. Nothing may be dropped from a
+/// specification silently, so every construct the packs use is represented
+/// here and anything else is a `validate-pack --strict` failure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InlineSpan {
+    /// Ordinary prose.
+    Text { text: String },
+    /// `` `like this` ``. Its content is verbatim: no markup is recognised
+    /// inside a code span, which is exactly the rule that was missing.
+    Code { text: String },
+    /// `**like this**`.
+    Strong { spans: InlineText },
+    /// `*like this*`.
+    Emphasis { spans: InlineText },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OverviewBlock {
-    Paragraph { text: String },
-    Code { language: String, content: String },
-    List { items: Vec<String> },
+    /// A sub-heading inside a section. `level` is the authored depth, so a
+    /// pack that nests further still renders in order rather than collapsing
+    /// into the surrounding prose — which is what 1.0 did to 22 headings
+    /// across 21 stage files, taking the hierarchy of everything beneath them
+    /// with it.
+    Heading {
+        level: u8,
+        spans: InlineText,
+    },
+    Paragraph {
+        spans: InlineText,
+    },
+    Code {
+        language: String,
+        content: String,
+    },
+    /// `ordered` distinguishes `1. 2. 3.` from `- - -`. Packs write 164
+    /// numbered items across the four of them, all of which used to render as
+    /// bullets: a sequence of steps presented as an unordered set.
+    List {
+        ordered: bool,
+        items: Vec<InlineText>,
+    },
+    Table {
+        headers: Vec<InlineText>,
+        /// One per column, from the delimiter row. Authored alignment is a
+        /// decision about how a column reads, so it is carried rather than
+        /// dropped.
+        alignments: Vec<ColumnAlignment>,
+        rows: Vec<Vec<InlineText>>,
+    },
+}
+
+impl OverviewBlock {
+    /// The block's text with no markup at all. What a surface that cannot
+    /// show structure — a rail summary, a terminal line — should print.
+    pub fn plain_text(&self) -> String {
+        match self {
+            Self::Heading { spans, .. } | Self::Paragraph { spans } => plain_text(spans),
+            Self::Code { content, .. } => content.clone(),
+            Self::List { items, .. } => items
+                .iter()
+                .map(|item| plain_text(item))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Self::Table { headers, rows, .. } => std::iter::once(headers)
+                .chain(rows.iter())
+                .map(|row| {
+                    row.iter()
+                        .map(|cell| plain_text(cell))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+}
+
+/// Inline text with nothing but its words: code spans keep their content,
+/// emphasis keeps its words, and no marker characters survive.
+pub fn plain_text(spans: &[InlineSpan]) -> String {
+    let mut out = String::new();
+    for span in spans {
+        match span {
+            InlineSpan::Text { text } | InlineSpan::Code { text } => out.push_str(text),
+            InlineSpan::Strong { spans } | InlineSpan::Emphasis { spans } => {
+                out.push_str(&plain_text(spans));
+            }
+        }
+    }
+    out
+}
+
+/// Inline text rendered back to the markdown it was parsed from. Used by
+/// `deltaforge pack content`, which publishes what a learner can see as
+/// markdown, and by the round-trip assertion in `validate-pack --strict`.
+pub fn to_markdown(spans: &[InlineSpan]) -> String {
+    let mut out = String::new();
+    for span in spans {
+        match span {
+            InlineSpan::Text { text } => out.push_str(&escape_markdown(text)),
+            InlineSpan::Code { text } => {
+                // A code span containing a backtick is fenced with more of
+                // them, which is how CommonMark spells it and how it survives
+                // being parsed again.
+                let fence = "`".repeat(longest_backtick_run(text) + 1);
+                let padding = if text.starts_with('`') || text.ends_with('`') {
+                    " "
+                } else {
+                    ""
+                };
+                out.push_str(&format!("{fence}{padding}{text}{padding}{fence}"));
+            }
+            InlineSpan::Strong { spans } => out.push_str(&format!("**{}**", to_markdown(spans))),
+            InlineSpan::Emphasis { spans } => out.push_str(&format!("*{}*", to_markdown(spans))),
+        }
+    }
+    out
+}
+
+/// Render blocks back to the markdown they were parsed from.
+///
+/// One emitter, with three jobs: it is what `deltaforge pack content`
+/// publishes, it is how `validate-pack --strict` proves a pack survives the
+/// renderer, and it is the reason those two can never disagree.
+pub fn blocks_to_markdown(blocks: &[OverviewBlock]) -> String {
+    let mut out = String::new();
+    for block in blocks {
+        match block {
+            OverviewBlock::Heading { level, spans } => {
+                let hashes = "#".repeat(usize::from(*level));
+                out.push_str(&format!("{hashes} {}\n\n", to_markdown(spans)));
+            }
+            OverviewBlock::Paragraph { spans } => {
+                out.push_str(&format!("{}\n\n", to_markdown(spans)));
+            }
+            OverviewBlock::Code { language, content } => {
+                out.push_str(&format!("```{language}\n{content}\n```\n\n"));
+            }
+            OverviewBlock::List { ordered, items } => {
+                for (index, item) in items.iter().enumerate() {
+                    let marker = if *ordered {
+                        format!("{}.", index + 1)
+                    } else {
+                        "-".to_string()
+                    };
+                    out.push_str(&format!("{marker} {}\n", to_markdown(item)));
+                }
+                out.push('\n');
+            }
+            OverviewBlock::Table {
+                headers,
+                alignments,
+                rows,
+            } => {
+                let row = |cells: &[InlineText]| {
+                    format!(
+                        "| {} |\n",
+                        cells
+                            .iter()
+                            .map(|cell| to_markdown(cell))
+                            .collect::<Vec<_>>()
+                            .join(" | ")
+                    )
+                };
+                out.push_str(&row(headers));
+                out.push_str(&format!(
+                    "|{}\n",
+                    alignments
+                        .iter()
+                        .map(|alignment| format!("{}|", alignment.delimiter()))
+                        .collect::<String>()
+                ));
+                for cells in rows {
+                    out.push_str(&row(cells));
+                }
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// Escape the three characters `parse_inline` treats as markup, and nothing
+/// else. Escaping more would turn ordinary prose ("well-known") into noise;
+/// escaping less would stop the round trip from being exact, which is the
+/// whole basis of the fidelity check.
+fn escape_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        if matches!(character, '\\' | '`' | '*') {
+            out.push('\\');
+        }
+        out.push(character);
+    }
+    out
+}
+
+/// Every place a pack writes markdown the workbench cannot render.
+///
+/// This is the rule that keeps P0-3 from happening again. A pack is not valid
+/// under `--strict` if any of its learner-facing prose loses characters on the
+/// way to the screen — the corruption that shipped in 1.0 would have failed
+/// here, on the stage that teaches multiplication.
+///
+/// It covers every file a learner can reach: the project README that becomes
+/// the guide, each stage's instructions, its hints, and its prediction prompt.
+pub fn pack_render_defects(pack: &crate::pack::LoadedPack) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut check = |label: String, source: &str| {
+        for problem in unrepresentable_markdown(source) {
+            problems.push(format!("{label}: {problem}"));
+        }
+    };
+
+    if let Ok(readme) = fs::read_to_string(pack.root.join("README.md")) {
+        for (title, body) in markdown_sections(&readme) {
+            check(format!("README.md, section {title}"), &body);
+        }
+    }
+    for stage in &pack.manifest.stages {
+        for (name, path) in [
+            ("instructions.md", pack.instructions_path(stage)),
+            ("hints.md", pack.hints_path(stage)),
+            ("prediction.md", pack.prediction_prompt_path(stage)),
+        ] {
+            let Ok(source) = fs::read_to_string(&path) else {
+                continue;
+            };
+            // Headings delimit; their own bodies are what gets rendered.
+            let sections = markdown_sections(&source);
+            if sections.is_empty() {
+                check(format!("{}/{name}", stage.id), &source);
+            }
+            for (title, body) in sections {
+                check(format!("{}/{name}, section {title}", stage.id), &body);
+            }
+        }
+    }
+    problems
+}
+
+/// Everything in `source` the workbench renderer cannot represent.
+///
+/// The test is a round trip: parse the markdown into blocks, render the blocks
+/// back to markdown, and compare what is left after whitespace. Anything that
+/// does not come back is a character a learner will never see — which is how
+/// ByteForgeVM stage 4 came to teach `push left right` — and anything that
+/// comes back escaped is a marker the pack meant literally but wrote as
+/// markup.
+///
+/// This is deliberately a property, not a list of banned constructs. A list
+/// only refuses what someone thought of; a round trip refuses everything the
+/// renderer does not actually handle, including whatever is added next.
+pub fn unrepresentable_markdown(source: &str) -> Vec<String> {
+    let mut problems = ignored_constructs(source);
+    let blocks = parse_blocks(&source.lines().collect::<Vec<_>>());
+    let authored = fidelity_form(source);
+    let rendered = fidelity_form(&blocks_to_markdown(&blocks));
+    if authored != rendered {
+        problems.extend(first_divergence(&authored, &rendered));
+    }
+    problems
+}
+
+/// Block constructs CommonMark defines and this renderer has no block for.
+///
+/// The round trip cannot see these: their markers are ordinary characters, so
+/// they survive as literal text and compare equal. A learner reads `>` at the
+/// start of a line, or `[the docs](https://…)` with its brackets and URL
+/// showing. The list is short because it is exhaustive over what the parser
+/// does not handle — add a block above and the entry here comes out.
+fn ignored_constructs(source: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut in_code = false;
+    let lines: Vec<&str> = source.lines().collect();
+    for (index, raw) in lines.iter().enumerate() {
+        let line = raw.trim();
+        if line.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code || line.is_empty() {
+            continue;
+        }
+        let mut say = |what: &str| {
+            problems.push(format!("line {}: {what}: {line}", index + 1));
+        };
+        if line.starts_with('>') {
+            say("a block quotation has no block in the workbench renderer");
+        }
+        if link_like(line) {
+            say("a link renders as its own brackets and URL");
+        }
+        if line
+            .chars()
+            .all(|c| c == '-' || c == '=' || c == '*' || c == '_')
+            && line.len() >= 3
+        {
+            say("a rule or underlined heading renders as punctuation");
+        }
+        if raw.starts_with("  ") && markdown_list_item(line).is_some() {
+            say("a nested list renders flattened into its parent");
+        }
+        if line.starts_with('<') && line.contains('>') {
+            say("raw HTML renders as text");
+        }
+    }
+    problems
+}
+
+/// `[text](target)` or `![alt](target)`, outside a code span.
+fn link_like(line: &str) -> bool {
+    let bare: String = {
+        let mut out = String::new();
+        let mut in_code = false;
+        for character in line.chars() {
+            if character == '`' {
+                in_code = !in_code;
+            } else if !in_code {
+                out.push(character);
+            }
+        }
+        out
+    };
+    let characters: Vec<char> = bare.chars().collect();
+    characters.iter().enumerate().any(|(index, character)| {
+        *character == '['
+            && find_from(&characters, index, ']')
+                .is_some_and(|close| characters.get(close + 1) == Some(&'('))
+    })
+}
+
+/// Both sides reduced to the words and markers they carry, with layout
+/// removed: paragraphs are re-wrapped by the parser, so line breaks and runs
+/// of spaces cannot be part of the comparison. Everything else is.
+fn fidelity_form(source: &str) -> Vec<String> {
+    source
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .split(' ')
+        .map(str::to_string)
+        .collect()
+}
+
+/// The words around the first place the two forms part company, so the report
+/// points at the sentence rather than at the document.
+fn first_divergence(authored: &[String], rendered: &[String]) -> Vec<String> {
+    let at = authored
+        .iter()
+        .zip(rendered)
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| authored.len().min(rendered.len()));
+    let from = at.saturating_sub(6);
+    let window = |words: &[String]| {
+        words[from.min(words.len())..(at + 7).min(words.len())]
+            .join(" ")
+            .trim()
+            .to_string()
+    };
+    vec![format!(
+        "the pack says \"…{}…\" but the workbench renders \"…{}…\"",
+        window(authored),
+        window(rendered)
+    )]
+}
+
+fn longest_backtick_run(text: &str) -> usize {
+    let mut longest = 0;
+    let mut run = 0;
+    for character in text.chars() {
+        if character == '`' {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    longest
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,7 +487,61 @@ pub struct CapabilityPreview {
 pub struct HelpLevel {
     pub level: usize,
     pub label: String,
-    pub content: String,
+    /// The hint as authored, and as structure. Hints used to reach the
+    /// workbench as one flat string, so a hint that named a function in
+    /// backticks displayed the backticks — a third disagreeing renderer in a
+    /// product about writing code.
+    pub content: RichText,
+}
+
+/// How one table column is aligned, as its delimiter row spelled it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ColumnAlignment {
+    Start,
+    Center,
+    End,
+}
+
+impl ColumnAlignment {
+    fn parse(cell: &str) -> Self {
+        match (cell.starts_with(':'), cell.ends_with(':')) {
+            (true, true) => Self::Center,
+            (false, true) => Self::End,
+            _ => Self::Start,
+        }
+    }
+
+    fn delimiter(self) -> &'static str {
+        match self {
+            Self::Start => "---",
+            Self::Center => ":---:",
+            Self::End => "---:",
+        }
+    }
+}
+
+/// Authored markdown, together with the blocks the workbench renders from it.
+///
+/// One source and one parser. Surfaces that can show structure read `blocks`;
+/// the terminal and the exported record, which render markdown themselves,
+/// read `source`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RichText {
+    pub source: String,
+    pub blocks: Vec<OverviewBlock>,
+}
+
+impl RichText {
+    pub fn parse(source: impl Into<String>) -> Self {
+        let source: String = source.into();
+        let blocks = parse_blocks(&source.lines().collect::<Vec<_>>());
+        Self { source, blocks }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.blocks.is_empty()
+    }
 }
 
 /// Exactly what a learner can see in the workbench for one stage, and nothing
@@ -358,13 +797,17 @@ fn parse_overview_sections(source: &str) -> Vec<OverviewSection> {
     sections
 }
 
-/// Parse markdown lines into paragraphs, bullet or numbered lists, and
-/// fenced code blocks. Shared by the project overview and every stage section.
+/// Parse markdown lines into headings, paragraphs, bullet or numbered lists,
+/// fenced code blocks, and tables. Shared by the project overview and every
+/// stage section, so all three workbench surfaces agree about what a pack
+/// says.
 fn parse_blocks(lines: &[&str]) -> Vec<OverviewBlock> {
     let mut blocks = Vec::new();
-    let mut paragraph = Vec::new();
-    let mut list = Vec::new();
-    let mut code = Vec::new();
+    let mut paragraph: Vec<&str> = Vec::new();
+    let mut list: Vec<InlineText> = Vec::new();
+    let mut list_ordered = false;
+    let mut table: Vec<&str> = Vec::new();
+    let mut code: Vec<&str> = Vec::new();
     let mut code_language = String::new();
     let mut in_code = false;
 
@@ -372,23 +815,39 @@ fn parse_blocks(lines: &[&str]) -> Vec<OverviewBlock> {
         if paragraph.is_empty() {
             return;
         }
-        let text = strip_inline_markdown(
+        let spans = parse_inline(
             &paragraph
                 .drain(..)
                 .map(str::trim)
                 .collect::<Vec<_>>()
                 .join(" "),
         );
-        if !text.is_empty() {
-            blocks.push(OverviewBlock::Paragraph { text });
+        if !spans.is_empty() {
+            blocks.push(OverviewBlock::Paragraph { spans });
         }
     };
-    let flush_list = |list: &mut Vec<String>, blocks: &mut Vec<OverviewBlock>| {
-        if !list.is_empty() {
-            blocks.push(OverviewBlock::List {
-                items: std::mem::take(list),
-            });
+    let flush_list =
+        |list: &mut Vec<InlineText>, ordered: bool, blocks: &mut Vec<OverviewBlock>| {
+            if !list.is_empty() {
+                blocks.push(OverviewBlock::List {
+                    ordered,
+                    items: std::mem::take(list),
+                });
+            }
+        };
+    let flush_table = |table: &mut Vec<&str>, blocks: &mut Vec<OverviewBlock>| {
+        if let Some(block) = parse_table(table) {
+            blocks.push(block);
+        } else {
+            // Not a table after all — pipes in prose. Keep the lines rather
+            // than dropping them.
+            for line in table.iter() {
+                blocks.push(OverviewBlock::Paragraph {
+                    spans: parse_inline(line.trim()),
+                });
+            }
         }
+        table.clear();
     };
 
     for line in lines {
@@ -403,34 +862,216 @@ fn parse_blocks(lines: &[&str]) -> Vec<OverviewBlock> {
                 in_code = false;
             } else {
                 flush_paragraph(&mut paragraph, &mut blocks);
-                flush_list(&mut list, &mut blocks);
+                flush_list(&mut list, list_ordered, &mut blocks);
+                flush_table(&mut table, &mut blocks);
                 code_language = fence.trim().to_string();
                 in_code = true;
             }
         } else if in_code {
-            code.push(*line);
-        } else if let Some(item) = markdown_list_item(trimmed) {
+            code.push(line);
+        } else if let Some((level, heading)) = markdown_heading(trimmed) {
             flush_paragraph(&mut paragraph, &mut blocks);
-            list.push(strip_inline_markdown(item));
+            flush_list(&mut list, list_ordered, &mut blocks);
+            flush_table(&mut table, &mut blocks);
+            blocks.push(OverviewBlock::Heading {
+                level,
+                spans: parse_inline(heading),
+            });
+        } else if is_table_row(trimmed) {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            flush_list(&mut list, list_ordered, &mut blocks);
+            table.push(trimmed);
+        } else if let Some((ordered, item)) = markdown_list_item(trimmed) {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            flush_table(&mut table, &mut blocks);
+            // A list that changes marker is two lists, not one mislabelled one.
+            if !list.is_empty() && ordered != list_ordered {
+                flush_list(&mut list, list_ordered, &mut blocks);
+            }
+            list_ordered = ordered;
+            list.push(parse_inline(item));
         } else if trimmed.is_empty() {
             flush_paragraph(&mut paragraph, &mut blocks);
-            flush_list(&mut list, &mut blocks);
+            flush_list(&mut list, list_ordered, &mut blocks);
+            flush_table(&mut table, &mut blocks);
         } else {
-            flush_list(&mut list, &mut blocks);
+            flush_list(&mut list, list_ordered, &mut blocks);
+            flush_table(&mut table, &mut blocks);
             paragraph.push(line);
         }
     }
     flush_paragraph(&mut paragraph, &mut blocks);
-    flush_list(&mut list, &mut blocks);
+    flush_list(&mut list, list_ordered, &mut blocks);
+    flush_table(&mut table, &mut blocks);
     blocks
 }
 
-fn markdown_list_item(line: &str) -> Option<&str> {
-    line.strip_prefix("- ").or_else(|| {
-        let (number, item) = line.split_once(". ")?;
-        (!number.is_empty() && number.chars().all(|character| character.is_ascii_digit()))
-            .then_some(item)
+/// An ATX heading and its depth. `## ` never reaches here: it delimits the
+/// sections these blocks live inside.
+fn markdown_heading(line: &str) -> Option<(u8, &str)> {
+    let hashes = line.len() - line.trim_start_matches('#').len();
+    (1..=6).contains(&hashes).then(|| {
+        let rest = line[hashes..].strip_prefix(' ')?;
+        Some((hashes as u8, rest.trim()))
+    })?
+}
+
+fn is_table_row(line: &str) -> bool {
+    line.starts_with('|') && line.ends_with('|') && line.len() > 1
+}
+
+/// A GitHub-style table: a header row, a delimiter row, then body rows.
+/// Returns `None` when the lines are not one, so the caller can keep them as
+/// prose instead of losing them.
+fn parse_table(lines: &[&str]) -> Option<OverviewBlock> {
+    let delimiter = lines.get(1)?;
+    let delimiter_cells = table_cells(delimiter);
+    let is_delimiter = delimiter_cells
+        .iter()
+        .all(|cell| cell.contains('-') && cell.chars().all(|c| c == '-' || c == ':' || c == ' '));
+    if !is_delimiter {
+        return None;
+    }
+    let alignments = delimiter_cells
+        .iter()
+        .map(|cell| ColumnAlignment::parse(cell))
+        .collect();
+    let headers: Vec<InlineText> = table_cells(lines.first()?)
+        .iter()
+        .map(|cell| parse_inline(cell))
+        .collect();
+    let rows = lines[2..]
+        .iter()
+        .map(|line| {
+            table_cells(line)
+                .iter()
+                .map(|cell| parse_inline(cell))
+                .collect()
+        })
+        .collect();
+    Some(OverviewBlock::Table {
+        headers,
+        alignments,
+        rows,
     })
+}
+
+fn table_cells(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_start_matches('|')
+        .trim_end_matches('|')
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+/// Parse one line of inline markdown into spans.
+///
+/// Code spans bind tightest and their content is verbatim, which is the rule
+/// whose absence deleted a multiplication operator from a stage that teaches
+/// multiplication. An unclosed marker is not markup: it stays as the character
+/// it is, and `validate-pack --strict` reports it rather than letting it reach
+/// a learner as punctuation nobody meant.
+fn parse_inline(source: &str) -> InlineText {
+    let characters: Vec<char> = source.chars().collect();
+    let mut spans = Vec::new();
+    let mut literal = String::new();
+    let mut index = 0;
+
+    let flush = |literal: &mut String, spans: &mut InlineText| {
+        if !literal.is_empty() {
+            spans.push(InlineSpan::Text {
+                text: std::mem::take(literal),
+            });
+        }
+    };
+
+    while index < characters.len() {
+        let character = characters[index];
+        if character == '\\'
+            && let Some(next) = characters.get(index + 1)
+            && is_markdown_punctuation(*next)
+        {
+            literal.push(*next);
+            index += 2;
+            continue;
+        }
+        if character == '`'
+            && let Some(end) = find_from(&characters, index + 1, '`')
+        {
+            flush(&mut literal, &mut spans);
+            spans.push(InlineSpan::Code {
+                text: characters[index + 1..end].iter().collect(),
+            });
+            index = end + 1;
+            continue;
+        }
+        if character == '*' {
+            let marker = if characters.get(index + 1) == Some(&'*') {
+                "**"
+            } else {
+                "*"
+            };
+            if let Some(end) = find_marker(&characters, index + marker.len(), marker) {
+                let inner: String = characters[index + marker.len()..end].iter().collect();
+                if !inner.trim().is_empty() {
+                    flush(&mut literal, &mut spans);
+                    let inner = parse_inline(&inner);
+                    spans.push(if marker == "**" {
+                        InlineSpan::Strong { spans: inner }
+                    } else {
+                        InlineSpan::Emphasis { spans: inner }
+                    });
+                    index = end + marker.len();
+                    continue;
+                }
+            }
+        }
+        literal.push(character);
+        index += 1;
+    }
+    flush(&mut literal, &mut spans);
+    spans
+}
+
+fn is_markdown_punctuation(character: char) -> bool {
+    matches!(
+        character,
+        '\\' | '`' | '*' | '_' | '[' | ']' | '(' | ')' | '#' | '+' | '-' | '.' | '!' | '|'
+    )
+}
+
+fn find_from(characters: &[char], start: usize, wanted: char) -> Option<usize> {
+    (start..characters.len()).find(|index| characters[*index] == wanted)
+}
+
+/// The next occurrence of `marker` at or after `start`. `**` must not match
+/// the first star of a `***`-style run, and a lone `*` must not match the
+/// first star of a `**`.
+fn find_marker(characters: &[char], start: usize, marker: &str) -> Option<usize> {
+    let wanted: Vec<char> = marker.chars().collect();
+    let mut index = start;
+    while index + wanted.len() <= characters.len() {
+        if characters[index..index + wanted.len()] == wanted[..] {
+            let next = characters.get(index + wanted.len());
+            if wanted.len() == 2 || next != Some(&'*') {
+                return Some(index);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+/// A list item and whether its marker was a number. `None` for anything that
+/// is not a list item at all.
+fn markdown_list_item(line: &str) -> Option<(bool, &str)> {
+    if let Some(item) = line.strip_prefix("- ") {
+        return Some((false, item));
+    }
+    let (number, item) = line.split_once(". ")?;
+    (!number.is_empty() && number.chars().all(|character| character.is_ascii_digit()))
+        .then_some((true, item))
 }
 
 fn load_roadmap(context: &ProjectContext) -> Result<Vec<RoadmapCapability>> {
@@ -470,7 +1111,7 @@ fn load_roadmap(context: &ProjectContext) -> Result<Vec<RoadmapCapability>> {
 pub fn read_prediction_prompt(
     context: &ProjectContext,
     stage: &crate::pack::StageSpec,
-) -> Option<String> {
+) -> Option<RichText> {
     let source = std::fs::read_to_string(context.pack.prediction_prompt_path(stage)).ok()?;
     let body = source
         .lines()
@@ -479,7 +1120,7 @@ pub fn read_prediction_prompt(
         .join("\n")
         .trim()
         .to_string();
-    (!body.is_empty()).then_some(body)
+    (!body.is_empty()).then(|| RichText::parse(body))
 }
 
 pub fn load_help(context: &ProjectContext) -> Result<Vec<HelpLevel>> {
@@ -532,7 +1173,7 @@ fn first_paragraph(section: &str) -> String {
         .split("\n\n")
         .find(|paragraph| !paragraph.trim().is_empty() && !paragraph.trim().starts_with("```"))
         .map(|paragraph| {
-            strip_inline_markdown(
+            plain_line(
                 &paragraph
                     .lines()
                     .map(str::trim)
@@ -551,7 +1192,7 @@ fn narrative_paragraphs(section: &str, limit: usize) -> Vec<String> {
         if paragraph.is_empty() {
             return;
         }
-        let text = strip_inline_markdown(
+        let text = plain_line(
             &paragraph
                 .drain(..)
                 .map(str::trim)
@@ -584,11 +1225,13 @@ fn narrative_paragraphs(section: &str, limit: usize) -> Vec<String> {
     paragraphs
 }
 
-fn strip_inline_markdown(text: &str) -> String {
-    text.replace(['`', '*'], "")
-        .replace("  ", " ")
-        .trim()
-        .to_string()
+/// A markdown line reduced to the words it contains.
+///
+/// This replaces a blanket `replace(['`', '*'], "")`, which deleted every
+/// backtick and asterisk in the document — including the ones that were the
+/// content rather than the markup.
+fn plain_line(text: &str) -> String {
+    plain_text(&parse_inline(text)).trim().to_string()
 }
 
 /// Parse a stage's `hints.md` into its help ladder.
@@ -675,7 +1318,7 @@ fn push_help(levels: &mut Vec<HelpLevel>, heading: Option<String>, lines: &mut V
         levels.push(HelpLevel {
             level: levels.len() + 1,
             label,
-            content,
+            content: RichText::parse(content),
         });
     }
 }
@@ -683,6 +1326,58 @@ fn push_help(levels: &mut Vec<HelpLevel>, heading: Option<String>, lines: &mut V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Markdown markers that reached the learner as punctuation.
+    ///
+    /// Only prose is checked. A code span's content is verbatim by
+    /// definition — `left * right` is the specification, not a stray marker —
+    /// and that distinction is the entire difference between this renderer
+    /// and the blanket `replace` it replaced.
+    fn leaked_markers(block: &OverviewBlock) -> Vec<String> {
+        fn walk(spans: &[InlineSpan], found: &mut Vec<String>) {
+            for span in spans {
+                match span {
+                    InlineSpan::Text { text } => {
+                        for marker in ['`', '*', '#'] {
+                            if text.contains(marker) {
+                                found.push(format!("a literal {marker:?} in prose: {text}"));
+                            }
+                        }
+                    }
+                    InlineSpan::Code { .. } => {}
+                    InlineSpan::Strong { spans } | InlineSpan::Emphasis { spans } => {
+                        walk(spans, found);
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        match block {
+            OverviewBlock::Heading { spans, .. } | OverviewBlock::Paragraph { spans } => {
+                walk(spans, &mut found);
+            }
+            OverviewBlock::List { items, .. } => {
+                for item in items {
+                    walk(item, &mut found);
+                }
+            }
+            OverviewBlock::Table { headers, rows, .. } => {
+                for cell in headers.iter().chain(rows.iter().flatten()) {
+                    walk(cell, &mut found);
+                }
+            }
+            OverviewBlock::Code { .. } => {}
+        }
+        found
+    }
+
+    /// One unstyled run, for the many assertions that are about block
+    /// structure rather than inline markup.
+    fn text_spans(text: &str) -> InlineText {
+        vec![InlineSpan::Text {
+            text: text.to_string(),
+        }]
+    }
 
     /// Every panel the workbench shows must have authored content behind it,
     /// for every stage of every shipped pack. This is the guard for a defect
@@ -714,6 +1409,24 @@ mod tests {
                         stage.id,
                         section.key
                     );
+                    // Not empty is not the same as right. 1.0 fixed sections
+                    // rendering blank and shipped them rendering wrong: a
+                    // learner saw `### Reflection` as a sentence and
+                    // `push left right` where the pack said `left * right`.
+                    // Nothing a learner reads may carry a marker that was
+                    // meant as markup.
+                    let leaked = section
+                        .blocks
+                        .iter()
+                        .flat_map(leaked_markers)
+                        .collect::<Vec<_>>();
+                    assert!(
+                        leaked.is_empty(),
+                        "{pack_id}/{}: the {} panel renders {}",
+                        stage.id,
+                        section.key,
+                        leaked.join("; ")
+                    );
                 }
                 let expected_help = if pack_id == "flashindex" { 5 } else { 3 };
                 assert!(
@@ -725,12 +1438,21 @@ mod tests {
                 for (index, level) in published.help.iter().enumerate() {
                     assert_eq!(level.level, index + 1, "{pack_id}/{}", stage.id);
                     assert!(
-                        !level.content.trim().is_empty(),
+                        !level.content.is_empty(),
                         "{pack_id}/{} help level {} is empty",
                         stage.id,
                         level.level
                     );
                 }
+
+                // And the whole pack survives its own renderer. This is the
+                // same rule `validate-pack --strict` enforces, asserted here
+                // so a pack cannot be changed without running it.
+                assert_eq!(
+                    pack_render_defects(&pack),
+                    Vec::<String>::new(),
+                    "{pack_id} writes markdown the workbench cannot render"
+                );
             }
         }
     }
@@ -773,7 +1495,7 @@ mod tests {
         ));
         assert_eq!(ladder.len(), 3);
         assert_eq!(ladder[0].label, "Observation");
-        assert_eq!(ladder[0].content, "Look at the output.");
+        assert_eq!(ladder[0].content.source, "Look at the output.");
 
         // A ladder numbered 1, 2, 4 still climbs 1, 2, 3: `hint_state` counts
         // rungs, so a level that skipped would never be revealed.
@@ -803,6 +1525,146 @@ mod tests {
         assert_eq!(available_help_levels(0, false), 0);
     }
 
+    /// P0-3. `strip_inline_markdown` was a blanket
+    /// `replace(['`', '*'], "")`, which deleted the multiplication operator
+    /// from the ByteForgeVM stage that teaches multiplication. Nothing may be
+    /// dropped from a specification silently.
+    #[test]
+    fn inline_markup_is_parsed_rather_than_deleted() {
+        assert_eq!(
+            parse_inline("`MUL`: pop right, then push `left * right`."),
+            [
+                InlineSpan::Code {
+                    text: "MUL".to_string()
+                },
+                InlineSpan::Text {
+                    text: ": pop right, then push ".to_string()
+                },
+                InlineSpan::Code {
+                    text: "left * right".to_string()
+                },
+                InlineSpan::Text {
+                    text: ".".to_string()
+                },
+            ]
+        );
+        // Reduced to words, the operator is still there — which is what the
+        // rail summary and the terminal print.
+        assert_eq!(
+            plain_line("`MUL`: pop right, then push `left * right`."),
+            "MUL: pop right, then push left * right."
+        );
+    }
+
+    #[test]
+    fn emphasis_nests_and_code_spans_are_verbatim() {
+        assert_eq!(
+            parse_inline("Checks the **`shape`** of it"),
+            [
+                InlineSpan::Text {
+                    text: "Checks the ".to_string()
+                },
+                InlineSpan::Strong {
+                    spans: vec![InlineSpan::Code {
+                        text: "shape".to_string()
+                    }]
+                },
+                InlineSpan::Text {
+                    text: " of it".to_string()
+                },
+            ]
+        );
+        // No markup is recognised inside a code span, so the stars stay.
+        assert_eq!(
+            parse_inline("`a ** b`"),
+            [InlineSpan::Code {
+                text: "a ** b".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn an_unclosed_marker_stays_the_character_it_is() {
+        assert_eq!(
+            parse_inline("2 * 3 and a stray ` tick"),
+            [InlineSpan::Text {
+                text: "2 * 3 and a stray ` tick".to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn headings_lists_and_tables_are_blocks_of_their_own() {
+        let blocks = parse_blocks(&[
+            "### Reflection",
+            "",
+            "1. First",
+            "2. Second",
+            "",
+            "- A",
+            "",
+            "| Head | Count |",
+            "|---|---:|",
+            "| `ADD` | 2 |",
+        ]);
+        assert_eq!(
+            blocks,
+            [
+                OverviewBlock::Heading {
+                    level: 3,
+                    spans: text_spans("Reflection")
+                },
+                OverviewBlock::List {
+                    ordered: true,
+                    items: vec![text_spans("First"), text_spans("Second")],
+                },
+                OverviewBlock::List {
+                    ordered: false,
+                    items: vec![text_spans("A")],
+                },
+                OverviewBlock::Table {
+                    headers: vec![text_spans("Head"), text_spans("Count")],
+                    alignments: vec![ColumnAlignment::Start, ColumnAlignment::End],
+                    rows: vec![vec![
+                        vec![InlineSpan::Code {
+                            text: "ADD".to_string()
+                        }],
+                        text_spans("2"),
+                    ]],
+                },
+            ]
+        );
+    }
+
+    /// Pipes in prose are not a table, and must not be swallowed as one.
+    #[test]
+    fn a_pipe_row_without_a_delimiter_stays_prose() {
+        let blocks = parse_blocks(&["| not a table |"]);
+        assert_eq!(
+            blocks,
+            [OverviewBlock::Paragraph {
+                spans: text_spans("| not a table |")
+            }]
+        );
+    }
+
+    /// The rule `validate-pack --strict` enforces, stated as the property it
+    /// is: everything a pack writes must survive being rendered.
+    #[test]
+    fn the_fidelity_check_finds_what_the_renderer_would_drop() {
+        assert!(unrepresentable_markdown("Push `left * right` onto the stack.").is_empty());
+        assert!(unrepresentable_markdown("### Reflection\n\n- Why?\n").is_empty());
+        assert!(
+            unrepresentable_markdown("| A | B |\n|---|---:|\n| 1 | 2 |\n").is_empty(),
+            "column alignment must survive"
+        );
+        // A code span that never closes: the backtick reaches the learner.
+        assert!(!unrepresentable_markdown("Call `scan without closing it.").is_empty());
+        // A construct the renderer has no block for.
+        assert!(!unrepresentable_markdown("> A quotation.\n").is_empty());
+        assert!(!unrepresentable_markdown("A [link](https://example.com) here.\n").is_empty());
+    }
+
     #[test]
     fn parses_structured_sections_and_help_levels() {
         let sections = markdown_sections(
@@ -812,7 +1674,8 @@ mod tests {
         assert_eq!(
             parse_blocks(&sections["Requirements"].lines().collect::<Vec<_>>()),
             [OverviewBlock::List {
-                items: vec!["Walk files.".to_string(), "Sort output.".to_string()],
+                ordered: false,
+                items: vec![text_spans("Walk files."), text_spans("Sort output.")],
             }]
         );
 

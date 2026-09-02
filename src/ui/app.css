@@ -506,7 +506,6 @@ textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
 .instruction-card h2 { font-size: 0.98rem; }
 .instruction-card .prose { display: grid; gap: 10px; }
 .instruction-card .prose p { color: var(--text-2); }
-.instruction-card ul { display: grid; gap: 5px; color: var(--text-2); }
 .instruction-card pre {
   margin: 0;
   padding: 12px 14px;
@@ -520,6 +519,52 @@ textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
 .instruction-card details summary { cursor: pointer; font-weight: 620; font-size: 0.9rem; }
 .instruction-card details + details { margin-top: 10px; }
 .instruction-card details[open] summary { margin-bottom: 8px; }
+
+/* Authored pack content, wherever it appears.
+ *
+ * Stage sections, the project guide, hints and prediction prompts are all
+ * produced by one block renderer from one parser, so they are described here
+ * once instead of four times. A rule written twice is the defect shape this
+ * project keeps finding.
+ */
+.prose { display: grid; gap: 10px; min-width: 0; }
+.prose > h3, .prose > h4, .prose > h5, .prose > h6 {
+  font-size: 0.9rem;
+  font-weight: 620;
+  color: var(--text);
+  margin-top: 4px;
+}
+.prose code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  padding: 0.1em 0.34em;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  /* A long identifier breaks rather than widening the column it sits in. */
+  overflow-wrap: anywhere;
+}
+.prose pre code { padding: 0; border: 0; background: none; font-size: 1em; }
+.prose ul, .prose ol { display: grid; gap: 5px; color: var(--text-2); }
+.prose em { font-style: italic; }
+.prose strong { font-weight: 620; color: var(--text); }
+
+/* Tables scroll inside their own box; the page itself never scrolls sideways. */
+.prose-table-scroll { overflow-x: auto; }
+.prose-table {
+  border-collapse: collapse;
+  font-size: 0.86rem;
+  min-width: 100%;
+}
+.prose-table th, .prose-table td {
+  text-align: left;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  color: var(--text-2);
+}
+.prose-table th { color: var(--text); font-weight: 620; white-space: nowrap; }
+.prose-table tbody tr:last-child td { border-bottom: 0; }
 
 .evidence { position: sticky; top: 86px; display: grid; gap: 16px; min-width: 0; }
 .result-card {
@@ -576,7 +621,7 @@ textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
   gap: 4px;
 }
 .help-level strong { font-size: 0.82rem; }
-.help-level p { font-size: 0.86rem; color: var(--text-2); white-space: pre-wrap; }
+.help-level p { font-size: 0.86rem; color: var(--text-2); }
 .help-levels { display: grid; gap: 12px; }
 
 /* ---------- measurements ---------- */
@@ -656,7 +701,6 @@ table.measure td.numeric { font-family: var(--mono); font-variant-numeric: tabul
   border-radius: var(--radius-sm);
   overflow-x: auto; font-size: 0.82rem;
 }
-.guide-section ul { color: var(--text-2); display: grid; gap: 4px; }
 .plan-panel { position: sticky; top: 86px; display: grid; gap: 12px; }
 
 /* ---------- health ---------- */

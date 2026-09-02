@@ -50,6 +50,7 @@ pub fn run(args: ValidatePackArgs, options: &GlobalOptions) -> Result<()> {
                     problems.push(problem);
                 }
             }
+            problems.extend(crate::capability::pack_render_defects(&pack));
         }
         if problems.is_empty() {
             if !args.json {

@@ -79,6 +79,6 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
 
 fn print_hint(total: usize, hint: &HelpLevel) {
     println!("Hint {}/{total}:", hint.level);
-    println!("{}", hint.content.trim());
+    println!("{}", hint.content.source.trim());
     println!();
 }

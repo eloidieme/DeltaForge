@@ -390,9 +390,18 @@ fn the_whole_journey_is_reachable_from_the_browser() {
     // 6. The performance loop, from the browser.
     let performance = &passed["performance"];
     assert_eq!(performance["has_benchmarks"], true);
+    // The prompt is rich text now, like every other authored string the page
+    // renders: the source it was written as, plus the blocks the workbench
+    // draws. It used to arrive as one flat string, so a prompt that named a
+    // function in backticks showed the backticks.
+    let prompt = &performance["prediction_prompt"];
     assert!(
-        performance["prediction_prompt"].is_string(),
+        prompt["source"].as_str().is_some_and(|text| !text.is_empty()),
         "a measured step must offer a prediction prompt"
+    );
+    assert!(
+        !prompt["blocks"].as_array().unwrap().is_empty(),
+        "the prediction prompt did not render into blocks"
     );
     assert!(performance["latest"].as_array().unwrap().is_empty());
 

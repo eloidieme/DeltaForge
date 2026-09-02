@@ -104,7 +104,7 @@ fn render_published(stage: &crate::capability::PublishedStageContent) -> String 
     out.push_str(&format!("## Goal\n\n{}\n\n", stage.mission));
     for section in &stage.sections {
         out.push_str(&format!("## {}\n\n", section.title));
-        out.push_str(&render_blocks(&section.blocks));
+        out.push_str(&crate::capability::blocks_to_markdown(&section.blocks));
     }
     out.push_str(&format!(
         "## Invocation\n\nThe program is run as `{}`.\n",
@@ -115,28 +115,8 @@ fn render_published(stage: &crate::capability::PublishedStageContent) -> String 
         for level in &stage.help {
             out.push_str(&format!(
                 "### {}. {}\n\n{}\n\n",
-                level.level, level.label, level.content
+                level.level, level.label, level.content.source
             ));
-        }
-    }
-    out
-}
-
-fn render_blocks(blocks: &[crate::capability::OverviewBlock]) -> String {
-    use crate::capability::OverviewBlock;
-    let mut out = String::new();
-    for block in blocks {
-        match block {
-            OverviewBlock::Paragraph { text } => out.push_str(&format!("{text}\n\n")),
-            OverviewBlock::Code { language, content } => {
-                out.push_str(&format!("```{language}\n{content}\n```\n\n"));
-            }
-            OverviewBlock::List { items } => {
-                for item in items {
-                    out.push_str(&format!("- {item}\n"));
-                }
-                out.push('\n');
-            }
         }
     }
     out

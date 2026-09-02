@@ -440,6 +440,13 @@ function renderOverview() {
   $("#overview-guide").replaceChildren(...(overview.sections || []).map(renderGuideSection));
 }
 
+/* The one renderer for authored content.
+ *
+ * Stage sections, hints and prediction prompts all arrive as the same block
+ * tree from the same parser, and all three render through here. In 1.0 they
+ * had three different treatments — sections had their backticks deleted,
+ * hints and prompts showed theirs — so the same sentence looked different
+ * depending on which panel it appeared in. */
 function renderBlock(block) {
   if (block.kind === "code") {
     const pre = text(element("pre"), block.content);
@@ -447,15 +454,67 @@ function renderBlock(block) {
     return pre;
   }
   if (block.kind === "list") {
-    const list = element("ul");
-    list.replaceChildren(...block.items.map((item) => text(element("li"), item)));
+    const list = element(block.ordered ? "ol" : "ul");
+    list.replaceChildren(...block.items.map((item) => renderInline(element("li"), item)));
     return list;
   }
-  return text(element("p"), block.text);
+  if (block.kind === "heading") {
+    // Clamped: a section is already under an <h2>, so its sub-headings start
+    // at <h3> and never outrank their own panel.
+    const level = Math.min(Math.max(block.level ?? 3, 3), 6);
+    return renderInline(element(`h${level}`), block.spans);
+  }
+  if (block.kind === "table") {
+    const table = element("table", "prose-table");
+    const align = (node, column) => {
+      const alignment = (block.alignments || [])[column];
+      if (alignment === "center") node.style.textAlign = "center";
+      else if (alignment === "end") node.style.textAlign = "right";
+      return node;
+    };
+    const head = element("thead");
+    const headRow = element("tr");
+    headRow.replaceChildren(...block.headers.map((cell, column) => align(renderInline(element("th"), cell), column)));
+    head.append(headRow);
+    const body = element("tbody");
+    body.replaceChildren(...block.rows.map((row) => {
+      const tr = element("tr");
+      tr.replaceChildren(...row.map((cell, column) => align(renderInline(element("td"), cell), column)));
+      return tr;
+    }));
+    table.append(head, body);
+    // Wide tables scroll inside their own box rather than widening the page.
+    const scroller = element("div", "prose-table-scroll");
+    scroller.append(table);
+    return scroller;
+  }
+  return renderInline(element("p"), block.spans);
+}
+
+/* Inline spans into DOM. Every span carries text, never markup, so nothing
+ * here parses and nothing sets innerHTML. */
+function renderInline(node, spans) {
+  node.replaceChildren(...(spans || []).map(inlineNode));
+  return node;
+}
+
+function inlineNode(span) {
+  if (span.kind === "code") return text(element("code"), span.text);
+  if (span.kind === "strong") return renderInline(element("strong"), span.spans);
+  if (span.kind === "emphasis") return renderInline(element("em"), span.spans);
+  return document.createTextNode(span.text ?? "");
+}
+
+/* Blocks for a `RichText` field, tolerating an older service that sent a bare
+ * string. */
+function richBlocks(rich) {
+  if (!rich) return [];
+  if (typeof rich === "string") return [{ kind: "paragraph", spans: [{ kind: "text", text: rich }] }];
+  return rich.blocks || [];
 }
 
 function renderGuideSection(section) {
-  const node = element("section", "guide-section");
+  const node = element("section", "guide-section prose");
   node.append(text(element("h2"), section.title), ...section.blocks.map(renderBlock));
   return node;
 }
@@ -518,8 +577,9 @@ function renderBuild() {
 
 function renderHints() {
   $("#help-levels").replaceChildren(...content.revealed_help.map((hint) => {
-    const panel = element("div", "help-level");
-    panel.append(text(element("strong"), `${hint.level}. ${hint.label}`), text(element("p"), hint.content));
+    const panel = element("div", "help-level prose");
+    panel.append(text(element("strong"), `${hint.level}. ${hint.label}`));
+    panel.append(...richBlocks(hint.content).map(renderBlock));
     return panel;
   }));
   const revealed = content.revealed_help.length;
@@ -708,7 +768,7 @@ function renderPredictionSection(performance) {
   const prompt = performance.prediction_prompt;
   section.hidden = !prompt;
   if (!prompt) return;
-  $("#prediction-prompt").textContent = prompt;
+  $("#prediction-prompt").replaceChildren(...richBlocks(prompt).map(renderBlock));
   const recorded = performance.prediction;
   const answered = Boolean(recorded);
   $("#prediction-recorded").hidden = !answered || recorded.skipped;

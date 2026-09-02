@@ -284,7 +284,7 @@ pub struct PerformanceState {
     pub latest: Vec<BenchmarkView>,
     /// The step's prediction prompt, when it declares one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prediction_prompt: Option<String>,
+    pub prediction_prompt: Option<crate::capability::RichText>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prediction: Option<crate::state::LearnerNote>,
     #[serde(skip_serializing_if = "Option::is_none")]
