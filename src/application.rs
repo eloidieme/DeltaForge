@@ -842,13 +842,10 @@ pub fn reveal_next_hint(options: &GlobalOptions) -> Result<crate::capability::Ca
         .unwrap_or_default();
     // The final authored help level is always the retrospective, gated until
     // the capability is acquired; every level before it is available freely.
-    // A pack with only one help level has no separate retrospective to gate,
-    // so the floor keeps that single level visible pre-completion too.
-    let maximum = if context.state.is_completed(&stage_id) {
-        help.len()
-    } else {
-        help.len().saturating_sub(1).max(help.len().min(1))
-    };
+    let maximum = crate::capability::available_help_levels(
+        help.len(),
+        context.state.is_completed(&stage_id),
+    );
     if maximum == 0 {
         bail!("this capability has no help levels");
     }

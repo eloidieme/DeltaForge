@@ -283,7 +283,11 @@ pub fn create_pack(request: &NewPackRequest) -> Result<AuthoringReport> {
     )?;
     atomic_write(
         root.join("stages/01_first_stage/hints.md").as_path(),
-        "# Hint 1\n\nStart by making the CLI parse the command shape from the instructions.\n",
+        concat!(
+            "# Hint 1 — Observation\n\nPoint at what the command prints now versus what the example shows.\n\n",
+            "# Hint 2 — Concept\n\nName the idea the learner needs, without writing their code for them.\n\n",
+            "# Hint 3 — Retrospective\n\nExplain the finished solution. This rung stays locked until the step passes.\n",
+        ),
     )?;
     atomic_write(
         root.join("stages/01_first_stage/tests.yaml").as_path(),
@@ -360,7 +364,11 @@ pub fn add_stage(request: &AddStageRequest) -> Result<AuthoringReport> {
     )?;
     atomic_write(
         prepared_dir.join("hints.md").as_path(),
-        "# Hint 1\n\nIdentify the smallest CLI behavior that should pass this stage first.\n",
+        concat!(
+            "# Hint 1 — Observation\n\nIdentify the smallest behavior that should pass this stage first.\n\n",
+            "# Hint 2 — Concept\n\nName the idea the learner needs, without writing their code for them.\n\n",
+            "# Hint 3 — Retrospective\n\nExplain the finished solution. This rung stays locked until the step passes.\n",
+        ),
     )?;
     atomic_write(
         prepared_dir.join("tests.yaml").as_path(),
@@ -1293,13 +1301,15 @@ pub fn diagnose_pack(pack: &LoadedPack) -> AuthoringReport {
                     stage.id
                 ));
             }
-            for heading in ["Edge cases", "Non-goals"] {
-                if !has_markdown_heading(&source, heading) {
-                    problems.push(format!(
-                        "stage {} instructions are missing a {heading} heading",
-                        stage.id
-                    ));
-                }
+            // Every heading the workbench needs, not just the two this check
+            // used to cover. A stage missing any of them cannot be rendered at
+            // all, so reporting a subset let a pack pass `pack doctor` and
+            // then fail to open.
+            for heading in crate::capability::missing_stage_sections(&source) {
+                problems.push(format!(
+                    "stage {} instructions are missing a `## {heading}` section, or it is empty",
+                    stage.id
+                ));
             }
         }
         let hints = pack.hints_path(stage);
@@ -1309,6 +1319,17 @@ pub fn diagnose_pack(pack: &LoadedPack) -> AuthoringReport {
                 problems.push(format!(
                     "stage {} has {count} hints; at least 3 are recommended",
                     stage.id
+                ));
+            }
+            // Levels are revealed by position, so numbering that skips or
+            // repeats a rung means the ladder an author wrote is not the
+            // ladder a learner climbs.
+            let authored = crate::capability::authored_help_numbers(&source);
+            if authored.iter().copied().ne(1..=authored.len()) {
+                problems.push(format!(
+                    "stage {} hint headings are numbered {authored:?}; number them 1 to {}",
+                    stage.id,
+                    authored.len()
                 ));
             }
         }
@@ -1348,32 +1369,12 @@ pub fn diagnose_pack(pack: &LoadedPack) -> AuthoringReport {
     }
 }
 
-fn has_markdown_heading(source: &str, expected: &str) -> bool {
-    source.lines().any(|line| {
-        let line = line.trim();
-        let Some(text) = line.strip_prefix('#') else {
-            return false;
-        };
-        text.trim_start_matches('#')
-            .trim()
-            .eq_ignore_ascii_case(expected)
-    })
-}
-
+/// How many rungs a stage's help ladder actually has, counted with the same
+/// parser the learner surfaces use. Counting headings separately meant the
+/// doctor could call a ladder complete that the workbench then rendered with
+/// a different number of rungs.
 fn hint_heading_count(source: &str) -> usize {
-    source
-        .lines()
-        .filter(|line| {
-            let line = line.trim();
-            line.strip_prefix("# Hint ").is_some_and(|heading| {
-                let level = heading
-                    .split_once(['—', '-'])
-                    .map_or(heading, |(level, _)| level)
-                    .trim();
-                !level.is_empty() && level.chars().all(|ch| ch.is_ascii_digit())
-            })
-        })
-        .count()
+    crate::capability::parse_help(source).len()
 }
 
 pub fn check_reference(request: &CheckReferenceRequest) -> Result<AuthoringReport> {
@@ -1861,30 +1862,49 @@ fn main() -> ExitCode {{
     )
 }
 
+/// The scaffold writes every `##` section the workbench requires. It used to
+/// write plain-text labels (`Edge cases:`), which are invisible to both the
+/// renderer and `pack doctor`, so a freshly scaffolded pack failed its own
+/// doctor and could not be opened.
 fn first_stage_instructions(id: &str) -> String {
     format!(
         r#"# First stage
 
-Implement:
+## Goal
+
+Echo one value back to the caller.
+
+## Background
+
+Replace this with the concrete situation that motivates the behavior, then the
+idea behind it. A learner should finish this section knowing why the step
+exists, not just what to type.
+
+## Requirements
+
+- Print the value followed by a newline.
+- Exit with status 0 on success.
+
+## Example
 
 ```bash
-{id} echo <value>
+{id} echo hello
 ```
-
-Print the value followed by a newline.
-
-Example:
 
 ```txt
 hello
 ```
 
-Edge cases:
+## Success criteria
+
+`{id} echo <value>` prints the value and exits 0.
+
+## Edge cases
 
 - reject missing values
 - preserve spaces inside one argument
 
-Non-goals:
+## Non-goals
 
 - persistence
 - networking
@@ -1919,19 +1939,33 @@ fn stage_instructions(id: &str, title: &str) -> String {
     format!(
         r#"# {title}
 
-Describe the behavior for stage `{id}`.
+## Goal
 
-Example:
+Name the one new observable ability stage `{id}` adds.
+
+## Background
+
+Walk from a concrete case to the concept behind that ability.
+
+## Requirements
+
+- state the contract in exact language
+
+## Example
 
 ```bash
 replace-this-command
 ```
 
-Edge cases:
+## Success criteria
+
+Describe what a learner can observe once this stage passes.
+
+## Edge cases
 
 - add at least two edge cases before considering this stage complete
 
-Non-goals:
+## Non-goals
 
 - list behavior that should not be implemented yet
 "#
@@ -1955,12 +1989,35 @@ fn stage_tests(title: &str) -> String {
 mod tests {
     use super::*;
 
+    /// The doctor must report exactly what the renderer refuses, so a pack it
+    /// calls clean is a pack that opens.
     #[test]
     fn content_depth_heuristics_recognize_real_headings() {
-        let instructions = "# Stage\n\n## Edge cases\n\n- empty\n\n### Non-goals\n";
-        assert!(has_markdown_heading(instructions, "Edge cases"));
-        assert!(has_markdown_heading(instructions, "Non-goals"));
-        assert!(!has_markdown_heading("Edge cases:\n", "Edge cases"));
+        let complete = concat!(
+            "# Stage\n\n## Goal\n\nDo one thing.\n\n## Background\n\nWhy.\n\n",
+            "## Requirements\n\n- exact\n\n## Example\n\n```txt\nout\n```\n\n",
+            "## Success criteria\n\nObservable.\n\n## Edge cases\n\n- empty\n\n",
+            "## Non-goals\n\n- later work\n",
+        );
+        assert!(crate::capability::missing_stage_sections(complete).is_empty());
+        // A plain-text label is not a section, and neither is an empty one.
+        assert_eq!(
+            crate::capability::missing_stage_sections(
+                &complete.replace("## Edge cases\n\n- empty", "Edge cases:\n\n- empty")
+            ),
+            ["Edge cases"]
+        );
+        assert_eq!(
+            crate::capability::missing_stage_sections("# Stage\n\n## Goal\n\nDo one thing.\n"),
+            [
+                "Background",
+                "Requirements",
+                "Example",
+                "Success criteria",
+                "Edge cases",
+                "Non-goals"
+            ]
+        );
 
         let hints = "# Hint 1\nfirst\n# Hint 2\nsecond\n# Hint 3\nthird\n";
         assert_eq!(hint_heading_count(hints), 3);
@@ -1969,6 +2026,22 @@ mod tests {
             2
         );
         assert_eq!(hint_heading_count("# Hint 1\none\n# Hint two\n"), 1);
+    }
+
+    /// Every scaffold `pack new` and `pack add-stage` write must satisfy the
+    /// checks `pack doctor` then applies to them.
+    #[test]
+    fn scaffolded_stages_satisfy_the_doctor_they_ship_with() {
+        for instructions in [
+            first_stage_instructions("example"),
+            stage_instructions("02_next", "Next behavior"),
+        ] {
+            assert!(
+                crate::capability::missing_stage_sections(&instructions).is_empty(),
+                "scaffold is missing {:?}",
+                crate::capability::missing_stage_sections(&instructions)
+            );
+        }
     }
 
     #[test]

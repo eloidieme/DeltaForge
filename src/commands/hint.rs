@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 
+use crate::capability::{HelpLevel, available_help_levels, parse_help};
 use crate::cli::HintArgs;
 use crate::context::{GlobalOptions, ProjectContext};
 
@@ -18,7 +19,10 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
         .with_context(|| format!("pack does not contain current stage {stage_id}"))?;
     let hints_path = context.pack.hints_path(stage);
     let hints_source = context.pack.read_stage_file(&hints_path)?;
-    let hints = parse_hints(&hints_source);
+    // The same parser the workbench uses. This command and that surface write
+    // and read one `hint_state` counter, so parsing the ladder two different
+    // ways let `hint --all` push the counter past the gated retrospective.
+    let hints = parse_help(&hints_source);
 
     if hints.is_empty() {
         println!("No hints available for {}.", stage.id);
@@ -26,18 +30,12 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
     }
 
     // The final authored hint is always the retrospective, gated until the
-    // capability is acquired; every hint before it is available freely. A
-    // stage with only one hint has no separate retrospective to gate, so the
-    // floor keeps that single hint visible pre-completion too.
-    let maximum = if context.state.is_completed(&stage_id) {
-        hints.len()
-    } else {
-        hints.len().saturating_sub(1).max(hints.len().min(1))
-    };
+    // capability is acquired; every hint before it is available freely.
+    let maximum = available_help_levels(hints.len(), context.state.is_completed(&stage_id));
 
     if args.all {
-        for (index, hint) in hints.iter().take(maximum).enumerate() {
-            print_hint(index + 1, hints.len(), hint);
+        for hint in hints.iter().take(maximum) {
+            print_hint(hints.len(), hint);
         }
         context.state.hint_state.insert(stage.id.clone(), maximum);
     } else {
@@ -57,7 +55,7 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
             anyhow::bail!("the retrospective unlocks after this capability is acquired");
         }
         let capped_level = level.min(maximum);
-        print_hint(capped_level, hints.len(), &hints[capped_level - 1]);
+        print_hint(hints.len(), &hints[capped_level - 1]);
         let previous = context
             .state
             .hint_state
@@ -79,30 +77,8 @@ pub fn run(args: HintArgs, options: &GlobalOptions) -> Result<()> {
     Ok(())
 }
 
-fn parse_hints(source: &str) -> Vec<String> {
-    let mut hints = Vec::new();
-    let mut current = Vec::new();
-
-    for line in source.lines() {
-        if line.starts_with("# Hint ") {
-            if !current.is_empty() {
-                hints.push(current.join("\n").trim().to_string());
-                current.clear();
-            }
-            continue;
-        }
-        current.push(line);
-    }
-
-    if !current.is_empty() {
-        hints.push(current.join("\n").trim().to_string());
-    }
-
-    hints.into_iter().filter(|hint| !hint.is_empty()).collect()
-}
-
-fn print_hint(level: usize, total: usize, hint: &str) {
-    println!("Hint {level}/{total}:");
-    println!("{}", hint.trim());
+fn print_hint(total: usize, hint: &HelpLevel) {
+    println!("Hint {}/{total}:", hint.level);
+    println!("{}", hint.content.trim());
     println!();
 }

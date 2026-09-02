@@ -497,7 +497,11 @@ function renderHints() {
   }));
   const revealed = content.revealed_help.length;
   const completed = state && state.capability.completed;
-  const available = completed ? content.help_levels : Math.min(content.help_levels, 4);
+  // The service decides how many levels are reachable right now and says so.
+  // Re-deriving it here as `min(levels, 4)` matched the flagship's five-rung
+  // ladder and was wrong for every three-rung pack, leaving an enabled button
+  // that the service then refused.
+  const available = content.available_help_levels;
   const reveal = $("#reveal-help");
   reveal.disabled = busy || revealed >= available;
   reveal.textContent = revealed >= available
@@ -1045,8 +1049,16 @@ $("#other-failures-list").onclick = (event) => {
 
 $("#reveal-help").onclick = () => guarded(async () => {
   if (!content) return;
+  $("#help-status").textContent = "";
+  // `guarded` has already set `busy`, so this re-render is what disables the
+  // button while the request is in flight.
   renderHints();
-  try { content = await post("/api/v1/hints"); } catch { /* the button re-renders disabled */ }
+  try {
+    content = await post("/api/v1/hints");
+  } catch (error) {
+    // Swallowing this left a button that looked live and did nothing.
+    $("#help-status").textContent = error.message;
+  }
   renderHints();
 });
 

@@ -25,6 +25,10 @@ pub struct CapabilityContent {
     pub capability_statement: String,
     pub next: Option<CapabilityPreview>,
     pub help_levels: usize,
+    /// How many of those levels may be revealed right now. Sent explicitly so
+    /// the workbench renders the reveal control from the rule the service
+    /// actually enforces instead of re-deriving it and disagreeing.
+    pub available_help_levels: usize,
     pub revealed_help: Vec<HelpLevel>,
 }
 
@@ -233,23 +237,60 @@ pub fn load_current(context: &ProjectContext) -> Result<CapabilityContent> {
             .unwrap_or_else(|| format!("Your program can now {}.", stage.title.to_lowercase())),
         next,
         help_levels: hints.len(),
+        available_help_levels: available_help_levels(
+            hints.len(),
+            context.state.is_completed(&stage.id),
+        ),
         revealed_help,
     })
+}
+
+/// The six panels the workbench shows for a stage, in reading order, paired
+/// with the `##` heading each one is authored under.
+const PANEL_SECTIONS: [(&str, &str); 6] = [
+    ("background", "Background"),
+    ("requirements", "Requirements"),
+    ("example", "Example"),
+    ("expected", "Success criteria"),
+    ("edge_cases", "Edge cases"),
+    ("non_goals", "Non-goals"),
+];
+
+/// Every `##` heading a stage guide must carry to render, in reading order.
+/// `Goal` is first because it supplies the mission line above the panels.
+pub const REQUIRED_STAGE_SECTIONS: [&str; 7] = [
+    "Goal",
+    "Background",
+    "Requirements",
+    "Example",
+    "Success criteria",
+    "Edge cases",
+    "Non-goals",
+];
+
+/// The required headings this stage guide is missing or leaves empty.
+///
+/// `capability_sections` below refuses to build content without them, so a
+/// pack that fails this check cannot be opened in the workbench at all. The
+/// authoring doctor calls the same function, rather than its own partial list,
+/// so `pack doctor` reporting a clean pack means the pack actually renders.
+pub fn missing_stage_sections(source: &str) -> Vec<&'static str> {
+    let sections = markdown_sections(source);
+    REQUIRED_STAGE_SECTIONS
+        .into_iter()
+        .filter(|heading| {
+            sections.get(*heading).is_none_or(|body| {
+                parse_blocks(&body.lines().collect::<Vec<_>>()).is_empty()
+            })
+        })
+        .collect()
 }
 
 /// The six sections the workbench shows for a stage, in reading order, each
 /// parsed into blocks. A pack that omits one of the required headings fails
 /// here rather than rendering an empty panel.
 fn capability_sections(sections: &BTreeMap<String, String>) -> Result<Vec<CapabilitySection>> {
-    const WANTED: [(&str, &str); 6] = [
-        ("background", "Background"),
-        ("requirements", "Requirements"),
-        ("example", "Example"),
-        ("expected", "Success criteria"),
-        ("edge_cases", "Edge cases"),
-        ("non_goals", "Non-goals"),
-    ];
-    WANTED
+    PANEL_SECTIONS
         .into_iter()
         .map(|(key, heading)| {
             let body = required_section(sections, heading)?;
@@ -550,7 +591,22 @@ fn strip_inline_markdown(text: &str) -> String {
         .to_string()
 }
 
-fn parse_help(source: &str) -> Vec<HelpLevel> {
+/// Parse a stage's `hints.md` into its help ladder.
+///
+/// This is the only parser of that file. There used to be three — this one,
+/// the terminal `hint` command's, and the authoring doctor's heading count —
+/// and they disagreed about what counts as a level. The terminal one treated
+/// any prose before the first `# Hint` heading as level 1, which pushed
+/// `hint_state` one rung too high and revealed the gated retrospective in the
+/// workbench, because the two surfaces write and read the same counter.
+///
+/// A level is numbered by its position in reading order, not by the digits in
+/// its heading, so `hint_state` (a count) and `HelpLevel::level` (an index)
+/// cannot drift apart when a pack numbers its headings `1, 2, 4`. The authored
+/// number is still required — it is what marks the line as a rung rather than
+/// an ordinary `# Hint`-prefixed sentence — and `validate-pack` reports
+/// numbering that does not run 1..n.
+pub fn parse_help(source: &str) -> Vec<HelpLevel> {
     let mut levels = Vec::new();
     let mut heading = None::<String>;
     let mut lines = Vec::new();
@@ -566,25 +622,59 @@ fn parse_help(source: &str) -> Vec<HelpLevel> {
     levels
 }
 
+/// The numbers a pack authored on its `# Hint N` headings, in reading order.
+/// `parse_help` renumbers by position, so this is what tells an author their
+/// ladder skips or repeats a rung.
+pub fn authored_help_numbers(source: &str) -> Vec<usize> {
+    source
+        .lines()
+        .filter_map(|line| help_heading_parts(line.strip_prefix("# Hint ")?.trim()))
+        .map(|(number, _)| number)
+        .collect()
+}
+
+/// How many help levels may be revealed for a stage right now.
+///
+/// The last authored level is the retrospective and stays gated until the
+/// capability is acquired; a pack with a single level has no separate
+/// retrospective to gate, so that one level stays visible. The workbench used
+/// to re-derive this as `min(total, 4)`, which happened to match the flagship's
+/// five-rung ladder and was wrong for every three-rung pack: the reveal button
+/// offered a level the service then refused.
+pub fn available_help_levels(total: usize, completed: bool) -> usize {
+    if completed {
+        total
+    } else {
+        total.saturating_sub(1).max(total.min(1))
+    }
+}
+
+/// Split `1 — Observation` into its number and its label. `None` when the
+/// heading carries no parsable number, which is what separates a ladder rung
+/// from an ordinary line that happens to start with `# Hint `.
+fn help_heading_parts(heading: &str) -> Option<(usize, &str)> {
+    let (number, label) = heading
+        .split_once(['—', '-'])
+        .map_or((heading, "Hint"), |(number, label)| {
+            (number.trim(), label.trim())
+        });
+    Some((number.parse().ok()?, label))
+}
+
 fn push_help(levels: &mut Vec<HelpLevel>, heading: Option<String>, lines: &mut Vec<&str>) {
     let Some(heading) = heading else {
         return;
     };
-    let (number, label) = heading
-        .split_once(['—', '-'])
-        .map_or((heading.as_str(), "Hint"), |(number, label)| {
-            (number.trim(), label.trim())
-        });
-    let Ok(level) = number.parse::<usize>() else {
-        lines.clear();
-        return;
-    };
+    let parts = help_heading_parts(&heading).map(|(_, label)| label.to_string());
     let content = lines.join("\n").trim().to_string();
     lines.clear();
+    let Some(label) = parts else {
+        return;
+    };
     if !content.is_empty() {
         levels.push(HelpLevel {
-            level,
-            label: label.to_string(),
+            level: levels.len() + 1,
+            label,
             content,
         });
     }
@@ -667,6 +757,46 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(labels, LADDER, "{}", stage.id);
         }
+    }
+
+    /// Prose before the first `# Hint` heading is not a rung. The terminal
+    /// `hint` command used to count it as one, which pushed the shared
+    /// `hint_state` counter a level too high and revealed the gated
+    /// retrospective in the workbench.
+    #[test]
+    fn a_preamble_is_not_a_help_level_and_numbering_follows_position() {
+        let ladder = parse_help(concat!(
+            "Read the instructions again before opening a hint.\n\n",
+            "# Hint 1 — Observation\n\nLook at the output.\n\n",
+            "# Hint 2 — Concept\n\nThink recursively.\n\n",
+            "# Hint 3 — Retrospective\n\nThe whole answer.\n",
+        ));
+        assert_eq!(ladder.len(), 3);
+        assert_eq!(ladder[0].label, "Observation");
+        assert_eq!(ladder[0].content, "Look at the output.");
+
+        // A ladder numbered 1, 2, 4 still climbs 1, 2, 3: `hint_state` counts
+        // rungs, so a level that skipped would never be revealed.
+        let misnumbered = parse_help("# Hint 1\n\nfirst\n\n# Hint 2\n\nsecond\n\n# Hint 4\n\nthird\n");
+        assert_eq!(
+            misnumbered.iter().map(|hint| hint.level).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(authored_help_numbers("# Hint 1\na\n# Hint 4\nb\n"), [1, 4]);
+    }
+
+    /// The reveal ceiling the service enforces. The workbench used to re-derive
+    /// it as `min(levels, 4)`, which matched the flagship's five-rung ladder
+    /// and offered a refused level on every three-rung pack.
+    #[test]
+    fn the_retrospective_is_the_only_gated_level() {
+        assert_eq!(available_help_levels(5, false), 4);
+        assert_eq!(available_help_levels(5, true), 5);
+        assert_eq!(available_help_levels(3, false), 2);
+        assert_eq!(available_help_levels(3, true), 3);
+        // A single-rung ladder has no separate retrospective to withhold.
+        assert_eq!(available_help_levels(1, false), 1);
+        assert_eq!(available_help_levels(0, false), 0);
     }
 
     #[test]

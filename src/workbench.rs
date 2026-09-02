@@ -2633,6 +2633,26 @@ mod tests {
         assert!(html.contains("prefers-reduced-motion: reduce"));
         assert!(html.contains("skip-link"));
 
+        // The reveal ceiling comes from the service, not from a number the
+        // page picked. Re-deriving it offered a level the service refused on
+        // every pack whose ladder is not five rungs long.
+        assert!(
+            html.contains("content.available_help_levels"),
+            "the page must read the reveal ceiling the service sends"
+        );
+        assert!(
+            !html.contains("Math.min(content.help_levels"),
+            "the page must not re-derive the reveal ceiling"
+        );
+
+        // Links never carry the capability token: clicks are routed in-page,
+        // so a token in an href only leaks through "Copy link address" and
+        // into a new tab's history.
+        assert!(
+            !html.contains("?token=${encodeURIComponent(token)}"),
+            "navigation links must not carry the capability token"
+        );
+
         // No surface tells the learner to open a terminal.
         assert!(!html.contains("deltaforge init"));
         assert!(!html.contains("deltaforge bench"));
