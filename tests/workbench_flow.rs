@@ -1053,6 +1053,61 @@ fn unhealthy_project_still_opens_and_supports_bounded_recovery() {
         "{restored_state}"
     );
 
+    // A failure that only surfaces *after* the project loads must still reach
+    // the learner. A directory symlink makes the project digest impossible to
+    // compute: health used to call this project healthy and `/api/v1/state`
+    // used to close the connection without writing a single byte, so the page
+    // replaced itself with a bare browser error and offered no way back.
+    #[cfg(unix)]
+    {
+        let external = project.join(".vendor-source");
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("data.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(&external, project.join("vendor")).unwrap();
+
+        let blocked = wait_for_health(port, token, "unhealthy");
+        assert_eq!(blocked["issue"]["code"], "integrity_blocked");
+        assert!(
+            blocked["issue"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("symbolic link to a directory"),
+            "{blocked}"
+        );
+        assert!(
+            blocked["issue"]["guidance"]
+                .as_str()
+                .unwrap()
+                .contains("integrity.exclude"),
+            "{blocked}"
+        );
+
+        // And the endpoint itself answers with a status and a message rather
+        // than an empty response.
+        let answered = request(
+            port,
+            "GET",
+            &format!("/api/v1/state?token={token}"),
+            None,
+            "",
+        );
+        assert!(
+            answered.starts_with("HTTP/1.1 500"),
+            "a failed read must be answered, got: {answered:?}"
+        );
+        assert!(
+            response_json(&answered)["error"]
+                .as_str()
+                .unwrap()
+                .contains("symbolic link to a directory"),
+            "{answered}"
+        );
+
+        fs::remove_file(project.join("vendor")).unwrap();
+        let healthy_again = wait_for_health(port, token, "healthy");
+        assert!(healthy_again["issue"].is_null());
+    }
+
     drop(service);
     let _ = fs::remove_dir_all(project);
 }

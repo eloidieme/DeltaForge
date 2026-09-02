@@ -75,7 +75,12 @@ function eventSourceUrl(path, project = true) {
 
 async function fetchJson(path, project = true) {
   const response = await fetch(api(path, project), { headers: { "X-DeltaForge-Token": token } });
-  if (!response.ok) throw new Error(`${path} is unavailable`);
+  if (!response.ok) {
+    // The service answers a failed read with the same actionable text the CLI
+    // prints for it, so prefer that over a generic "unavailable".
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(detail.error || `${path} is unavailable`);
+  }
   return response.json();
 }
 
@@ -95,8 +100,11 @@ async function post(path, body = {}, project = true) {
 /* -------------------------------------------------------------- routing */
 
 function projectRoute(view) { return `/projects/${activeProject}/${view}`; }
+// No token in the href. Every click here is intercepted and routed in-page, so
+// the token bought nothing except a live capability sitting in the DOM, ready
+// to be handed out by "Copy link address" or carried into a new tab's history.
 function routeLink(element, path) {
-  element.href = `${path}?token=${encodeURIComponent(token)}`;
+  element.href = path;
   element.dataset.route = path;
 }
 function navigate(path) {
@@ -368,7 +376,24 @@ async function submitCreate(event) {
 async function loadProject() {
   const health = await fetchJson("/api/v1/project-health");
   if (health.status !== "healthy") { renderHealth(health); return; }
-  const [next, latest] = await Promise.all([fetchJson("/api/v1/capability"), fetchJson("/api/v1/state")]);
+  let next, latest;
+  try {
+    [next, latest] = await Promise.all([fetchJson("/api/v1/capability"), fetchJson("/api/v1/state")]);
+  } catch (error) {
+    // Health passed but a project endpoint still could not answer. Show the
+    // recovery screen with what went wrong instead of letting this reject all
+    // the way out and replace the page with a bare browser error.
+    renderHealth({
+      status: "unhealthy",
+      issue: {
+        title: "DeltaForge could not open this project",
+        detail: error.message,
+        guidance: "Resolve the problem described below, then check again.",
+      },
+      actions: [],
+    });
+    return;
+  }
   state = latest; content = next;
   $("#project-name").textContent = next.project_overview.name;
   $("#project-meta").textContent = `${state.language} · ${completedSteps()} of ${next.roadmap.length} steps complete`;
@@ -862,6 +887,10 @@ function connectEvents(cursor) {
     if (currentView === "runs") renderRuns();
   });
   events.addEventListener("run", (event) => handleRun(JSON.parse(event.data)));
+  events.addEventListener("stream_error", (event) => {
+    const data = JSON.parse(event.data || "{}");
+    if ($("#activity")) $("#activity").textContent = data.error || "The live update stream stopped.";
+  });
   events.addEventListener("gap", () => {
     if ($("#activity")) $("#activity").textContent = "Earlier output was dropped; showing what's current.";
   });
@@ -937,6 +966,10 @@ async function refreshProject() {
       state = latest; content = next;
       $("#project-meta").textContent = `${state.language} · ${completedSteps()} of ${content.roadmap.length} steps complete`;
       renderCurrentView();
+    } catch (error) {
+      // This runs from an event listener, so an uncaught rejection here is
+      // invisible: the page would simply stop updating.
+      if ($("#activity")) $("#activity").textContent = error.message;
     } finally {
       refreshPending = null;
     }
@@ -1001,7 +1034,15 @@ $("#open-folder").onclick = () => openProject("/api/v1/project/open-folder");
 $("#health-editor").onclick = () => openProject("/api/v1/project/open-editor");
 $("#health-folder").onclick = () => openProject("/api/v1/project/open-folder");
 $("#health-recheck").onclick = () => loadProject();
-$("#health-repin").onclick = async () => { await post("/api/v1/project/repin-pack"); await loadProject(); };
+$("#health-repin").onclick = async () => {
+  try {
+    await post("/api/v1/project/repin-pack");
+  } catch (error) {
+    $("#health-detail").textContent = error.message;
+    return;
+  }
+  await loadProject();
+};
 
 $("#primary-action").onclick = () => guarded(async () => {
   if (!state) return;

@@ -788,6 +788,18 @@ fn handle_connection(
     }
 
     if !authorized(&request, shared) {
+        // A page route reached without a capability is a person, not a script:
+        // a reload after the token was stripped from the address bar, a
+        // bookmark, or a link opened in a new tab. Handing them raw JSON is a
+        // dead end, so say what happened and how to get back.
+        if request.method == "GET" && (path == "/" || is_page_route(path)) {
+            return respond(
+                &mut stream,
+                "403 Forbidden",
+                "text/html; charset=utf-8",
+                UNAUTHORIZED_PAGE,
+            );
+        }
         return respond(
             &mut stream,
             "403 Forbidden",
@@ -838,9 +850,32 @@ fn handle_connection(
         );
     }
 
+    // `dispatch` is fallible, and its failures used to leave the connection
+    // closed with nothing written at all: the spawn site discards the error, so
+    // a browser saw a bare network failure with no status and no message. Any
+    // error that reaches here is answered instead.
+    if let Err(error) = dispatch(&mut stream, shared, &request, path) {
+        return respond_internal_error(&mut stream, &error);
+    }
+    Ok(())
+}
+
+/// Route one authorized request. Every arm either writes a response or returns
+/// the error that stopped it; `handle_connection` turns the latter into a 500.
+///
+/// An arm that has already begun writing a response must not return `Err`, or
+/// that 500 would be appended to a reply in progress. The two streaming arms
+/// hold to this by reporting their own failures inside the event stream; see
+/// `serve_events`.
+fn dispatch(
+    stream: &mut TcpStream,
+    shared: &Arc<Shared>,
+    request: &HttpRequest,
+    path: &str,
+) -> Result<()> {
     match (request.method.as_str(), path) {
         ("GET", "/") | ("GET", "/projects") | ("GET", "/catalog") | ("GET", "/create") => respond(
-            &mut stream,
+            stream,
             "200 OK",
             "text/html; charset=utf-8",
             &workbench_html(&shared.token),
@@ -849,14 +884,14 @@ fn handle_connection(
             let project_id = route.split('/').nth(2).unwrap_or_default();
             if crate::project_registry::resolve(project_id).is_err() {
                 return respond(
-                    &mut stream,
+                    stream,
                     "404 Not Found",
                     "text/plain; charset=utf-8",
                     "Project not found",
                 );
             }
             respond(
-                &mut stream,
+                stream,
                 "200 OK",
                 "text/html; charset=utf-8",
                 &workbench_html(&shared.token),
@@ -871,13 +906,13 @@ fn handle_connection(
                 "clients": shared.clients.load(Ordering::SeqCst),
             })
             .to_string();
-            respond(&mut stream, "200 OK", "application/json", &body)
+            respond(stream, "200 OK", "application/json", &body)
         }
         ("GET", "/api/v1/project-health") => {
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             let health = application::load_project_health(&options)?;
             respond(
-                &mut stream,
+                stream,
                 "200 OK",
                 "application/json",
                 &serde_json::to_string(&health)?,
@@ -886,7 +921,7 @@ fn handle_connection(
         ("GET", "/api/v1/catalog") => {
             let catalog = application::load_catalog(&GlobalOptions::default())?;
             respond(
-                &mut stream,
+                stream,
                 "200 OK",
                 "application/json",
                 &serde_json::to_string(&catalog)?,
@@ -897,51 +932,51 @@ fn handle_connection(
                 Ok(path) => serde_json::json!({"default_directory": path.display().to_string()}),
                 Err(error) => serde_json::json!({"error": format!("{error:#}")}),
             };
-            respond(&mut stream, "200 OK", "application/json", &body.to_string())
+            respond(stream, "200 OK", "application/json", &body.to_string())
         }
         ("POST", "/api/v1/projects/preflight") | ("POST", "/api/v1/projects") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            let body: CreateProjectBody = match parse_json_body(&request) {
+            let body: CreateProjectBody = match parse_json_body(request) {
                 Ok(body) => body,
                 Err(_) => {
                     return respond(
-                        &mut stream,
+                        stream,
                         "400 Bad Request",
                         "application/json",
                         r#"{"error":"invalid_json"}"#,
                     );
                 }
             };
-            create_project(&mut stream, shared, path, body)
+            create_project(stream, shared, path, body)
         }
         ("GET", "/api/v1/projects") => {
             let projects = load_project_summaries()?;
             respond(
-                &mut stream,
+                stream,
                 "200 OK",
                 "application/json",
                 &serde_json::to_string(&projects)?,
             )
         }
         ("POST", "/api/v1/focus") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            if parse_json_body::<EmptyBody>(&request).is_err() {
+            if parse_json_body::<EmptyBody>(request).is_err() {
                 return respond(
-                    &mut stream,
+                    stream,
                     "400 Bad Request",
                     "application/json",
                     r#"{"error":"invalid_json"}"#,
@@ -954,55 +989,55 @@ fn handle_connection(
             *shared.focus_target.lock().expect("workbench lock poisoned") = route;
             shared.focus_revision.fetch_add(1, Ordering::SeqCst);
             respond(
-                &mut stream,
+                stream,
                 "202 Accepted",
                 "application/json",
                 r#"{"status":"focus_requested"}"#,
             )
         }
         ("GET", "/api/v1/state") => {
-            let (project_id, options) = project_request(shared, &request)?;
+            let (project_id, options) = project_request(shared, request)?;
             let state = application::load_workbench_state_for_session(
                 &options,
                 &project_session_id(shared, &project_id),
             )?;
             let body = serde_json::to_string(&state)?;
-            respond(&mut stream, "200 OK", "application/json", &body)
+            respond(stream, "200 OK", "application/json", &body)
         }
         ("GET", "/api/v1/capability") => {
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             let content = application::load_capability_content(&options)?;
             let body = serde_json::to_string(&content)?;
-            respond(&mut stream, "200 OK", "application/json", &body)
+            respond(stream, "200 OK", "application/json", &body)
         }
         ("GET", "/api/v1/app-events") => serve_app_events(stream, shared),
         ("GET", "/api/v1/events") => {
-            let (project_id, options) = project_request(shared, &request)?;
-            serve_events(stream, shared, &request, project_id, options)
+            let (project_id, options) = project_request(shared, request)?;
+            serve_events(stream, shared, request, project_id, options)
         }
         ("POST", "/api/v1/runs") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            let body: StartRunBody = match parse_json_body(&request) {
+            let body: StartRunBody = match parse_json_body(request) {
                 Ok(body) => body,
                 Err(_) => {
                     return respond(
-                        &mut stream,
+                        stream,
                         "400 Bad Request",
                         "application/json",
                         r#"{"error":"invalid_json"}"#,
                     );
                 }
             };
-            let (project_id, options) = project_request(shared, &request)?;
+            let (project_id, options) = project_request(shared, request)?;
             start_run(
-                &mut stream,
+                stream,
                 Arc::clone(shared),
                 project_id,
                 options,
@@ -1010,28 +1045,28 @@ fn handle_connection(
             )
         }
         ("POST", "/api/v1/runs/rerun") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            let body: RerunBody = match parse_json_body(&request) {
+            let body: RerunBody = match parse_json_body(request) {
                 Ok(body) => body,
                 Err(_) => {
                     return respond(
-                        &mut stream,
+                        stream,
                         "400 Bad Request",
                         "application/json",
                         r#"{"error":"invalid_json"}"#,
                     );
                 }
             };
-            let (project_id, options) = project_request(shared, &request)?;
+            let (project_id, options) = project_request(shared, request)?;
             start_run(
-                &mut stream,
+                stream,
                 Arc::clone(shared),
                 project_id,
                 options,
@@ -1039,28 +1074,28 @@ fn handle_connection(
             )
         }
         ("POST", "/api/v1/benchmarks") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            let body: StartBenchmarkBody = match parse_json_body(&request) {
+            let body: StartBenchmarkBody = match parse_json_body(request) {
                 Ok(body) => body,
                 Err(_) => {
                     return respond(
-                        &mut stream,
+                        stream,
                         "400 Bad Request",
                         "application/json",
                         r#"{"error":"invalid_json"}"#,
                     );
                 }
             };
-            let (project_id, options) = project_request(shared, &request)?;
+            let (project_id, options) = project_request(shared, request)?;
             start_benchmark_run(
-                &mut stream,
+                stream,
                 Arc::clone(shared),
                 project_id,
                 options,
@@ -1068,26 +1103,26 @@ fn handle_connection(
             )
         }
         ("POST", "/api/v1/predictions") | ("POST", "/api/v1/reflections") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            let body: LearnerNoteBody = match parse_json_body(&request) {
+            let body: LearnerNoteBody = match parse_json_body(request) {
                 Ok(body) => body,
                 Err(_) => {
                     return respond(
-                        &mut stream,
+                        stream,
                         "400 Bad Request",
                         "application/json",
                         r#"{"error":"invalid_json"}"#,
                     );
                 }
             };
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             let recorded = if path == "/api/v1/predictions" {
                 application::record_prediction(&options, body.text, body.skipped)
             } else {
@@ -1095,13 +1130,13 @@ fn handle_connection(
             };
             match recorded {
                 Ok(state) => respond(
-                    &mut stream,
+                    stream,
                     "200 OK",
                     "application/json",
                     &serde_json::to_string(&state)?,
                 ),
                 Err(error) => respond(
-                    &mut stream,
+                    stream,
                     "409 Conflict",
                     "application/json",
                     &serde_json::json!({"error": format!("{error:#}")}).to_string(),
@@ -1109,42 +1144,42 @@ fn handle_connection(
             }
         }
         ("GET", "/api/v1/snapshots/preview") => {
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             let preview = application::preview_stage_snapshot(&options)?;
             respond(
-                &mut stream,
+                stream,
                 "200 OK",
                 "application/json",
                 &serde_json::to_string(&preview)?,
             )
         }
         ("POST", "/api/v1/snapshots") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            if parse_json_body::<EmptyBody>(&request).is_err() {
+            if parse_json_body::<EmptyBody>(request).is_err() {
                 return respond(
-                    &mut stream,
+                    stream,
                     "400 Bad Request",
                     "application/json",
                     r#"{"error":"invalid_json"}"#,
                 );
             }
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             match application::create_stage_snapshot(&options, false) {
                 Ok(outcome) => respond(
-                    &mut stream,
+                    stream,
                     "201 Created",
                     "application/json",
                     &serde_json::to_string(&outcome)?,
                 ),
                 Err(error) => respond(
-                    &mut stream,
+                    stream,
                     "409 Conflict",
                     "application/json",
                     &serde_json::json!({"error": format!("{error:#}")}).to_string(),
@@ -1152,35 +1187,35 @@ fn handle_connection(
             }
         }
         ("POST", "/api/v1/reports") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            let body: ExportReportBody = match parse_json_body(&request) {
+            let body: ExportReportBody = match parse_json_body(request) {
                 Ok(body) => body,
                 Err(_) => {
                     return respond(
-                        &mut stream,
+                        stream,
                         "400 Bad Request",
                         "application/json",
                         r#"{"error":"invalid_json"}"#,
                     );
                 }
             };
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             match application::export_report(&options, body.format.into()) {
                 Ok(exported) => respond(
-                    &mut stream,
+                    stream,
                     "200 OK",
                     "application/json",
                     &serde_json::to_string(&exported)?,
                 ),
                 Err(error) => respond(
-                    &mut stream,
+                    stream,
                     "409 Conflict",
                     "application/json",
                     &serde_json::json!({"error": format!("{error:#}")}).to_string(),
@@ -1188,36 +1223,36 @@ fn handle_connection(
             }
         }
         ("POST", "/api/v1/runs/cancel") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            let (_, options) = project_request(shared, &request)?;
-            cancel_run(&mut stream, &options)
+            let (_, options) = project_request(shared, request)?;
+            cancel_run(stream, &options)
         }
         ("POST", "/api/v1/hints") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             match application::reveal_next_hint(&options) {
                 Ok(content) => respond(
-                    &mut stream,
+                    stream,
                     "200 OK",
                     "application/json",
                     &serde_json::to_string(&content)?,
                 ),
                 Err(error) => respond(
-                    &mut stream,
+                    stream,
                     "409 Conflict",
                     "application/json",
                     &serde_json::json!({"error": format!("{error:#}")}).to_string(),
@@ -1225,24 +1260,24 @@ fn handle_connection(
             }
         }
         ("POST", "/api/v1/capabilities/next") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             match application::begin_next_capability(&options) {
                 Ok(state) => respond(
-                    &mut stream,
+                    stream,
                     "200 OK",
                     "application/json",
                     &serde_json::to_string(&state)?,
                 ),
                 Err(error) => respond(
-                    &mut stream,
+                    stream,
                     "409 Conflict",
                     "application/json",
                     &serde_json::json!({"error": format!("{error:#}")}).to_string(),
@@ -1250,32 +1285,32 @@ fn handle_connection(
             }
         }
         ("POST", "/api/v1/project/repin-pack") => {
-            if !authorized_mutation(&request, shared) {
+            if !authorized_mutation(request, shared) {
                 return respond(
-                    &mut stream,
+                    stream,
                     "403 Forbidden",
                     "application/json",
                     r#"{"error":"forbidden"}"#,
                 );
             }
-            if parse_json_body::<EmptyBody>(&request).is_err() {
+            if parse_json_body::<EmptyBody>(request).is_err() {
                 return respond(
-                    &mut stream,
+                    stream,
                     "400 Bad Request",
                     "application/json",
                     r#"{"error":"invalid_json"}"#,
                 );
             }
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             match application::repin_current_pack(&options) {
                 Ok(health) => respond(
-                    &mut stream,
+                    stream,
                     "200 OK",
                     "application/json",
                     &serde_json::to_string(&health)?,
                 ),
                 Err(error) => respond(
-                    &mut stream,
+                    stream,
                     "409 Conflict",
                     "application/json",
                     &serde_json::json!({"error": format!("{error:#}")}).to_string(),
@@ -1283,34 +1318,34 @@ fn handle_connection(
             }
         }
         ("POST", "/api/v1/project/open-editor") => {
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             open_project(
-                &mut stream,
+                stream,
                 shared,
-                &request,
+                request,
                 &options,
                 ProjectOpenKind::Editor,
             )
         }
         ("POST", "/api/v1/project/open-folder") => {
-            let (_, options) = project_request(shared, &request)?;
+            let (_, options) = project_request(shared, request)?;
             open_project(
-                &mut stream,
+                stream,
                 shared,
-                &request,
+                request,
                 &options,
                 ProjectOpenKind::Folder,
             )
         }
-        ("POST", "/api/v1/service/shutdown") => shutdown_service(&mut stream, shared, &request),
+        ("POST", "/api/v1/service/shutdown") => shutdown_service(stream, shared, request),
         ("POST", _) | ("GET", _) => respond(
-            &mut stream,
+            stream,
             "404 Not Found",
             "application/json",
             r#"{"error":"not_found"}"#,
         ),
         _ => respond(
-            &mut stream,
+            stream,
             "404 Not Found",
             "application/json",
             r#"{"error":"not_found"}"#,
@@ -1318,10 +1353,47 @@ fn handle_connection(
     }
 }
 
+/// Answer a request the router could not complete. The message is the same
+/// actionable text the CLI prints for the same failure, so a learner who hits
+/// one in the browser is told what to fix rather than left with a dead page.
+fn respond_internal_error(stream: &mut TcpStream, error: &anyhow::Error) -> Result<()> {
+    let body = serde_json::json!({"error": format!("{error:#}")}).to_string();
+    respond(stream, "500 Internal Server Error", "application/json", &body)
+}
+
+
 /// The project pages the browser can be pointed at directly. Every route the
 /// page's own router understands must be here too, or a reload or a bookmark
 /// on that page returns 404 while in-app navigation works.
 const PROJECT_PAGES: [&str; 4] = ["overview", "build", "performance", "runs"];
+
+/// Whether a path is one the workbench serves as a page rather than as data.
+fn is_page_route(path: &str) -> bool {
+    matches!(path, "/projects" | "/catalog" | "/create") || project_page_route(path)
+}
+
+/// Shown when someone opens a workbench page without a capability token — a
+/// reload, a bookmark, or a link opened in a new tab. The token is deliberately
+/// absent from the address bar and from every link the page renders (see
+/// `docs/safety.md`), so this is a normal thing to land on rather than an
+/// attack, and it should read like a signpost.
+const UNAUTHORIZED_PAGE: &str = concat!(
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">",
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
+    "<title>DeltaForge</title><style>",
+    ":root{color-scheme:light dark}",
+    "body{font-family:ui-sans-serif,system-ui,-apple-system,\"Segoe UI\",sans-serif;",
+    "line-height:1.6;max-width:34rem;margin:0 auto;padding:4rem 1.5rem}",
+    "h1{font-size:1.4rem;margin:0 0 .6rem}p{margin:0 0 1rem}",
+    "code{background:rgba(127,127,127,.16);padding:.15rem .4rem;border-radius:4px}",
+    "</style></head><body>",
+    "<h1>This tab is not connected to DeltaForge</h1>",
+    "<p>The workbench link carries a one-time key that is removed from the address ",
+    "bar once the page has loaded, so it cannot be reloaded, bookmarked, or opened ",
+    "in a new tab.</p>",
+    "<p>Run <code>deltaforge</code> in your terminal to open a connected tab.</p>",
+    "</body></html>",
+);
 
 fn project_page_route(route: &str) -> bool {
     let mut parts = route.strip_prefix("/projects/").unwrap_or("").split('/');
@@ -1998,8 +2070,14 @@ fn command_exists(program: &str) -> bool {
     })
 }
 
+/// Stream one project's run events until the tab closes.
+///
+/// Errors are reported inside the stream rather than returned, because the
+/// response status is already on the wire by the time any of this work runs —
+/// a 500 is no longer available, and returning would drop the connection with
+/// nothing said. The page renders `stream_error` next to the run activity.
 fn serve_events(
-    mut stream: TcpStream,
+    stream: &mut TcpStream,
     shared: &Shared,
     request: &HttpRequest,
     project_id: String,
@@ -2024,6 +2102,23 @@ fn serve_events(
     }
     shared.clients.fetch_add(1, Ordering::SeqCst);
     let _guard = ClientGuard(&shared.clients);
+    if let Err(error) = stream_project_events(stream, shared, request, &project_id, &options) {
+        let payload = format!(
+            "event: stream_error\ndata: {}\n\n",
+            serde_json::json!({"error": format!("{error:#}")})
+        );
+        let _ = stream.write_all(payload.as_bytes());
+    }
+    Ok(())
+}
+
+fn stream_project_events(
+    stream: &mut TcpStream,
+    shared: &Shared,
+    request: &HttpRequest,
+    project_id: &str,
+    options: &GlobalOptions,
+) -> Result<()> {
     let mut cursor = query_value(&request.target, "after")
         .and_then(|value| value.parse::<u64>().ok())
         .or_else(|| {
@@ -2032,7 +2127,7 @@ fn serve_events(
                 .get("last-event-id")
                 .and_then(|value| value.parse::<u64>().ok())
         })
-        .unwrap_or(crate::run_journal::cursor(project_root(&options)?)?);
+        .unwrap_or(crate::run_journal::cursor(project_root(options)?)?);
     let mut previous = String::new();
     let mut focus_revision = shared.focus_revision.load(Ordering::SeqCst);
 
@@ -2053,7 +2148,7 @@ fn serve_events(
                 return Ok(());
             }
         }
-        for entry in crate::run_journal::entries_after(project_root(&options)?, cursor)? {
+        for entry in crate::run_journal::entries_after(project_root(options)?, cursor)? {
             if entry.id != cursor + 1 {
                 // The journal trimmed events between what this client last
                 // saw and what survives now (it was disconnected too long, or
@@ -2075,8 +2170,8 @@ fn serve_events(
             cursor = entry.id;
         }
         let state = application::load_workbench_state_for_session(
-            &options,
-            &project_session_id(shared, &project_id),
+            options,
+            &project_session_id(shared, project_id),
         )?;
         let serialized = serde_json::to_string(&state)?;
         let payload = if serialized != previous {
@@ -2096,7 +2191,7 @@ fn serve_events(
     }
 }
 
-fn serve_app_events(mut stream: TcpStream, shared: &Shared) -> Result<()> {
+fn serve_app_events(stream: &mut TcpStream, shared: &Shared) -> Result<()> {
     stream.set_read_timeout(None)?;
     stream.write_all(
         concat!(
@@ -2391,6 +2486,29 @@ mod tests {
         stream.read_to_string(&mut response).unwrap();
         server.join().unwrap();
         response
+    }
+
+    /// A person landing on a page route without a token — a reload, a
+    /// bookmark, a link opened in a new tab — gets a readable signpost. The
+    /// token is deliberately absent from the address bar and from every link
+    /// the page renders, so this is a normal landing, not an attack, and raw
+    /// JSON was a dead end. Data routes still answer with JSON.
+    #[test]
+    fn an_unauthenticated_page_route_explains_itself() {
+        let page = raw_request("/projects", "127.0.0.1:0", None);
+        assert!(page.starts_with("HTTP/1.1 403"), "{page}");
+        assert!(page.contains("text/html"), "{page}");
+        assert!(page.contains("Run <code>deltaforge</code>"), "{page}");
+
+        let data = raw_request("/api/v1/state", "127.0.0.1:0", None);
+        assert!(data.starts_with("HTTP/1.1 403"), "{data}");
+        assert!(data.contains(r#"{"error":"forbidden"}"#), "{data}");
+
+        assert!(is_page_route("/projects"));
+        assert!(is_page_route("/catalog"));
+        assert!(is_page_route("/projects/some-id/build"));
+        assert!(!is_page_route("/api/v1/state"));
+        assert!(!is_page_route("/projects/some-id/unknown"));
     }
 
     #[test]

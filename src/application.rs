@@ -621,7 +621,14 @@ pub(crate) fn acquire_for_learner_action(
 
 pub fn load_project_health(options: &GlobalOptions) -> Result<ProjectHealth> {
     let root = crate::context::locate_project_root(options)?;
-    match ProjectContext::load(options) {
+    // Loading the project is necessary but not sufficient. Health used to stop
+    // there, so a project whose digest could not be computed (a directory
+    // symlink) or whose stage content could not be rendered (a pack missing a
+    // required section) was reported healthy, and the page was then sent to
+    // endpoints that could not answer.
+    let loaded = ProjectContext::load(options)
+        .and_then(|context| workbench_readiness(&context).map(|()| context));
+    match loaded {
         Ok(context) => Ok(ProjectHealth {
             status: ProjectHealthStatus::Healthy,
             project: Some(context.state.project),
@@ -669,6 +676,15 @@ pub fn load_project_health(options: &GlobalOptions) -> Result<ProjectHealth> {
             })
         }
     }
+}
+
+/// The work the workbench's own project endpoints will do, run up front so a
+/// failure is reported as a health issue with guidance instead of surfacing as
+/// a broken request on a page that has already been told everything is fine.
+fn workbench_readiness(context: &ProjectContext) -> Result<()> {
+    context.project_digest()?;
+    crate::capability::load_current(context)?;
+    Ok(())
 }
 
 pub fn project_open_target(options: &GlobalOptions) -> Result<PathBuf> {
@@ -2118,6 +2134,20 @@ fn classify_project_health_error(detail: &str) -> (&'static str, &'static str, &
             "The project pack changed",
             "Review the change, then adopt the currently installed pack. Completed capabilities may require revalidation.",
             true,
+        )
+    } else if detail.contains("integrity digest") {
+        (
+            "integrity_blocked",
+            "DeltaForge cannot fingerprint this project",
+            "Follow the detail below — usually replacing a directory symlink with a copy, or naming it in integrity.exclude in .deltaforge/config.toml — then check again.",
+            false,
+        )
+    } else if detail.contains("capability instructions are missing") {
+        (
+            "pack_content_invalid",
+            "This step's guide cannot be rendered",
+            "The pack is missing a required section for this step. Fix the pack's instructions.md, or run `deltaforge validate-pack <pack> --strict` to see every gap, then check again.",
+            false,
         )
     } else if detail.contains("config.toml") {
         (
