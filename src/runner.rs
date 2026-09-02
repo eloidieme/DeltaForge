@@ -90,6 +90,24 @@ pub struct Expectations {
     pub timeout_ms: Option<u64>,
 }
 
+impl Expectations {
+    /// Every filesystem path this expectation set names, in one place.
+    ///
+    /// The runner and `validate-pack` both have to refuse an unsafe path, and
+    /// they drifted: the runner checked three of the four lists and let
+    /// `file_not_contains` through, so a pack `validate-pack` rejected still
+    /// read — and reported the full contents of — any file that list named.
+    /// Both callers now walk this iterator, so adding a fifth list cannot
+    /// reopen the gap on one side only.
+    pub fn declared_paths(&self) -> impl Iterator<Item = &String> {
+        self.file_exists
+            .iter()
+            .chain(&self.file_not_exists)
+            .chain(self.file_contains.iter().map(|item| &item.path))
+            .chain(self.file_not_contains.iter().map(|item| &item.path))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileContainsExpectation {
@@ -243,13 +261,7 @@ pub fn run_stage_tests(
         {
             bail!("test {} uses unsafe fixture path {fixture}", test.name);
         }
-        for path in test
-            .expect
-            .file_exists
-            .iter()
-            .chain(&test.expect.file_not_exists)
-            .chain(test.expect.file_contains.iter().map(|item| &item.path))
-        {
+        for path in test.expect.declared_paths() {
             if !safe_expectation_path(path) {
                 bail!("test {} uses unsafe expectation path {path}", test.name);
             }
@@ -1496,6 +1508,41 @@ stderr_contains: ["work: {temp_dir}"]
         assert_eq!(binary.preview_kind, Some(FixturePreviewKind::Binary));
 
         std::fs::remove_dir_all(fixture).unwrap();
+    }
+
+    /// The runner and `validate-pack` must refuse exactly the same paths.
+    /// They did not: `file_not_contains` was checked by the validator and not
+    /// by the runner, so a pack the validator rejected could still make the
+    /// runner read any file on disk and report its contents in a diagnostic.
+    #[test]
+    fn every_expectation_list_contributes_a_path_to_check() {
+        let expect = Expectations {
+            exit_code: None,
+            stdout_exact: None,
+            stdout_contains: Vec::new(),
+            stdout_not_contains: Vec::new(),
+            stderr_contains: Vec::new(),
+            file_exists: vec!["a.txt".to_string()],
+            file_not_exists: vec!["b.txt".to_string()],
+            file_contains: vec![FileContainsExpectation {
+                path: "c.txt".to_string(),
+                contains: "x".to_string(),
+            }],
+            file_not_contains: vec![FileContainsExpectation {
+                path: "/etc/passwd".to_string(),
+                contains: "root".to_string(),
+            }],
+            regex_match: Vec::new(),
+            json_equals: None,
+            timeout_ms: None,
+        };
+
+        let declared: Vec<&str> = expect.declared_paths().map(String::as_str).collect();
+        assert_eq!(declared, ["a.txt", "b.txt", "c.txt", "/etc/passwd"]);
+        assert!(
+            declared.iter().any(|path| !safe_expectation_path(path)),
+            "an absolute file_not_contains path must reach the safety check"
+        );
     }
 
     #[test]

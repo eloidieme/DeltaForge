@@ -1202,13 +1202,7 @@ fn validate_expectations(
             stage.id
         ));
     }
-    for value in expect
-        .file_exists
-        .iter()
-        .chain(&expect.file_not_exists)
-        .chain(expect.file_contains.iter().map(|item| &item.path))
-        .chain(expect.file_not_contains.iter().map(|item| &item.path))
-    {
+    for value in expect.declared_paths() {
         if !safe_expectation_path(value) {
             problems.push(format!(
                 "stage {} test {test_name} expectation path is unsafe: {value}",
