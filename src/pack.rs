@@ -358,7 +358,45 @@ impl LoadedPack {
     /// runner's semantics. Performance gates have an interpretation layer, so
     /// their progression-affecting meaning is hashed as parsed canonical data;
     /// display advice and measurement methodology intentionally stay outside.
+    /// Recomputed only when the stage directory's stat signature or the
+    /// language's commands change. The workbench asks for this on every 500 ms
+    /// state tick, for every stage carrying a recorded gate result, and the
+    /// uncached version re-read and re-hashed the stage's whole fixture tree
+    /// each time — 2.5 MB on the flagship's parallel-performance step. The
+    /// tree digests already work this way; see `integrity::cached_digest`.
     pub fn stage_behavioral_digest(
+        &self,
+        stage: &StageSpec,
+        language: &LanguageSpec,
+    ) -> Result<String> {
+        let stage_dir = self.stage_dir(stage);
+        // The commands live in the manifest, not under the stage directory, so
+        // they key the cache: they are exactly the part of a language's
+        // identity this digest depends on, and two languages sharing all three
+        // share the digest too.
+        let key = (stage_dir.clone(), language_commands_key(language));
+        let signature = crate::integrity::tree_change_signature(&stage_dir);
+        if let Some(signature) = &signature
+            && let Some(cached) = behavioral_digest_cache()
+                .lock()
+                .expect("behavioral digest cache poisoned")
+                .get(&key)
+            && &cached.0 == signature
+        {
+            return Ok(cached.1.clone());
+        }
+
+        let digest = self.compute_stage_behavioral_digest(stage, language)?;
+        if let Some(signature) = signature {
+            behavioral_digest_cache()
+                .lock()
+                .expect("behavioral digest cache poisoned")
+                .insert(key, (signature, digest.clone()));
+        }
+        Ok(digest)
+    }
+
+    fn compute_stage_behavioral_digest(
         &self,
         stage: &StageSpec,
         language: &LanguageSpec,
@@ -418,6 +456,25 @@ impl LoadedPack {
 
         Ok(digest_named_contents(entries))
     }
+}
+
+/// `(stage directory, language identity) -> (stat signature, digest)`.
+type BehavioralDigestCache = std::sync::Mutex<
+    std::collections::HashMap<(PathBuf, String), (String, String)>,
+>;
+
+fn behavioral_digest_cache() -> &'static BehavioralDigestCache {
+    static CACHE: std::sync::OnceLock<BehavioralDigestCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// The part of a language's identity a behavioral digest depends on: the
+/// commands that decide how a stage is built and run.
+fn language_commands_key(language: &LanguageSpec) -> String {
+    format!(
+        "{:?}|{:?}|{:?}",
+        language.build, language.run, language.bench_run
+    )
 }
 
 #[derive(Serialize)]

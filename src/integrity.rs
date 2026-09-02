@@ -53,6 +53,19 @@ pub fn strict_tree_contents(root: &Path) -> Result<Vec<(String, Vec<u8>)>> {
         .collect()
 }
 
+/// Cheap, stat-only change signature for a tree: the same `(path, len, mtime)`
+/// scheme the digest cache uses, exposed so a caller that composes its own
+/// digest out of several files can decide whether to recompute it.
+///
+/// `None` when the tree cannot be walked at all, which the caller should treat
+/// as "assume changed" rather than as an error. Never a substitute for a
+/// digest: two identical signatures mean the bytes are very likely unchanged,
+/// not that they provably are.
+pub fn tree_change_signature(root: &Path) -> Option<String> {
+    let entries = collect_tree(root, &[], SymlinkPolicy::HashFileTargets).ok()?;
+    Some(fingerprint_entries(&entries))
+}
+
 /// Digest a set of `(relative name, contents)` pairs using the same FNV-1a
 /// scheme (and framing) as the tree digests. Names are sorted for determinism
 /// so the same content always yields the same digest regardless of iteration

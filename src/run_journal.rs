@@ -92,7 +92,25 @@ pub fn append(project_root: &Path, event: &RunEvent) -> Result<u64> {
 
 pub fn entries_after(project_root: &Path, cursor: u64) -> Result<Vec<JournalEntry>> {
     with_journal_lock(project_root, || {
-        Ok(read_entries_unlocked(&journal_path(project_root))?
+        let path = journal_path(project_root);
+        // The workbench polls this twice a second for every open tab, and the
+        // overwhelming majority of those polls have nothing to deliver. The
+        // metadata file already records the highest id handed out, so a caller
+        // that is up to date never has to read — or parse — the journal at all.
+        // Reading it did, which is O(journal) per idle poll while holding the
+        // lock the appender needs.
+        //
+        // This trusts `next_id` to be the highest id on disk, which `append`
+        // maintains under this same lock. A crash between the line write and
+        // the metadata write can leave it one or two behind, and this reader
+        // would then not deliver those events — the same bounded loss the
+        // module already accepts for a live progress stream that is not the
+        // source of truth for anything durable.
+        let meta = read_meta_unlocked(&journal_meta_path(project_root), &path)?;
+        if meta.next_id.saturating_sub(1) <= cursor {
+            return Ok(Vec::new());
+        }
+        Ok(read_entries_unlocked(&path)?
             .into_iter()
             .filter(|entry| entry.id > cursor)
             .collect())

@@ -713,6 +713,15 @@ pub fn repin_current_pack(options: &GlobalOptions) -> Result<ProjectHealth> {
 }
 
 pub fn load_workbench_state(options: &GlobalOptions) -> Result<WorkbenchState> {
+    let (context, recovered) = load_and_recover(options)?;
+    workbench_state(&context, recovered, None)
+}
+
+/// Load the project and, if a previous run was abandoned mid-flight, record it
+/// as interrupted. Split out from [`load_workbench_state`] so a caller that
+/// needs the context and the recovery flag does not have to assemble a whole
+/// `WorkbenchState` to get at them.
+fn load_and_recover(options: &GlobalOptions) -> Result<(ProjectContext, bool)> {
     let mut context = ProjectContext::load(options)?;
     let mut recovered_interrupted_job = false;
     if context.state.active_job.is_some()
@@ -737,49 +746,48 @@ pub fn load_workbench_state(options: &GlobalOptions) -> Result<WorkbenchState> {
             let _ = crate::run_journal::append(&context.root, &RunEvent::ProjectStateChanged);
         }
     }
-    workbench_state(&context, recovered_interrupted_job, None)
+    Ok((context, recovered_interrupted_job))
 }
 
+/// The state the workbench renders, for one browser session.
+///
+/// One project load and one state assembly. This used to build the entire
+/// state twice — once through `load_workbench_state`, whose result was then
+/// discarded except for two booleans, and once again below — and load the
+/// project three times, each load re-verifying the pack pin by walking every
+/// file in the pack. The event stream calls this every 500 ms for every open
+/// tab, so that doubling was the bulk of what an idle workbench cost.
 pub fn load_workbench_state_for_session(
     options: &GlobalOptions,
     session_id: &str,
 ) -> Result<WorkbenchState> {
-    let initial = load_workbench_state(options)?;
-    if initial.active_job.is_some() {
-        return Ok(initial);
+    let (context, recovered) = load_and_recover(options)?;
+    if context.state.active_job.is_some() {
+        return workbench_state(&context, recovered, None);
     }
-    let current = ProjectContext::load(options)?;
-    if current
+    if context
         .state
         .last_workbench_session
         .as_ref()
         .is_some_and(|session| session.id == session_id)
     {
-        return workbench_state(
-            &current,
-            initial.recovered_interrupted_job,
-            Some(session_id),
-        );
+        return workbench_state(&context, recovered, Some(session_id));
     }
+    // Below here the session is new, which happens once per tab rather than
+    // once per tick, so the extra load under the lease is not on the hot path.
     let _ = observe_source_changes(options)?;
 
-    let root = crate::context::locate_project_root(options)?;
-    let _session_lease = match crate::run_lease::RunLease::acquire(&root) {
-        Ok(lease) => lease,
-        Err(_) => return Ok(initial),
+    let Ok(_session_lease) = crate::run_lease::RunLease::acquire(&context.root) else {
+        return workbench_state(&context, recovered, None);
     };
     let mut context = ProjectContext::load(options)?;
     let changed = context
         .state
-        .begin_workbench_session(session_id.to_string(), initial.recovered_interrupted_job)?;
+        .begin_workbench_session(session_id.to_string(), recovered)?;
     if changed {
         context.save_state()?;
     }
-    workbench_state(
-        &context,
-        initial.recovered_interrupted_job,
-        Some(session_id),
-    )
+    workbench_state(&context, recovered, Some(session_id))
 }
 
 pub fn run_is_active(options: &GlobalOptions) -> Result<bool> {
@@ -1562,9 +1570,13 @@ fn workbench_state(
         .iter()
         .position(|stage| stage.id == current.id)
         .unwrap_or_default();
+    // One walk of the learner's tree for the whole state assembly. The
+    // performance view below asks about every stage, and each question used to
+    // recompute this.
+    let project_digest = context.project_digest()?;
     let freshness = match context.state.last_test_runs.get(&current.id) {
         None => ResultFreshness::NeverRun,
-        Some(run) if run.project_digest == context.project_digest()? => ResultFreshness::Fresh,
+        Some(run) if run.project_digest == project_digest => ResultFreshness::Fresh,
         Some(_) => ResultFreshness::Stale,
     };
     let latest_run = context.state.last_test_runs.get(&current.id).cloned();
@@ -1576,18 +1588,43 @@ fn workbench_state(
         && attempt.stage_ids.iter().any(|stage| stage == &current.id)
         && let Some(error) = &attempt.error
     {
+        // A build failure is the common way a run stops before it reports,
+        // but it is not the only one: an unsafe pack path, an unreadable
+        // tests file, or a language the pack does not support all land here
+        // too, and calling every one of them a build failure sends the
+        // learner looking in the wrong place.
+        let build_failed = error.contains("build failed");
         primary_failure = Some(LastFailedTest {
-            name: "Build project".to_string(),
+            name: if build_failed { "Build project" } else { "Run checks" }.to_string(),
             failures: vec![error.clone()],
             diagnosis: Some(FailureDiagnosis {
                 priority: 0,
-                kind: "build".to_string(),
-                headline: "The project did not build".to_string(),
-                summary: "Checks could not start because the configured build command failed."
+                kind: if build_failed { "build" } else { "runner" }.to_string(),
+                headline: if build_failed {
+                    "The project did not build".to_string()
+                } else {
+                    "The checks could not run".to_string()
+                },
+                summary: if build_failed {
+                    "Checks could not start because the configured build command failed."
+                        .to_string()
+                } else {
+                    "The check run stopped before any behavior could be checked.".to_string()
+                },
+                expected: Some(
+                    if build_failed {
+                        "A successful project build"
+                    } else {
+                        "A check run that reaches its first test"
+                    }
                     .to_string(),
-                expected: Some("A successful project build".to_string()),
+                ),
                 actual: Some(error.clone()),
-                contract: "The project must build before behavioral checks can run.".to_string(),
+                contract: if build_failed {
+                    "The project must build before behavioral checks can run.".to_string()
+                } else {
+                    "The check run must start before any behavior can be checked.".to_string()
+                },
                 fixture: None,
                 fixture_entries: Vec::new(),
                 command: Vec::new(),
@@ -1765,14 +1802,18 @@ fn workbench_state(
         source_revision: context.state.source_revision,
         last_source_change: context.state.last_source_change.clone(),
         event_cursor,
-        performance: performance_state(context, &current.id)?,
+        performance: performance_state(context, &current.id, &project_digest)?,
     })
 }
 
 /// Assemble the performance picture for one step: its gates, its most recent
 /// saved measurements, its prediction prompt and recorded notes, and a
 /// gate marker for every step of the journey.
-fn performance_state(context: &ProjectContext, stage_id: &str) -> Result<PerformanceState> {
+fn performance_state(
+    context: &ProjectContext,
+    stage_id: &str,
+    project_digest: &str,
+) -> Result<PerformanceState> {
     let stage = context
         .pack
         .manifest
@@ -1780,7 +1821,7 @@ fn performance_state(context: &ProjectContext, stage_id: &str) -> Result<Perform
         .with_context(|| format!("pack does not contain stage {stage_id}"))?;
     let benchmarks = context.pack.benchmarks_path(stage).is_file();
     let declared = context.stage_gates(stage_id)?;
-    let status = context.gate_status(stage_id)?;
+    let status = context.gate_status_with_digest(stage_id, project_digest)?;
     let record = context.state.gate_results.get(stage_id);
     let gates = declared
         .iter()
@@ -1833,7 +1874,9 @@ fn performance_state(context: &ProjectContext, stage_id: &str) -> Result<Perform
     let mut roadmap = Vec::new();
     for stage in &context.pack.manifest.stages {
         let has_benchmarks = context.pack.benchmarks_path(stage).is_file();
-        let status = context.gate_status(&stage.id).unwrap_or(None);
+        let status = context
+            .gate_status_with_digest(&stage.id, project_digest)
+            .unwrap_or(None);
         if has_benchmarks || status.is_some() {
             roadmap.push(StageGateMarker {
                 stage_id: stage.id.clone(),

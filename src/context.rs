@@ -255,22 +255,64 @@ impl ProjectContext {
             return Ok(None);
         }
         let Some(record) = self.state.gate_results.get(stage_id) else {
+            // No measurement to compare against, so the learner's tree does
+            // not need walking at all.
             return Ok(Some(GateStatus::NotMeasured));
         };
-        if record.behavioral_digest.is_empty()
-            || record.project_digest != self.project_digest()?
-            || record.behavioral_digest != self.stage_behavioral_digest(stage_id)?
-            || !gate_record_matches(record, &gates)
-        {
-            return Ok(Some(GateStatus::NotMeasured));
+        let project_digest = self.project_digest()?;
+        Ok(Some(self.gate_record_status(
+            stage_id,
+            &gates,
+            record,
+            &project_digest,
+        )?))
+    }
+
+    /// [`Self::gate_status`] against a project digest the caller already holds.
+    ///
+    /// The performance view asks about every stage in one pass. Letting each
+    /// question compute its own digest walked the learner's tree once per
+    /// stage instead of once per pass, on a view the workbench re-renders
+    /// twice a second.
+    pub fn gate_status_with_digest(
+        &self,
+        stage_id: &str,
+        project_digest: &str,
+    ) -> Result<Option<GateStatus>> {
+        let gates = self.stage_gates(stage_id)?;
+        if gates.is_empty() {
+            return Ok(None);
         }
-        Ok(Some(
-            if record.results.iter().all(recorded_gate_result_passes) {
-                GateStatus::Passed
-            } else {
-                GateStatus::NotYet
-            },
-        ))
+        let Some(record) = self.state.gate_results.get(stage_id) else {
+            return Ok(Some(GateStatus::NotMeasured));
+        };
+        Ok(Some(self.gate_record_status(
+            stage_id,
+            &gates,
+            record,
+            project_digest,
+        )?))
+    }
+
+    fn gate_record_status(
+        &self,
+        stage_id: &str,
+        gates: &[PerformanceGate],
+        record: &crate::state::GateRecord,
+        project_digest: &str,
+    ) -> Result<GateStatus> {
+        if record.behavioral_digest.is_empty()
+            || record.project_digest != project_digest
+            || record.behavioral_digest != self.stage_behavioral_digest(stage_id)?
+            || !gate_record_matches(record, gates)
+        {
+            return Ok(GateStatus::NotMeasured);
+        }
+        Ok(if record.results.iter().all(recorded_gate_result_passes) {
+            GateStatus::Passed
+        } else {
+            GateStatus::NotYet
+        })
     }
 
     pub fn verify_gate_record(&self, stage_id: &str) -> Result<()> {
