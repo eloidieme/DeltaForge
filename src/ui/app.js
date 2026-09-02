@@ -17,6 +17,7 @@ let events = null;     // EventSource
 let busy = false;
 let catalog = null;
 let createChoice = null;
+let defaultWorkspace = "";
 let preflightTimer = null;
 let live = emptyLive();
 
@@ -119,16 +120,8 @@ function setScreen(id) {
 }
 function closeEvents() { if (events) events.close(); events = null; }
 
-function routeState() {
-  const project = location.pathname.match(/^\/projects\/([^/]+)\/(overview|build|performance|runs)$/);
-  if (project) return { project: project[1], view: project[2] };
-  if (location.pathname === "/catalog") return { project: null, view: "catalog" };
-  if (location.pathname === "/create") return { project: null, view: "create" };
-  return { project: null, view: "projects" };
-}
-
 async function renderRoute() {
-  const route = routeState();
+  const route = DeltaForgeCore.routeState(location.pathname);
   closeEvents();
   state = null; content = null; live = emptyLive();
   activeProject = route.project;
@@ -276,11 +269,25 @@ async function renderCreate() {
   $("#create-name").value = `${entry.id}-${createChoice.language || "project"}`;
   renderLanguageChoices();
 
-  if (!$("#create-parent").value) {
-    const workspace = await fetchJson("/api/v1/workspace", false).catch(() => ({}));
-    if (workspace.default_directory) $("#create-parent").value = workspace.default_directory;
+  const workspace = await fetchJson("/api/v1/workspace", false).catch(() => ({}));
+  if (workspace.default_directory) {
+    defaultWorkspace = workspace.default_directory;
+    if (!$("#create-parent").value) $("#create-parent").value = defaultWorkspace;
   }
   schedulePreflight(0);
+}
+
+// What the two creation requests are built from. Read straight off the form,
+// so a request can never disagree with what the learner is looking at.
+function creationFields() {
+  return {
+    pack: createChoice.entry.id,
+    language: createChoice.language || "",
+    parentDirectory: $("#create-parent").value,
+    defaultWorkspace,
+    name: $("#create-name").value,
+    git: $("#create-git").checked,
+  };
 }
 
 function renderLanguageChoices() {
@@ -316,12 +323,7 @@ async function runPreflight() {
   if (!createChoice) return;
   let result;
   try {
-    result = await post("/api/v1/projects/preflight", {
-      pack: createChoice.entry.id,
-      language: createChoice.language || "",
-      parent_directory: $("#create-parent").value.trim() || null,
-      name: $("#create-name").value.trim(),
-    }, false);
+    result = await post("/api/v1/projects/preflight", DeltaForgeCore.preflightRequest(creationFields()), false);
   } catch (error) {
     $("#preflight-tools").replaceChildren();
     $("#preflight-location-label").textContent = "Cannot create here";
@@ -344,6 +346,12 @@ async function runPreflight() {
   $("#preflight-location").className = `ruled ${result.location.ok ? "proven" : "contradiction"}`;
   $("#preflight-location-label").textContent = result.location.ok ? "Will be created at" : "Cannot create here";
   $("#preflight-path").textContent = result.location.ok ? result.location.target : result.location.problem;
+  // Say it, rather than letting a folder appear in the learner's home without
+  // explanation.
+  $("#preflight-note").textContent = result.location.creates_parent
+    ? `${result.location.parent} will be created too.`
+    : "";
+  $("#preflight-note").hidden = !result.location.creates_parent;
   $("#create-submit").disabled = !result.ok;
 }
 
@@ -354,13 +362,7 @@ async function submitCreate(event) {
   $("#create-submit").disabled = true;
   $("#create-activity").textContent = "Creating the project…";
   try {
-    const created = await post("/api/v1/projects", {
-      pack: createChoice.entry.id,
-      language: createChoice.language || "",
-      parent_directory: $("#create-parent").value.trim() || null,
-      name: $("#create-name").value.trim(),
-      git: $("#create-git").checked,
-    }, false);
+    const created = await post("/api/v1/projects", DeltaForgeCore.createRequest(creationFields()), false);
     $("#create-activity").textContent = `Created at ${created.path}`;
     navigate(`/projects/${created.project_id}/build`);
   } catch (error) {

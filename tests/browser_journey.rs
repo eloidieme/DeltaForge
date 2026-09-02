@@ -65,11 +65,29 @@ struct Service {
 const TOKEN: &str = "journey-token";
 
 fn start_service(label: &str) -> Service {
+    start_service_with(label, Workspace::Existing)
+}
+
+/// Whether the sandbox has a workspace directory before the service starts.
+///
+/// It matters, and 1.0 is the reason it now has a name: every harness this
+/// project had created the workspace first, so the one path a real learner
+/// takes — a machine where that directory has never existed — was the one path
+/// nothing exercised.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Workspace {
+    Existing,
+    Missing,
+}
+
+fn start_service_with(label: &str, workspace_state: Workspace) -> Service {
     let root = temp_root(label);
     let home = root.join("home");
     let workspace = root.join("workspace");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&workspace).unwrap();
+    if workspace_state == Workspace::Existing {
+        fs::create_dir_all(&workspace).unwrap();
+    }
 
     let child = Command::new(deltaforge_bin())
         .env("DELTAFORGE_HOME", &home)
@@ -536,6 +554,83 @@ fn creation_refuses_every_location_it_should() {
     // A project is never nested inside another project's source tree.
     let nested = path.join("src").to_str().unwrap().to_string();
     assert!(refuse(Some(&nested), "inner").contains("inside the DeltaForge project"));
+
+    let _ = fs::remove_dir_all(path);
+}
+
+/// P0-1, from the browser's side.
+///
+/// The page prefills Location from `GET /api/v1/workspace` and posts a body
+/// built by `DeltaForgeCore.preflightRequest`. This asserts both shapes that
+/// body can take on a machine where the workspace has never existed: the null
+/// this page now sends, and the prefilled path 1.0 sent — which was refused,
+/// making the product's first screen unusable on every clean machine.
+#[test]
+fn a_machine_with_no_workspace_creates_a_project_from_the_defaults() {
+    let _guard = journey_guard();
+    let service = start_service_with("clean-machine", Workspace::Missing);
+    assert!(
+        !service.workspace.exists(),
+        "this test is only meaningful while the workspace is absent"
+    );
+
+    let advertised = service.get("/api/v1/workspace")["default_directory"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(PathBuf::from(&advertised), service.workspace);
+
+    let body = |parent: serde_json::Value| {
+        serde_json::json!({
+            "pack": "flashindex",
+            "language": "rust",
+            "parent_directory": parent,
+            "name": "defaults",
+        })
+    };
+
+    for parent in [
+        serde_json::Value::Null,
+        serde_json::Value::String(advertised.clone()),
+    ] {
+        let preflight = service.post("/api/v1/projects/preflight", body(parent.clone()));
+        assert_eq!(
+            preflight["ok"].as_bool(),
+            Some(true),
+            "preflight refused {parent}: {preflight}"
+        );
+        assert_eq!(
+            preflight["location"]["creates_parent"].as_bool(),
+            Some(true),
+            "preflight did not say the workspace would be created: {preflight}"
+        );
+        assert!(
+            !service.workspace.exists(),
+            "a preflight must not create the directory it is only describing"
+        );
+    }
+
+    let mut created_body = body(serde_json::Value::Null);
+    created_body["git"] = serde_json::Value::Bool(false);
+    let created = service.post("/api/v1/projects", created_body);
+    let path = PathBuf::from(
+        created["path"]
+            .as_str()
+            .unwrap_or_else(|| panic!("creation failed: {created}")),
+    );
+    assert!(path.is_dir());
+    // Canonical on both sides: the service reports the resolved path, and on
+    // macOS the temporary directory reaches it through a symlink.
+    assert_eq!(
+        path.parent().unwrap().canonicalize().unwrap(),
+        service.workspace.canonicalize().unwrap(),
+    );
+
+    // The project is reachable from the browser immediately afterwards, which
+    // is the whole point: catalog to a working project with no terminal.
+    let project = created["project_id"].as_str().unwrap();
+    let health = service.get(&format!("/api/v1/project-health?project={project}"));
+    assert_eq!(health["status"].as_str(), Some("healthy"), "{health}");
 
     let _ = fs::remove_dir_all(path);
 }

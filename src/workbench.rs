@@ -2361,13 +2361,17 @@ fn random_hex_id(bytes_len: usize) -> Result<String> {
         .map_err(|error| anyhow::anyhow!("operating system randomness is unavailable: {error}"))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
-/// The single-page workbench, assembled at compile time from three source
+/// The single-page workbench, assembled at compile time from four source
 /// files. It is served inline rather than as separate assets so the page
 /// carries no subresource requests and the capability token stays in exactly
 /// one place.
+///
+/// `ui/core.js` is loaded first and holds the page's pure decisions, so
+/// `node --test tests/ui` can execute them without a browser.
 fn workbench_html(token: &str) -> String {
     include_str!("ui/index.html")
         .replace("__STYLE__", include_str!("ui/app.css"))
+        .replace("__CORE__", include_str!("ui/core.js"))
         .replace("__SCRIPT__", include_str!("ui/app.js"))
         .replace("__TOKEN_JSON__", &serde_json::json!(token).to_string())
 }

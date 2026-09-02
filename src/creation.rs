@@ -17,6 +17,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::config::ProjectConfig;
+use crate::fs_util::display_path;
 use crate::integrity::digest_pack_tree;
 use crate::pack::{LanguageSpec, LoadedPack, StageSpec, ToolRequirement, pack_source_label};
 use crate::state::ProjectState;
@@ -126,12 +127,17 @@ impl CreationPolicy {
     /// Turn a browser-supplied parent directory and leaf name into the one
     /// path a project may be created at.
     ///
+    /// This decides; it does not write. Preflight needs the decision without
+    /// the side effect, so the workspace directory is created by
+    /// [`ResolvedTarget::prepare`] at the moment a project is actually
+    /// written.
+    ///
     /// Every rejection below is deliberate:
     ///
     /// - the leaf is a validated single component, so no request can traverse
     ///   with `..` or an embedded separator;
-    /// - the parent must already exist and canonicalize, which resolves
-    ///   symlinks *before* the containment check rather than after;
+    /// - the parent canonicalizes, which resolves symlinks *before* the
+    ///   containment check rather than after;
     /// - the canonical parent must lie inside a permitted root, so a request
     ///   cannot reach system directories;
     /// - no path component below that root may be hidden, keeping creation out
@@ -139,34 +145,46 @@ impl CreationPolicy {
     /// - the parent must not itself be, or sit inside, a DeltaForge project, so
     ///   a project can never be nested in another project's source tree;
     /// - the leaf must not already exist, so creation never overwrites.
-    pub fn resolve_target(&self, parent: Option<&Path>, name: &str) -> Result<PathBuf> {
+    ///
+    /// The parent must already exist, with one exception: the default
+    /// workspace. DeltaForge owns that directory and creates it on demand, so
+    /// a learner who has never made a project is not asked to `mkdir` before
+    /// the product will run. A location the learner typed is held to the
+    /// stricter rule — a path that does not exist is far more likely to be a
+    /// typo than a request.
+    pub fn resolve(&self, parent: Option<&Path>, name: &str) -> Result<ResolvedTarget> {
         let name = validate_name(name)?;
-        let parent = match parent {
+        let requested = match parent {
             Some(parent) => parent.to_path_buf(),
-            None => {
-                fs::create_dir_all(&self.default_parent).with_context(|| {
-                    format!(
-                        "failed to create workspace directory {}",
-                        self.default_parent.display()
-                    )
-                })?;
-                self.default_parent.clone()
-            }
+            None => self.default_parent.clone(),
         };
-        if !parent.is_absolute() {
+        if !requested.is_absolute() {
             bail!("the location must be an absolute path");
         }
-        if !parent.is_dir() {
-            bail!("{} is not an existing directory", parent.display());
-        }
-        let parent = parent
-            .canonicalize()
-            .with_context(|| format!("failed to resolve {}", parent.display()))?;
+        let parent_state = if requested.is_dir() {
+            ParentState::Exists
+        } else if requested.exists() {
+            bail!("{} is not a directory", display_path(&requested));
+        } else if self.owns_workspace(&requested) {
+            ParentState::Creatable
+        } else {
+            bail!("{} is not an existing directory", display_path(&requested));
+        };
+        let parent = match parent_state {
+            ParentState::Exists => requested
+                .canonicalize()
+                .with_context(|| format!("failed to resolve {}", display_path(&requested)))?,
+            ParentState::Creatable => canonicalize_missing(&requested)?,
+        };
 
+        // A permitted root does not have to exist either: `DELTAFORGE_WORKSPACE`
+        // may name the directory this very request is about to create. Dropping
+        // it for not existing yet refused the creation it was configured to
+        // allow.
         let roots = self
             .permitted_roots
             .iter()
-            .filter_map(|root| root.canonicalize().ok())
+            .filter_map(|root| canonicalize_missing(root).ok())
             .collect::<Vec<_>>();
         // The hidden-component rule is measured from the *most specific*
         // permitted root that contains the parent. Applying it against every
@@ -180,7 +198,7 @@ impl CreationPolicy {
         else {
             bail!(
                 "DeltaForge only creates projects inside your home directory, or the directory named by DELTAFORGE_WORKSPACE; {} is outside both",
-                crate::fs_util::display_path(&parent)
+                display_path(&parent)
             );
         };
         if let Ok(relative) = parent.strip_prefix(root)
@@ -191,22 +209,123 @@ impl CreationPolicy {
         if let Some(existing) = enclosing_project(&parent) {
             bail!(
                 "{} is inside the DeltaForge project at {}; choose a location outside it",
-                parent.display(),
-                existing.display()
+                display_path(&parent),
+                display_path(&existing)
             );
         }
 
         let target = parent.join(name);
         if target.exists() {
-            bail!("{} already exists", target.display());
+            bail!("{} already exists", display_path(&target));
         }
-        Ok(target)
+        Ok(ResolvedTarget {
+            target,
+            parent,
+            parent_state,
+        })
+    }
+
+    /// Resolve a target and make its parent directory real. The form creation
+    /// uses; [`CreationPolicy::resolve`] is the form preflight uses.
+    pub fn resolve_target(&self, parent: Option<&Path>, name: &str) -> Result<PathBuf> {
+        let resolved = self.resolve(parent, name)?;
+        resolved.prepare()?;
+        Ok(resolved.target)
+    }
+
+    /// Is `path` the default workspace — the one directory DeltaForge creates
+    /// on the learner's behalf? Compared lexically, because neither side is
+    /// guaranteed to exist yet.
+    fn owns_workspace(&self, path: &Path) -> bool {
+        normalize_lexically(path) == normalize_lexically(&self.default_parent)
     }
 }
 
-/// Resolve a creation target under the policy this machine is configured with.
+/// A creation target, and what resolving it found out about the directory it
+/// will live in.
+#[derive(Debug, Clone)]
+pub struct ResolvedTarget {
+    /// The directory the project will be written to.
+    pub target: PathBuf,
+    /// The directory that will hold it.
+    pub parent: PathBuf,
+    /// Whether that directory is already there.
+    pub parent_state: ParentState,
+}
+
+/// Whether the directory a project goes in exists yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentState {
+    /// The parent directory is already on disk.
+    Exists,
+    /// The parent is the default workspace and is not there yet; DeltaForge
+    /// will create it when the project is written.
+    Creatable,
+}
+
+impl ResolvedTarget {
+    /// Make the parent directory real. Called once, immediately before the
+    /// project is written, so that merely looking at the creation screen does
+    /// not leave a directory behind.
+    pub fn prepare(&self) -> Result<()> {
+        if self.parent_state == ParentState::Creatable {
+            fs::create_dir_all(&self.parent).with_context(|| {
+                format!(
+                    "failed to create workspace directory {}",
+                    display_path(&self.parent)
+                )
+            })?;
+        }
+        Ok(())
+    }
+}
+
+/// Resolve a creation target under the policy this machine is configured with,
+/// without touching the filesystem.
+pub fn resolve(parent: Option<&Path>, name: &str) -> Result<ResolvedTarget> {
+    CreationPolicy::from_environment()?.resolve(parent, name)
+}
+
+/// Resolve a creation target and make its parent directory real.
 pub fn resolve_target(parent: Option<&Path>, name: &str) -> Result<PathBuf> {
     CreationPolicy::from_environment()?.resolve_target(parent, name)
+}
+
+/// Canonicalize a path that does not exist yet, by canonicalizing the deepest
+/// ancestor that does and re-attaching the rest. Symlinks in the existing part
+/// are resolved before the containment check sees the result, which is the
+/// property the check depends on.
+fn canonicalize_missing(path: &Path) -> Result<PathBuf> {
+    let mut missing = Vec::new();
+    let mut cursor = path;
+    loop {
+        if cursor.is_dir() {
+            let mut resolved = cursor
+                .canonicalize()
+                .with_context(|| format!("failed to resolve {}", display_path(cursor)))?;
+            resolved.extend(missing.iter().rev());
+            return Ok(resolved);
+        }
+        let (Some(parent), Some(name)) = (cursor.parent(), cursor.file_name()) else {
+            bail!("failed to resolve {}", display_path(path));
+        };
+        // `..` in the part that does not exist cannot be resolved against a
+        // real directory, so it is refused rather than guessed at.
+        if name == ".." {
+            bail!("the location must not contain \"..\"");
+        }
+        missing.push(name.to_os_string());
+        cursor = parent;
+    }
+}
+
+/// A lexical, comparison-only normalization: drop `.` components and any
+/// trailing separator. Used to recognise the default workspace when neither
+/// path exists yet, so `canonicalize` is not available.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    path.components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .collect()
 }
 
 fn hidden_component(component: Component<'_>) -> Option<String> {
@@ -250,6 +369,10 @@ pub struct LocationStatus {
     pub parent: String,
     pub target: Option<String>,
     pub ok: bool,
+    /// True when the location is fine but the directory holding it does not
+    /// exist yet. The page says so, rather than letting a folder appear
+    /// without explanation.
+    pub creates_parent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<String>,
 }
@@ -315,20 +438,24 @@ pub fn preflight(
     })?;
     let tools = language_tools(language);
     let displayed_parent = match parent {
-        Some(parent) => crate::fs_util::display_path(parent),
-        None => crate::fs_util::display_path(&default_workspace()?),
+        Some(parent) => display_path(parent),
+        None => display_path(&default_workspace()?),
     };
-    let location = match resolve_target(parent, name) {
-        Ok(target) => LocationStatus {
+    // `resolve`, not `resolve_target`: a preflight must not leave a directory
+    // behind on a screen the learner may still walk away from.
+    let location = match resolve(parent, name) {
+        Ok(resolved) => LocationStatus {
             parent: displayed_parent,
-            target: Some(crate::fs_util::display_path(&target)),
+            target: Some(display_path(&resolved.target)),
             ok: true,
+            creates_parent: resolved.parent_state == ParentState::Creatable,
             problem: None,
         },
         Err(error) => LocationStatus {
             parent: displayed_parent,
             target: None,
             ok: false,
+            creates_parent: false,
             problem: Some(format!("{error:#}")),
         },
     };
@@ -533,13 +660,17 @@ mod tests {
     /// touching the developer's home directory and without depending on
     /// process-wide environment variables.
     fn sandbox(label: &str) -> (PathBuf, CreationPolicy) {
+        // The counter matters: two threads entering this function inside the
+        // same nanosecond otherwise share a directory.
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let root = std::env::temp_dir().join(format!(
-            "deltaforge-creation-{label}-{}-{}",
+            "deltaforge-creation-{label}-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         fs::create_dir_all(root.join("projects")).unwrap();
         let canonical = root.canonicalize().unwrap();
@@ -652,6 +783,90 @@ mod tests {
         let target = policy.resolve_target(None, "first-project").unwrap();
         assert!(policy.default_parent.is_dir());
         assert_eq!(target.file_name().unwrap(), "first-project");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// P0-1. The browser never reaches the `None` branch: it posts the
+    /// Location field, which it prefilled with the default workspace. On a
+    /// machine that has never run DeltaForge that directory does not exist,
+    /// and 1.0 answered every such request with a refusal — so the product's
+    /// first screen was unusable on every clean machine. The default
+    /// workspace is DeltaForge's own directory, and is resolvable whether the
+    /// request names it or omits it.
+    #[test]
+    fn the_default_workspace_resolves_before_it_exists() {
+        let (root, mut policy) = sandbox("missing-default");
+        policy.default_parent = root.join("fresh-workspace");
+        assert!(!policy.default_parent.exists());
+
+        for parent in [None, Some(policy.default_parent.clone())] {
+            let resolved = policy
+                .resolve(parent.as_deref(), "first-project")
+                .expect("the default workspace is DeltaForge's to create");
+            assert_eq!(resolved.parent_state, ParentState::Creatable);
+            assert_eq!(resolved.target.file_name().unwrap(), "first-project");
+            // Resolution decides; it does not write. A learner who opens the
+            // creation screen and walks away leaves nothing behind.
+            assert!(!policy.default_parent.exists());
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The other half of the same rule: a location the learner typed is held
+    /// to the stricter standard, because a path that is not there is far more
+    /// likely to be a typo than a request.
+    #[test]
+    fn a_typed_parent_that_does_not_exist_is_still_refused() {
+        let (root, policy) = sandbox("typed-missing");
+        let refusal = policy
+            .resolve(Some(&root.join("nowhere")), "project")
+            .expect_err("a typed location that is not there must be refused");
+        assert!(format!("{refusal:#}").contains("is not an existing directory"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Preflight is a read. It answers whether creation would work; it must
+    /// not be the thing that makes it work.
+    #[test]
+    fn resolving_never_writes_but_preparing_does() {
+        let (root, mut policy) = sandbox("prepare");
+        policy.default_parent = root.join("workspace");
+
+        let resolved = policy.resolve(None, "project").unwrap();
+        assert!(!policy.default_parent.exists());
+        resolved.prepare().unwrap();
+        assert!(policy.default_parent.is_dir());
+        // Preparing twice is not an error; the second create_dir_all is a
+        // no-op, which is what re-running a preflight-then-create would do.
+        resolved.prepare().unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A workspace that does not exist yet still cannot be a way out of the
+    /// permitted roots: containment is measured against the canonical form of
+    /// the deepest ancestor that does exist.
+    #[test]
+    fn a_missing_workspace_outside_every_root_is_still_refused() {
+        let (root, mut policy) = sandbox("missing-outside");
+        policy.default_parent = std::env::temp_dir().join("deltaforge-elsewhere-workspace");
+        let refusal = policy
+            .resolve(None, "project")
+            .expect_err("a workspace outside the permitted roots must be refused");
+        assert!(format!("{refusal:#}").contains("outside both"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// The hidden-directory rule is measured on the same canonical form, so a
+    /// workspace under a dotted directory is refused whether or not it is
+    /// there yet.
+    #[test]
+    fn a_missing_workspace_inside_a_hidden_directory_is_refused() {
+        let (root, mut policy) = sandbox("missing-hidden");
+        policy.default_parent = root.join(".cache").join("workspace");
+        let refusal = policy
+            .resolve(None, "project")
+            .expect_err("a hidden workspace must be refused");
+        assert!(format!("{refusal:#}").contains("hidden directory .cache"));
         let _ = fs::remove_dir_all(root);
     }
 

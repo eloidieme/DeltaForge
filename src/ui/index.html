@@ -67,7 +67,7 @@ __STYLE__
       <section class="field">
         <label for="create-parent">Location</label>
         <input type="text" id="create-parent" spellcheck="false">
-        <span class="help">Must be an existing folder inside your home directory.</span>
+        <span class="help">A folder inside your home directory. DeltaForge creates its own if you leave this as it is.</span>
       </section>
 
       <label class="checkbox"><input type="checkbox" id="create-git" checked> Start a Git repository, so each completed step can be snapshotted</label>
@@ -85,6 +85,7 @@ __STYLE__
       <div class="ruled" id="preflight-location" style="margin-top:16px">
         <div class="fact-label" id="preflight-location-label">Will be created at</div>
         <div class="path-preview" id="preflight-path"></div>
+        <div class="help" id="preflight-note" hidden></div>
       </div>
     </aside>
   </div>
@@ -277,6 +278,9 @@ __STYLE__
   </main>
 </div>
 
+<script>
+__CORE__
+</script>
 <script>
 __SCRIPT__
 </script>
