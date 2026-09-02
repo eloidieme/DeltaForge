@@ -81,7 +81,6 @@ pub fn run(args: TestArgs, options: &GlobalOptions) -> Result<()> {
             fail_fast: args.fail_fast,
             no_build: args.no_build,
             keep_temp: args.keep_temp,
-            capture_details: !json,
             trigger: RunTrigger::Cli,
         },
         &mut sink,

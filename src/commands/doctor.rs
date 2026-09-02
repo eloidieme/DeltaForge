@@ -25,11 +25,12 @@ pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
         }
     }
     if !tools.iter().any(|tool| tool.program == "git") {
+        let version = crate::creation::tool_version("git");
         tools.push(crate::creation::ToolStatus {
             program: "git".to_string(),
             label: "Git".to_string(),
-            found: crate::creation::tool_version("git").is_some(),
-            version: crate::creation::tool_version("git"),
+            found: version.is_some(),
+            version,
             install_url: Some("https://git-scm.com/downloads".to_string()),
             required: false,
         });

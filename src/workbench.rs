@@ -766,8 +766,15 @@ fn handle_connection(
 
     // Deliberately unauthenticated: a launcher must be able to confirm which
     // service is listening on this port *before* it sends the capability
-    // token. See `verify_identity`. Host is still checked so a cross-origin
-    // page cannot use this to fingerprint what is running on loopback.
+    // token. See `verify_identity`.
+    //
+    // The Host check is a consistency guard, not an anti-fingerprinting one —
+    // a browser fetching `http://127.0.0.1:<port>/` always sends the matching
+    // Host, so it costs a cross-origin page nothing. What actually keeps this
+    // endpoint from telling another page anything is that the response carries
+    // no CORS header (so its body is unreadable cross-origin) and is served
+    // `application/json` with `nosniff` (so it cannot be run as a script).
+    // `probe_id` is the only interesting value here, and neither route exposes it.
     if request.method == "GET" && path == "/api/v1/identity" {
         let expected_host = format!("127.0.0.1:{}", shared.port);
         if request.headers.get("host") != Some(&expected_host) {
@@ -1588,7 +1595,6 @@ fn start_run(
             fail_fast: false,
             no_build: false,
             keep_temp: false,
-            capture_details: true,
             trigger: application::RunTrigger::Workbench,
         };
         let mut sink = application::NullEventSink;

@@ -168,18 +168,25 @@ impl CreationPolicy {
             .iter()
             .filter_map(|root| root.canonicalize().ok())
             .collect::<Vec<_>>();
-        if !roots.iter().any(|root| parent.starts_with(root)) {
+        // The hidden-component rule is measured from the *most specific*
+        // permitted root that contains the parent. Applying it against every
+        // matching root refused an explicitly configured
+        // `DELTAFORGE_WORKSPACE` that happened to sit under a dotted
+        // directory in the learner's home — a location they chose on purpose.
+        let Some(root) = roots
+            .iter()
+            .filter(|root| parent.starts_with(root))
+            .max_by_key(|root| root.components().count())
+        else {
             bail!(
                 "DeltaForge only creates projects inside your home directory, or the directory named by DELTAFORGE_WORKSPACE; {} is outside both",
                 crate::fs_util::display_path(&parent)
             );
-        }
-        for root in &roots {
-            if let Ok(relative) = parent.strip_prefix(root)
-                && let Some(hidden) = relative.components().find_map(hidden_component)
-            {
-                bail!("DeltaForge does not create projects inside the hidden directory {hidden}");
-            }
+        };
+        if let Ok(relative) = parent.strip_prefix(root)
+            && let Some(hidden) = relative.components().find_map(hidden_component)
+        {
+            bail!("DeltaForge does not create projects inside the hidden directory {hidden}");
         }
         if let Some(existing) = enclosing_project(&parent) {
             bail!(
@@ -488,6 +495,16 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
                     destination_path.display()
                 )
             })?;
+        } else {
+            // Silently skipping these produced a project missing a file the
+            // template listed, with nothing said about it. Pack content is
+            // required to be self-contained anyway (see
+            // `validate_pack_tree_is_self_contained`), so this is an authoring
+            // error worth naming rather than a case to tolerate.
+            bail!(
+                "template entry is not a regular file or directory: {}. Pack templates must be self-contained; replace a symbolic link with a copy of its target.",
+                source_path.display()
+            );
         }
     }
     Ok(())
@@ -570,6 +587,29 @@ mod tests {
             .resolve_target(Some(&hidden), "project")
             .expect_err("a hidden directory must be refused");
         assert!(format!("{refusal:#}").contains("hidden directory .config"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// A workspace the learner configured explicitly is a deliberate choice,
+    /// even when it sits under a dotted directory: the hidden-directory rule
+    /// exists to keep creation out of `~/.ssh`, not to veto `DELTAFORGE_WORKSPACE`.
+    #[test]
+    fn an_explicitly_configured_workspace_wins_over_a_dotted_ancestor() {
+        let (root, mut policy) = sandbox("configured-hidden");
+        let workspace = root.join(".local").join("deltaforge");
+        fs::create_dir_all(&workspace).unwrap();
+        policy.permitted_roots = vec![root.clone(), workspace.clone()];
+
+        assert_eq!(
+            policy.resolve_target(Some(&workspace), "project").unwrap(),
+            workspace.join("project")
+        );
+        // A dotted directory that is not itself a permitted root is still refused.
+        assert!(
+            policy
+                .resolve_target(Some(&root.join(".local")), "project")
+                .is_err()
+        );
         let _ = fs::remove_dir_all(root);
     }
 

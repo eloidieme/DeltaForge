@@ -146,7 +146,6 @@ pub struct TestRunRequest {
     pub fail_fast: bool,
     pub no_build: bool,
     pub keep_temp: bool,
-    pub capture_details: bool,
     pub trigger: RunTrigger,
 }
 
@@ -984,8 +983,10 @@ pub fn run_tests(
         no_build: request.no_build,
         keep_temp: request.keep_temp,
         // Durable workbench diagnosis needs the sanitized command and fixture
-        // even when the initiating CLI surface does not render those details.
-        capture_details: request.capture_details || !request.list_tests,
+        // whatever surface started the run, so this is not a caller's choice:
+        // callers used to pass a flag that this line then overrode anyway.
+        // Listing tests runs nothing, so there is nothing to capture.
+        capture_details: !request.list_tests,
         cancellation_path: Some(cancellation_path.clone()),
     };
     let mut summaries = Vec::new();

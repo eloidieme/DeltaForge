@@ -558,27 +558,38 @@ pub fn builtin_packs_dir() -> PathBuf {
 /// Per-user cache root for extracted embedded packs.
 ///
 /// Uses `$XDG_CACHE_HOME` / `~/.cache/deltaforge` on Unix and
-/// `%LOCALAPPDATA%\deltaforge` on Windows, falling back to the system temp
-/// directory when neither is available. A per-user location avoids the
-/// world-writable shared temp dir, where another user could pre-create and
-/// poison packs that DeltaForge then executes build/run commands from.
-pub fn embedded_cache_root() -> PathBuf {
+/// `%LOCALAPPDATA%\deltaforge` on Windows, and accepts `$DELTAFORGE_HOME` as
+/// the explicit escape hatch when neither is set.
+///
+/// There is deliberately no fall back to the shared temp directory. That
+/// location is world-writable, so another local account can pre-create the
+/// cache directory and poison packs whose build and run commands DeltaForge
+/// then executes — and the old fallback landed there in exactly the
+/// environment where nothing else works either, since `application_home`
+/// already refuses without one of these variables. An error naming the
+/// variable to set is the honest answer.
+pub fn embedded_cache_root() -> Result<PathBuf> {
     #[cfg(windows)]
     {
         if let Some(local) = env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty()) {
-            return PathBuf::from(local).join("deltaforge");
+            return Ok(PathBuf::from(local).join("deltaforge"));
         }
     }
     #[cfg(not(windows))]
     {
         if let Some(xdg) = env::var_os("XDG_CACHE_HOME").filter(|value| !value.is_empty()) {
-            return PathBuf::from(xdg).join("deltaforge");
+            return Ok(PathBuf::from(xdg).join("deltaforge"));
         }
         if let Some(home) = env::var_os("HOME").filter(|value| !value.is_empty()) {
-            return PathBuf::from(home).join(".cache").join("deltaforge");
+            return Ok(PathBuf::from(home).join(".cache").join("deltaforge"));
         }
     }
-    std::env::temp_dir().join("deltaforge")
+    if let Some(home) = env::var_os("DELTAFORGE_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home).join("cache"));
+    }
+    bail!(
+        "could not locate a per-user cache directory for the bundled packs; set DELTAFORGE_HOME (or XDG_CACHE_HOME) and try again"
+    )
 }
 
 fn collect_embedded_entries(dir: &Dir<'_>, entries: &mut Vec<(String, Vec<u8>)>) {
@@ -602,10 +613,10 @@ fn embedded_packs_digest() -> String {
     digest_named_contents(entries)
 }
 
-fn embedded_packs_cache_dir() -> PathBuf {
+fn embedded_packs_cache_dir() -> Result<PathBuf> {
     let digest = embedded_packs_digest();
     let hash = digest.strip_prefix("fnv1a64:").unwrap_or(&digest);
-    embedded_cache_root().join(format!("packs-{hash}"))
+    Ok(embedded_cache_root()?.join(format!("packs-{hash}")))
 }
 
 fn embedded_staging_dir(parent: &Path) -> PathBuf {
@@ -617,7 +628,7 @@ fn embedded_staging_dir(parent: &Path) -> PathBuf {
 }
 
 pub fn embedded_packs_dir() -> Result<PathBuf> {
-    let target = embedded_packs_cache_dir();
+    let target = embedded_packs_cache_dir()?;
 
     if target.join("flashindex").join("project.yaml").is_file() {
         return Ok(target);
@@ -698,7 +709,8 @@ fn is_bundled_pack_root(path: &Path) -> bool {
     }) {
         return true;
     }
-    path_is_under(path, &embedded_cache_root()) || path_is_under(path, &builtin_packs_dir())
+    embedded_cache_root().is_ok_and(|root| path_is_under(path, &root))
+        || path_is_under(path, &builtin_packs_dir())
 }
 
 fn path_is_under(path: &Path, base: &Path) -> bool {
@@ -732,10 +744,11 @@ pub fn pack_search_dirs_read_only(options: &PackSearchOptions) -> Vec<PathBuf> {
     }
 
     dirs.push(builtin_packs_dir());
-    let embedded = embedded_packs_cache_dir();
-    if embedded.is_dir() && !dirs.contains(&embedded) {
-        let dir = embedded;
-        dirs.push(dir);
+    if let Ok(embedded) = embedded_packs_cache_dir()
+        && embedded.is_dir()
+        && !dirs.contains(&embedded)
+    {
+        dirs.push(embedded);
     }
     dirs
 }
