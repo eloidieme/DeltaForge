@@ -35,6 +35,10 @@ fn temp_project_path(name: &str) -> PathBuf {
     ))
 }
 
+fn test_application_home() -> PathBuf {
+    std::env::temp_dir().join(format!("deltaforge-cli-flow-home-{}", std::process::id()))
+}
+
 fn run_deltaforge<I, S>(args: I, cwd: &Path) -> Output
 where
     I: IntoIterator<Item = S>,
@@ -46,6 +50,7 @@ where
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "core.hooksPath")
         .env("GIT_CONFIG_VALUE_0", "NUL")
+        .env("DELTAFORGE_HOME", test_application_home())
         .output()
         .unwrap()
 }
@@ -62,6 +67,7 @@ where
         .env("GIT_CONFIG_COUNT", "1")
         .env("GIT_CONFIG_KEY_0", "core.hooksPath")
         .env("GIT_CONFIG_VALUE_0", "NUL");
+    command.env("DELTAFORGE_HOME", test_application_home());
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -341,6 +347,42 @@ fn starter_project_initializes_and_fails_current_stage() {
     let parsed_config: serde_json::Value =
         serde_json::from_slice(&config_json.stdout).expect("config show --json is valid JSON");
     assert_eq!(parsed_config["schema_version"], 1);
+}
+
+#[test]
+fn init_registers_the_project_without_applying_the_browser_path_policy() {
+    let root = temp_project_path("init-registers");
+    let project_dir = root.join("an arbitrary scripted destination");
+    let application_home = root.join("isolated-app-data");
+    fs::create_dir_all(&root).unwrap();
+
+    let init = run_deltaforge_with_env(
+        [
+            "init",
+            "flashindex",
+            "--lang",
+            "rust",
+            "--name",
+            project_dir.to_str().unwrap(),
+            "--no-git",
+        ],
+        &repo_root(),
+        &[("DELTAFORGE_HOME", &application_home)],
+    );
+    assert_success(&init);
+
+    let registry: serde_json::Value = serde_json::from_slice(
+        &fs::read(application_home.join("projects.json")).expect("init wrote the registry"),
+    )
+    .unwrap();
+    let registered = registry["projects"].as_array().unwrap();
+    assert_eq!(registered.len(), 1);
+    assert_eq!(
+        Path::new(registered[0]["path"].as_str().unwrap()),
+        project_dir.canonicalize().unwrap()
+    );
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -1351,7 +1393,7 @@ fn tightening_a_gate_requires_correctness_and_performance_revalidation() {
     let next = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
     assert_failure(&next);
     assert_stderr_contains(&next, "must be revalidated");
-    assert_stderr_contains(&next, "deltaforge test");
+    assert_stderr_contains(&next, "passing its checks again");
 
     let _ = fs::remove_dir_all(root);
 }
@@ -2686,7 +2728,7 @@ fn state_missing_optional_fields_loads_but_requires_a_fresh_completion_proof() {
     let next = run_deltaforge(["next"], &project);
     assert_failure(&next);
     assert_stderr_contains(&next, "has no current completion record");
-    assert_stderr_contains(&next, "deltaforge test");
+    assert_stderr_contains(&next, "checks need to pass again");
 
     fs::copy(
         repo_root().join("tools/reference_solutions/flashindex_rust/src/main.rs"),
@@ -2705,8 +2747,14 @@ fn state_missing_optional_fields_loads_but_requires_a_fresh_completion_proof() {
     let _ = fs::remove_dir_all(project);
 }
 
+/// P2-6. A project written by an older DeltaForge opens and keeps working.
+///
+/// This test used to assert the opposite: that schema 1 was refused with
+/// "recreate the project with `deltaforge init`". That refusal was a promise
+/// to destroy a learner's progress on every future schema bump, so the
+/// behaviour changed and this test changed with it.
 #[test]
-fn state_schema_v1_is_rejected_with_actionable_guidance() {
+fn state_schema_v1_migrates_and_keeps_the_learner_going() {
     let project = temp_project_path("state-schema-v1");
     assert_success(&run_deltaforge(
         [
@@ -2727,10 +2775,17 @@ fn state_schema_v1_is_rejected_with_actionable_guidance() {
     fs::write(&state_path, serde_json::to_string_pretty(&state).unwrap()).unwrap();
 
     let status = run_deltaforge(["status"], &project);
-    assert_failure(&status);
-    assert_stderr_contains(&status, "schema_version 1");
-    assert_stderr_contains(&status, "older DeltaForge");
-    assert_stderr_contains(&status, "deltaforge init");
+    assert_success(&status);
+    assert_stdout_contains(&status, "01_scan_files");
+
+    // The migration is in memory until something writes; the next command that
+    // saves state persists the current schema, and nothing was lost on the way.
+    assert_success(&run_deltaforge(["hint", "--level", "1"], &project));
+    let migrated: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert_eq!(migrated["schema_version"], serde_json::json!(2));
+    assert_eq!(migrated["project"], serde_json::json!("flashindex"));
+    assert_eq!(migrated["current_stage"], serde_json::json!("01_scan_files"));
 
     let _ = fs::remove_dir_all(project);
 }
@@ -2857,7 +2912,7 @@ fn sync_pack_doc_only_update_keeps_proofs_valid() {
         &project,
     );
     assert_failure(&stale);
-    assert_stderr_contains(&stale, "deltaforge sync-pack");
+    assert_stderr_contains(&stale, "Adopt the currently discovered pack definition");
 
     let sync = run_deltaforge(
         ["--packs-dir", packs.to_str().unwrap(), "sync-pack"],
@@ -2912,7 +2967,7 @@ fn sync_pack_behavioral_update_requires_revalidation() {
     let next = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "next"], &project);
     assert_failure(&next);
     assert_stderr_contains(&next, "must be revalidated");
-    assert_stderr_contains(&next, "deltaforge test");
+    assert_stderr_contains(&next, "passing its checks again");
 
     let status = run_deltaforge(["--packs-dir", packs.to_str().unwrap(), "status"], &project);
     assert_success(&status);

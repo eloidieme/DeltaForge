@@ -30,7 +30,11 @@ fn deltaforge_command(project: &Path) -> Command {
 
 fn deltaforge_command_with_home(_project: &Path, home: &Path) -> Command {
     let mut command = Command::new(deltaforge_bin());
-    command.env("DELTAFORGE_HOME", home);
+    command
+        .env("DELTAFORGE_HOME", home)
+        // Bare-launch tests start a detached service, so a test process that
+        // panics before its explicit shutdown cannot leak one indefinitely.
+        .env("DELTAFORGE_TEST_IDLE_TIMEOUT_MS", "10000");
     command
 }
 
@@ -1694,7 +1698,11 @@ fn bare_launch_focuses_a_connected_workbench_without_opening_another_tab() {
         .unwrap();
     assert!(launch.status.success());
     let stdout = String::from_utf8_lossy(&launch.stdout);
-    assert_eq!(stdout.trim(), "DeltaForge is ready.");
+    assert!(
+        stdout.starts_with(&format!("DeltaForge is ready at http://127.0.0.1:{port}/")),
+        "{stdout}"
+    );
+    assert!(stdout.contains(&format!("token={token}")), "{stdout}");
     let focus_events = reader.join().unwrap();
     assert!(focus_events.contains("event: focus"), "{focus_events}");
     let reused = wait_for_record(&project);

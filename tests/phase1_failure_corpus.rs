@@ -741,6 +741,7 @@ fn cases() -> Vec<Case> {
 
 fn prepare_project(path: &Path, case: &Case) {
     let init = Command::new(deltaforge_bin())
+        .env("DELTAFORGE_HOME", path.join(".test-app-home"))
         .args([
             "init",
             "flashindex",

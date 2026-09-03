@@ -58,6 +58,9 @@ jobs:
       - name: Unit-test the page's pure decisions
         run: node --test "tests/ui/**/*.test.js"
 
+      - name: Check interface colour contrast
+        run: python3 tools/a11y/contrast_check.py
+
       - uses: dtolnay/rust-toolchain@stable
       - name: Build deltaforge
         run: cargo build --locked
@@ -73,3 +76,48 @@ jobs:
       - name: Drive the whole journey in a headless browser
         timeout-minutes: 20
         run: node tests/browser/journey.mjs
+
+  msrv:
+    name: Minimum Rust 1.85
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Check the documented minimum Rust version
+        # The published crate's MSRV covers its library and binaries. The MCP
+        # protocol client used only by integration tests currently requires a
+        # newer compiler through its process-wrapper development dependency.
+        run: cargo check --locked --lib --bins
+
+  publish-dry-run:
+    name: Crates.io package dry run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and verify the exact crate payload
+        run: cargo publish --dry-run --locked
+
+  energy:
+    # P1-4. A release build with a browser tab open burned 7% of one core
+    # while the learner was reading, which is what surfaces in macOS energy
+    # reporting as a misbehaving background app. The watcher was rewritten;
+    # this is what stops it regressing.
+    name: Idle CPU
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the release binary
+        run: cargo build --release --locked
+      - name: Assert the idle service stays under 1% of a core
+        run: python3 tools/perf/idle_cpu.py
+
+  dependency-policy:
+    name: Dependency policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources

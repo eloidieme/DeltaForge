@@ -37,6 +37,51 @@ test("a project identifier is decoded, not passed through raw", () => {
   assert.equal(core.routeState("/projects/a%20b/build").project, "a b");
 });
 
+test("every SPA route gets a useful browser title", () => {
+  assert.equal(core.pageTitle({ view: "projects" }), "Projects — DeltaForge");
+  assert.equal(core.pageTitle({ view: "catalog" }), "Project catalog — DeltaForge");
+  assert.equal(
+    core.pageTitle({ view: "build", projectName: "FlashIndex", heading: "Scan files" }),
+    "Scan files — FlashIndex — DeltaForge",
+  );
+  assert.equal(
+    core.pageTitle({ view: "health", projectName: "FlashIndex", heading: "The project pack changed" }),
+    "The project pack changed — FlashIndex — DeltaForge",
+  );
+});
+
+test("a current rail step does not say current twice", () => {
+  assert.equal(
+    core.railAriaLabel({ position: 1, title: "Scan files", status: "current", current: true }),
+    "Step 1, Scan files, current step",
+  );
+  assert.equal(
+    core.railAriaLabel({ position: 1, title: "Scan files", status: "complete", current: true }),
+    "Step 1, Scan files, complete, current step",
+  );
+});
+
+test("health prose preserves text while representing inline code", () => {
+  assert.deepEqual(
+    core.plainTextBlocks("Adopt `deltaforge sync-pack` after review.\n\nNothing is lost."),
+    [
+      {
+        kind: "paragraph",
+        spans: [
+          { kind: "text", text: "Adopt " },
+          { kind: "code", text: "deltaforge sync-pack" },
+          { kind: "text", text: " after review." },
+        ],
+      },
+      { kind: "paragraph", spans: [{ kind: "text", text: "Nothing is lost." }] },
+    ],
+  );
+  assert.deepEqual(
+    core.plainTextBlocks("An unmatched ` stays visible."),
+    [{ kind: "paragraph", spans: [{ kind: "text", text: "An unmatched ` stays visible." }] }],
+  );
+});
+
 const FIELDS = {
   pack: "flashindex",
   language: "rust",

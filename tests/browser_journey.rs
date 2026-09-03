@@ -59,6 +59,7 @@ struct Service {
     port: u16,
     token: &'static str,
     workspace: PathBuf,
+    home: PathBuf,
     _root: PathBuf,
 }
 
@@ -78,6 +79,16 @@ fn start_service(label: &str) -> Service {
 enum Workspace {
     Existing,
     Missing,
+}
+
+/// Start a service that also exposes `POST /api/v1/__panic`.
+fn start_service_with_panic_probe(label: &str) -> Service {
+    // SAFETY: single-threaded here, and `journey_guard` serialises every test
+    // in this file, so no other thread is reading the environment.
+    unsafe { std::env::set_var("DELTAFORGE_PANIC_PROBE", "1") };
+    let service = start_service(label);
+    unsafe { std::env::remove_var("DELTAFORGE_PANIC_PROBE") };
+    service
 }
 
 fn start_service_with(label: &str, workspace_state: Workspace) -> Service {
@@ -106,7 +117,13 @@ fn start_service_with(label: &str, workspace_state: Workspace) -> Service {
         .env("GIT_CONFIG_VALUE_1", "DeltaForge Tests")
         .env("GIT_CONFIG_KEY_2", "user.email")
         .env("GIT_CONFIG_VALUE_2", "deltaforge@example.com")
-        .args(["__workbench", "--token", TOKEN])
+        .args([
+            "__workbench",
+            "--token",
+            TOKEN,
+            "--idle-timeout-ms",
+            "10000",
+        ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -135,6 +152,7 @@ fn start_service_with(label: &str, workspace_state: Workspace) -> Service {
         port,
         token: TOKEN,
         workspace,
+        home,
         _root: root,
     }
 }
@@ -396,7 +414,9 @@ fn the_whole_journey_is_reachable_from_the_browser() {
     // function in backticks showed the backticks.
     let prompt = &performance["prediction_prompt"];
     assert!(
-        prompt["source"].as_str().is_some_and(|text| !text.is_empty()),
+        prompt["source"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty()),
         "a measured step must offer a prediction prompt"
     );
     assert!(
@@ -642,6 +662,51 @@ fn a_machine_with_no_workspace_creates_a_project_from_the_defaults() {
     assert_eq!(health["status"].as_str(), Some("healthy"), "{health}");
 
     let _ = fs::remove_dir_all(path);
+}
+
+/// P1-5. One panic used to end the service.
+///
+/// Thread-per-connection over shared state, with fifteen
+/// `.expect("workbench lock poisoned")` calls and no `catch_unwind` anywhere.
+/// A handler that panicked while holding a mutex poisoned it for the life of
+/// the process, so every subsequent request panicked too — and the browser
+/// hung, because nothing ever answered.
+#[test]
+fn a_panicking_handler_does_not_take_the_workbench_with_it() {
+    let _guard = journey_guard();
+    let service = start_service_with_panic_probe("panic");
+
+    // Healthy before.
+    assert_eq!(status(&service.raw("GET", "/api/v1/catalog", "")), "200");
+
+    let response = service.raw("POST", "/api/v1/__panic", "{}");
+    assert_eq!(
+        status(&response),
+        "500",
+        "a panicking handler must answer, not hang: {response}"
+    );
+
+    // And healthy after — twice, because the first request after a poisoned
+    // lock is the one that used to fail, and every one after it.
+    for attempt in 0..2 {
+        assert_eq!(
+            status(&service.raw("GET", "/api/v1/catalog", "")),
+            "200",
+            "request {attempt} after the panic was refused"
+        );
+    }
+    // Including the routes that take the mutex the panicking handler held.
+    assert_eq!(status(&service.raw("GET", "/api/v1/projects", "")), "200");
+
+    // The panic left a trace somewhere a learner can be asked to look. The
+    // service is detached from any terminal, so stderr alone is no record.
+    let log = service.home.join("panic.log");
+    let recorded = fs::read_to_string(&log)
+        .unwrap_or_else(|error| panic!("no panic log at {}: {error}", log.display()));
+    assert!(
+        recorded.contains("DeltaForge panic probe"),
+        "the panic log does not describe the panic: {recorded}"
+    );
 }
 
 #[test]
