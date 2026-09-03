@@ -50,6 +50,8 @@ ship review fail on the substrate. This one does not.
 
 ### P0-1. Creating a project from the browser is dead on every clean machine
 
+> **Resolution.** Resolved in `c8a937c`. Both halves: the page sends `parent_directory: null` when Location still holds the workspace it was prefilled with, and the service treats its own default workspace as creatable whether a request names it or omits it. Resolution is now a decision with no side effect (`CreationPolicy::resolve`); `prepare` does the one `create_dir_all`, at the moment a project is written. Two supporting corrections fell out: a permitted root is canonicalized through the same missing-path helper (a `DELTAFORGE_WORKSPACE` that did not exist yet was being dropped from the roots that would have allowed it), and containment is measured against the canonical form of the deepest existing ancestor. Regression tests: a browser-journey case against a workspace that has never existed, plus unit cases for both request shapes, for the refusal that must survive, and for the promise that resolving writes nothing. Contract amendment A5.
+
 The first thing a new user does, and it does not work.
 
 **Reproduced live, on the author's own machine, with default environment.**
@@ -105,6 +107,8 @@ the default workspace path before it exists.
 
 ### P0-2. Nothing in CI ever executes the page a learner uses
 
+> **Resolution.** Resolved in `08099e4`. Two harnesses. `tests/ui/core.test.js` runs `node --test` over `src/ui/core.js`, the page's pure decisions extracted so they can be called without a browser — sixty milliseconds, no dependencies, and reverting either half of the P0-1 fix turns three of them red. `tests/browser/journey.mjs` drives the real page in headless Chromium through the whole contract journey and constructs no requests of its own, which is the only way the page/mirror drift becomes visible; it starts from a DeltaForge home and workspace that do not exist, and any uncaught page error or `console.error` fails it. Both run in a new `page` CI job on Linux. The learner's source comes from `tools/reference_solutions/`, so the journey and `pack check-reference` cannot drift either.
+
 `src/ui/app.js` is 1,166 lines and is the entire product surface under contract decision
 4. It has zero tests. `tests/browser_journey.rs` is good work, but its own header states
 what it is:
@@ -126,6 +130,8 @@ and P0-3.
 ---
 
 ### P0-3. The section renderer corrupts learner-facing content
+
+> **Resolution.** Resolved in `fe3c2fd`, swept in `a7b407e`. `strip_inline_markdown` is gone; there is one parser and one emitter for authored content. `InlineSpan` represents code, strong and emphasis, nested, with code spans verbatim — the rule whose absence deleted the multiplication operator. `OverviewBlock` gained `Heading` and `Table` (with column alignment), and lists now carry whether they were numbered: 164 authored numbered items across the four packs were rendering as bullets, a sequence of steps presented as an unordered set. Hints and prediction prompts go through the same renderer via `RichText`, so the three surfaces agree. The guard is a property rather than a checklist: `validate-pack --strict` renders every learner-facing file back to markdown and refuses anything that fails the round trip, with a second short rule for the block constructs CommonMark defines that this renderer has no block for (those survive as literal text, so a round trip cannot see them). `every_shipped_stage_fills_every_panel` went from *not empty* to *carries no marker that was meant as markup*. Running the round trip over all four packs found one defect the review had not named: dropped table column alignment.
 
 The 1.0 work fixed sections rendering *empty*. It did not fix them rendering *wrong*.
 
@@ -174,6 +180,8 @@ content defect.
 
 ### P0-4. Distribution has never been executed, and its first execution is irreversible
 
+> **Resolution.** Resolved except the tag itself**, in `b4ebf7c`. `publish-crate` now needs `build`, so a failed target can no longer leave a permanent crates.io version with no binaries behind it. Added: `cargo publish --dry-run`, an MSRV job pinned to 1.85, `cargo deny` (advisories, bans, licences, sources), Dependabot for cargo and actions, `aarch64-unknown-linux-gnu`, build attestations on every archive, and a release body carrying this version's changelog section. macOS is **not** notarized — there is no Apple Developer account — so the README states the exact `xattr -d com.apple.quarantine` command and links Apple's own explanation of what it means. **Still open:** cutting `v1.0.0-rc.1` and installing from the published archive on three platforms. That requires pushing a tag, which is the one irreversible step in this list.
+
 No tags, no releases, no published crate. The README's primary install instruction —
 download an archive from Releases and verify its checksum — points at an empty page.
 
@@ -207,6 +215,8 @@ step in the README with the exact command rather than letting users discover it.
 
 ### P1-1. The Build layout collapses badly below 1120px, hiding the primary action
 
+> **Resolution.** Resolved in `69e19a4`. At the ≤1120px collapse the grid reorders the rail after the instructions and the evidence panel, so the step title and *Run checks* stay in the first viewport. Verified in the browser at 1280px and 900px, in both themes.
+
 `src/ui/app.css:677` sets `.build-rail { grid-column: 1 / -1; position: static; }` at
 `max-width: 1120px`. The rail is first in source order, so all fourteen steps become a
 full-width block *above* the content, pushing the step title, instructions and
@@ -220,6 +230,8 @@ replace it with a compact step selector (current step, count, disclosure for the
 list). Rule: the primary action never moves below the fold because the window narrowed.
 
 ### P1-2. The secondary text token and every control border fail WCAG AA
+
+> **Resolution.** Resolved in `69e19a4`, guarded in `b1ea8c8`. `--text-3` and `--line-strong` were darkened/strengthened on both grounds and now clear AA. `tools/a11y/contrast_check.py` parses the tokens out of `app.css`, computes all 34 foreground/background pairs, and fails CI on a violation. The dark palette is no longer written twice: `light-dark()` states each of the 24 tokens once, which also closes P2-12.
 
 The palette is otherwise well built — every semantic colour passes on every ground it is
 used on. Two tokens do not, and they are used everywhere.
@@ -245,6 +257,8 @@ contrast check to CI — all values live in one file.
 
 ### P1-3. The single-page app never tells assistive technology that the page changed
 
+> **Resolution.** Resolved in `69e19a4`. Every route sets `document.title`, moves focus to the new `h1` with `tabindex="-1"`, and marks the active nav item `aria-current="page"`. The creation form's refusal is wired with `aria-invalid` and `aria-describedby` to an inline live message under Location, and the submit control is `aria-disabled` rather than `disabled` — the old form left the tab order entirely, so a keyboard user had no way to discover why they were blocked. `aria-live` is off the theme button. The rail's label no longer says "current" twice; it is built by `DeltaForgeCore.railAriaLabel` and unit-tested.
+
 Fundamentals are good: `lang="en"`, landmarks, skip link, visible focus ring, no positive
 tabindex, real `<details>`, the step rail as an `<ol>` with descriptive labels. What is
 missing is everything specific to a client-routed app.
@@ -268,6 +282,8 @@ on the active nav item. On the form, swap `disabled` for `aria-disabled`, wire
 message the live region. Remove `aria-live` from the theme button.
 
 ### P1-4. A background service that burns 7% of a core while the learner reads
+
+> **Resolution.** Resolved in `47c8059`, guarded in `b1ea8c8`. The watcher now follows only the project a client is viewing, gates the tree walk on a directory-mtime check, backs off adaptively toward 5 s while nothing moves, and caches `verify_pack_pin`'s 541-file stat walk on the pack directory's mtime. Measured on a release build over 30-second windows: **0.400% of one core with a browser tab open** (was 7.0%) and **0.067% idle** (was 2.0%). `tools/perf/idle_cpu.py` asserts a 1% ceiling in CI. The bounded learner-action lease wait is preserved.
 
 Measured on a **release** build over 30-second windows, two registered projects, nothing
 running:
@@ -293,6 +309,8 @@ leave `verify_pack_pin`'s 541-file stat walk uncached on every tick — cache it
 the pack directory's mtime. Add an idle-CPU assertion to CI.
 
 ### P1-5. One panic anywhere permanently bricks the workbench
+
+> **Resolution.** Resolved in `47c8059` (service) and `69e19a4` (page). Every lock goes through `sync::lock`, which recovers from poisoning; each connection runs inside `catch_unwind` so a panicking request answers 500 instead of poisoning shared state; a `panic::set_hook` appends to `panic.log` under the DeltaForge home. The idle watchdog's `.lock().map(…).unwrap_or_default()` is gone — it reported zero idle time on a poisoned lock, so a service that had panicked once would never shut down. `POST /api/v1/__panic`, present only when `DELTAFORGE_PANIC_PROBE` is set, makes this testable against a real service; the test fails with an empty response — the hang itself — when either half is reverted. On the page: `window.onerror`, `unhandledrejection`, `onerror` on both streams, and a real disconnected state after four failed reconnects that names the workbench as stopped and gives the command to restart it. The health screen now opens the application stream too, because it was the one screen that opened none and it is where a learner sits when something has already gone wrong. The idle timeout is documented in `docs/commands.md`.
 
 Thread-per-connection with shared state behind mutexes. 15 instances of
 `.expect("workbench lock poisoned")` in `src/workbench.rs`, no `catch_unwind` anywhere,
@@ -335,19 +353,27 @@ button labelled *Use updated project definition* that does exactly that.
 *Fix:* give every user-facing error two forms, or write them surface-neutral and let the
 UI supply the action.
 
+> **Resolution.** Resolved in `7558a3c`. Eight sites rewritten surface-neutral, so the UI supplies the action and the CLI still reads correctly. Three `cli_flow` assertions changed with them.
+
 **P2-2. Prose rendered in a code block, truncated mid-sentence.** That health screen puts
 an 872px sentence into a 758px box with `white-space: pre; overflow-x: auto`. macOS hides
 overflow scrollbars, so the sentence stops mid-clause with no indication more exists. Its
 backticks render as literal characters.
 
+> **Resolution.** Resolved in `69e19a4`. The health detail wraps instead of sitting in a `white-space: pre` box that macOS gives no visible scrollbar, and its backticks render as inline code through the P0-3 renderer. The headless journey asserts `scrollWidth <= clientWidth`.
+
 **P2-3. The header reads "Loading project…" permanently on the health route.** The
 project name never resolves on the one screen reached when something has gone wrong.
+
+> **Resolution.** Resolved in `69e19a4`. The health route resolves the project name instead of reading "Loading project…" permanently; asserted in the headless journey.
 
 **P2-4. The second launch silently stops printing the URL.**
 `DELTAFORGE_NO_BROWSER=1 deltaforge` prints `"DeltaForge is ready at http://…"` the first
 time and just `"DeltaForge is ready."` when a service already exists. The documented
 headless path stops working with no way to recover the URL short of reading
 `~/.deltaforge/workbench.json`. *Fix:* always print the URL, started or found.
+
+> **Resolution.** Resolved in `7558a3c`. The URL is printed on every launch, started or found.
 
 **P2-5. A damaged state file has no recovery path and a developer-grade error.** A
 truncated `state.json` prints serde's raw message including all 24 internal field names.
@@ -356,12 +382,16 @@ misdiagnosed as *"from an older DeltaForge"*. Writes are atomic so this is rare,
 never. *Fix:* catch the parse error, say the saved progress is damaged, keep a
 `state.json.prev` on each write, add `deltaforge doctor --repair`.
 
+> **Resolution.** Resolved in `7558a3c`. Every write keeps `state.json.prev`; a parse failure says the saved progress is damaged rather than dumping serde's 24 internal field names; a valid-JSON-but-foreign file is no longer misdiagnosed as "from an older DeltaForge"; `deltaforge doctor --repair` restores the backup.
+
 **P2-6. There is no state migration story at all.** `check_schema_version`
 (`src/state.rs:588`) rejects every older schema with *"recreate the project with
 `deltaforge init`"*. Every future schema bump destroys all learner progress. This already
 happened once (1 → 2) and the contract's answer was "accept the state break" — defensible
 before there were users, not after. *Fix:* write the migration ladder now, while there is
 exactly one version to migrate from.
+
+> **Resolution.** Resolved in `7558a3c`. A migration ladder, one rung per schema version, working on the parsed JSON rather than on `ProjectState`. A checked-in schema-1 fixture proves rung one still climbs. Contract amendment A6. The test that asserted the old refusal is now `state_schema_v1_migrates_and_keeps_the_learner_going`.
 
 **P2-7. `deltaforge init` does not register the project, and its doc comment says it
 does.** A CLI-created project is invisible in the browser's Projects list until the user
@@ -370,10 +400,14 @@ through `crate::application::create_project`, so a project scripted into existen
 identical to one created from the catalog"* — it calls `creation::create` directly, and
 the two differ in registration, path policy and preflight.
 
+> **Resolution.** Resolved in `7558a3c`. `init` registers the project, which its doc comment already claimed; the comment is corrected to describe what the two paths actually share.
+
 **P2-8. The test suite leaks a workbench service.** After a full `cargo test`, a
 `deltaforge` process was still listening on `127.0.0.1:57697` more than eleven minutes
 later. Not the registered service, so `deltaforge exit` cannot stop it. *Fix:* short idle
 timeout on test-spawned services plus a `Drop` guard that kills the child on panic too.
+
+> **Resolution.** Resolved in `b1ea8c8`. Test-spawned services take a short `--idle-timeout-ms` and a `Drop` guard kills the child on panic as well as on return.
 
 **P2-9. The CLI's front door contradicts decision 6.** `deltaforge --help` lists 20
 commands flat, with maintainer tooling (`pack`, `validate-pack`, `sync-pack`) ranked
@@ -381,28 +415,40 @@ alongside `test`, and `portfolio` / `design` appearing nowhere in the README. *F
 the help (Learn / Automate / Author packs) and lead with "run `deltaforge` to open the
 workbench".
 
+> **Resolution.** Resolved in `7558a3c`. `--help` is grouped Learn / Automate / Author packs, and leads with running `deltaforge` to open the workbench.
+
 **P2-10. Three different product descriptions, one naming a competitor.** `Cargo.toml` —
 the string shipped to crates.io — reads *"A local CodeCrafters-style learning framework
 for staged systems-programming projects."* `--help` says *"Local staged project learning
 framework."* The README opens with *"Build a real developer tool on your own machine, one
 behavior at a time."* The third is the good one.
 
+> **Resolution.** Resolved in `7558a3c`. One description in all three places, and it is the README's. The competitor's name is out of the crate registry.
+
 **P2-11. The catalog's order is arbitrary and "Preview" is never explained.** Cards render
 FlashIndex, ByteForgeVM, MiniKV, TinyHTTP — not alphabetical, not by difficulty, not by
 step count. The *Preview* badge sits at the same visual weight as *Flagship* with no
 explanation on the surface where the decision is made.
 
+> **Resolution.** Resolved in `69e19a4`. Flagship first, then previews alphabetically, with a line on the catalog explaining what Preview means where the decision is being made.
+
 **P2-12. The dark palette is duplicated verbatim in two CSS blocks.** 24 tokens appear
 identically under `@media (prefers-color-scheme: dark)` (`app.css:63`) and under
 `:root[data-theme="dark"]` (`app.css:93`). A rule written twice, waiting to drift.
+
+> **Resolution.** Resolved in `69e19a4`. `light-dark()` states each of the 24 tokens once.
 
 **P2-13. The creation screen flashes a label with no value.** During the ~130 ms preflight
 the Environment panel renders its heading and an orphaned *"WILL BE CREATED AT"* label
 above empty space. There is no skeleton or loading state anywhere in the app.
 
+> **Resolution.** Resolved in `69e19a4`. Preflight shows an explicit checking state instead of an orphaned label above empty space.
+
 **P2-14. The measured-step diamond wraps onto its own line** on steps 6 and 12, whose
 titles are longer. The step rail is the signature element of the design; its marker
 should not orphan.
+
+> **Resolution.** Resolved in `69e19a4`. The diamond stays with the last word of its title.
 
 **P2-15. Two different platform conventions for user data, in one product.** The pack
 cache correctly uses `%LOCALAPPDATA%` / `$XDG_CACHE_HOME` (`src/pack.rs:560`). The project
@@ -412,6 +458,8 @@ same user gets a different home from Git Bash than from PowerShell. The `0700` h
 on the directory holding the capability token is `#[cfg(unix)]` only — on Windows it gets
 no ACL restriction.
 
+> **Resolution.** Resolved in `7558a3c`. Windows uses `%LOCALAPPDATA%`, matching the pack cache, so Git Bash and PowerShell agree; the directory holding the capability token gets an ACL there rather than only a `0700` on Unix.
+
 ---
 
 ## P3 — public-project hygiene
@@ -419,24 +467,36 @@ no ACL restriction.
 **P3-1.** No `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue templates or PR template.
 `SECURITY.md` is present and good, which makes the gap conspicuous.
 
+> **Resolution.** Resolved in `b4ebf7c`. `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, issue templates and a PR template.
+
 **P3-2.** Internal working documents ship publicly: `handoffs/` (eleven session-handoff
 prompts, its own README calls them historical) and `Spec.md`. `docs/product/` is
 different — that is a genuine engineering record and a credit to the project. Move
 `handoffs/` and `Spec.md` out, or into a clearly-marked `docs/history/`.
 
+> **Resolution.** Resolved in `b4ebf7c`. `handoffs/` and `Spec.md` moved to `docs/history/`, clearly marked. `docs/product/` stays.
+
 **P3-3.** Two `wip` commits in the published history: `3bcf74b`, `5f8cd2b`. Everything
 else in 90 commits has a real imperative subject and explanatory body.
 
+> **Resolution.** **Not fixed, and will not be.** `3bcf74b` and `5f8cd2b` are in published history; rewriting it would break every existing clone and every commit hash referenced in `docs/product/`. The practice going forward is the one the rest of the history already follows. `CONTRIBUTING.md` now states it.
+
 **P3-4.** Thirteen README links break on crates.io and docs.rs — `docs/` is in the
 `exclude` list. Use absolute GitHub URLs in the README, or ship `docs/`.
+
+> **Resolution.** Resolved in `b4ebf7c`. All thirteen links are absolute GitHub URLs, so they resolve on crates.io and docs.rs.
 
 **P3-5.** The CSP is weakened by `unsafe-inline` for both scripts and styles
 (`src/workbench.rs:2340`). Both assets are embedded at compile time, so their SHA-256
 hashes are computable — replace `'unsafe-inline'` with hashes.
 
+> **Resolution.** Resolved in `47c8059`. SHA-256 hashes replace `'unsafe-inline'` for both scripts and styles; a unit test asserts the policy contains no `'unsafe-inline'`.
+
 **P3-6.** No `set_write_timeout` on the main request path. It is set on the identity probe
 but not on `handle_connection`. A client that stops reading holds a thread indefinitely;
 the pre-auth permit bounds unauthenticated connections, an authenticated one is unbounded.
+
+> **Resolution.** Resolved in `47c8059`. `set_write_timeout` on the main request path.
 
 **P3-7.** Content sufficiency stands at five stages of fourteen against a contract gate of
 fourteen. The practice already found six specification holes in the five it covered.
@@ -449,6 +509,8 @@ ninety seconds.
 decision — but it means the catalog a new user sees is 75% preview, and P0-3's worst
 content corruption is in ByteForgeVM. A defect found in the flagship must still be swept
 across all four.
+
+> **Resolution.** Resolved in `a7b407e`. The sweep covered all 45 stages in four packs. Mechanical fidelity is machine-checked by `validate-pack --strict`, so the pass looked for specification holes instead and found four, each a place where the reference solution has a definite behaviour the instructions never stated. All four are now stated; `pack check-reference` passes all stages on all four packs.
 
 ---
 

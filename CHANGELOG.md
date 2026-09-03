@@ -69,6 +69,49 @@ exports are now excluded from the digest.
 `git tag` failing on an existing tag was reported as an error. A second snapshot of a
 step is a legitimate action; the existing tag is now reported and left alone.
 
+### Fixed: the ship review
+
+1.0.0 was reviewed before release against a single question — would this ship as an Apple
+or a Google 1.0 — and the answer was no, for 33 reproducible reasons. All but two are
+closed. `docs/product/release-1-0-ship-review.md` carries every finding with its
+resolution; `docs/product/release-1-0-ship-closeout.md` carries the account.
+
+The four that mattered most:
+
+- **Creating a project from the browser did not work on any machine without
+  `~/DeltaForge`** — that is, on every machine except the author's. The page posted the
+  Location field it had prefilled from the service, and the service read its own default
+  back as a location the learner had typed, which then had to already exist. The first
+  screen of the product was a dead end with a disabled button. It survived three review
+  passes because all three harnesses created that directory before they started.
+- **The section renderer deleted characters from learner content.** A blanket
+  ``replace(['`', '*'], "")`` took the multiplication operator out of the ByteForgeVM
+  stage that teaches multiplication, and 22 sub-headings across 21 stage files rendered as
+  literal `###` text. There is now one markdown parser and one emitter, inline code is
+  verbatim, headings and tables and numbered lists are represented, and
+  `validate-pack --strict` refuses any pack whose content does not survive a round trip
+  through the renderer.
+- **One panic bricked the workbench.** A handler that panicked while holding a mutex
+  poisoned it for the life of the process, and every request after it panicked too — the
+  browser simply hung. Locks recover from poisoning, each connection runs inside
+  `catch_unwind`, and panics are logged under the DeltaForge home.
+- **An idle service burned 7% of a core** while the learner was reading, because the
+  source watcher walked every project ever created on every 500 ms tick. It now watches
+  the open project, gates on directory mtime, and backs off: **0.4% with a browser tab
+  open, 0.067% idle.**
+
+Also: saved progress now migrates across schema versions instead of being refused;
+`state.json.prev` and `deltaforge doctor --repair` give a damaged state file a way back;
+the interface passes WCAG AA and announces route changes to assistive technology; the
+build layout no longer pushes the primary action below the fold under 1120px; application
+strings no longer tell browser users to type terminal commands; and `deltaforge init`
+registers the project it creates.
+
+CI gained five jobs so none of this can regress unobserved: a headless-browser journey
+that drives the real page from a machine state that has never existed, a Node suite over
+the page's pure decisions, a colour-contrast assertion, an idle-CPU ceiling, and MSRV,
+`cargo deny` and `cargo publish --dry-run`.
+
 ### Validation
 
 The 1.0 contract replaced external learner research with three practices, all now

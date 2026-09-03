@@ -233,6 +233,48 @@ Consequence: creation may create one parent directory chosen by DeltaForge, neve
 arbitrary missing parent supplied by a browser request. Preflight names that default as
 “will be created” before any write occurs.
 
+### A6. Saved progress migrates instead of breaking (decision 10)
+
+*2026-09-03.* Decision 10 renumbered FlashIndex's stage IDs and *accepted the
+state break*, and the code generalised that into a rule: `check_schema_version`
+refused every older schema and told the learner to run `deltaforge init` again.
+That was a defensible trade for a project with no users and is not one for a
+project that has shipped — it makes every future schema change a promise to
+destroy work someone has done.
+
+A migration ladder now runs on load: one rung per schema version, operating on
+the parsed JSON rather than on `ProjectState`, because `ProjectState` is the
+current shape and a migration exists precisely to handle a document that is not
+that shape yet. A checked-in schema-1 fixture keeps rung one honest.
+
+Consequence: decision 10's renumber stands and its historical break is not
+undone — a pre-1.0 FlashIndex project still cannot be carried forward, because
+the stage IDs it recorded no longer exist. What changes is the rule going
+forward: from schema 2 onward, a bump owes the learner a migration, and shipping
+one without a rung is a defect rather than an accepted cost.
+
+### A7. Every finding gets a regression test (validation practice)
+
+*2026-09-03.* The 1.0 ship review found 33 defects, and its own conclusion was
+that the root cause was singular: the software had only ever been driven by its
+author, on the machine where it was written, along paths already known to work.
+Three review passes missed a dead creation flow because all three harnesses
+created the directory whose absence was the bug.
+
+The contract now carries the practice that answers it. A fix is not done until
+something other than a person re-runs the path it fixed:
+
+- `tests/browser/journey.mjs` drives the real page in a headless browser, from a
+  home directory and a workspace that do not exist when it starts.
+- `tests/ui/` executes the page's pure decisions under `node --test`.
+- `tools/a11y/contrast_check.py` and `tools/perf/idle_cpu.py` assert in CI the
+  two numbers this review had to measure by hand.
+- `validate-pack --strict` proves every pack survives its own renderer by round
+  trip, rather than by a list of constructs someone remembered to ban.
+
+Consequence: CI gained five jobs and roughly twenty minutes of wall time. That
+is the price of the answer to the pattern named above, and it is worth paying.
+
 ## Status at 1.0
 
 | Contract item | State |
