@@ -63,13 +63,12 @@ whole review turned up, and the review did not name it.
 
 ### The two that are not closed
 
-**P0-4's last step — cut `v1.0.0-rc.1` and install from the published archive on
-macOS, Linux and Windows.** Everything the tag needs is in place and verified as
-far as it can be verified without pushing: the crate packages, the dry run
-passes, the matrix builds five targets, archives are checksummed and attested,
-and the release body carries this version's changelog. The push itself is the
-one action in this list that cannot be undone, and it is the user's to take. See
-§4 for the exact sequence.
+**P0-4's last step — install from the published archive on Linux and Windows.**
+`v1.0.0-rc.1` is cut and **macOS arm64 is validated end to end** (see §4).
+Linux and Windows are not, because that hardware is not reachable from here. The rc
+proved the workflow itself works on its first execution — five targets built,
+checksums and SLSA provenance attached, a pre-release cut, and crates.io
+untouched.
 
 **P3-8 — the cold dogfood by someone who is not the author.** This one cannot be
 performed by the agent doing the work, by construction: the whole point is a
@@ -329,36 +328,69 @@ unit suite, contrast check, headless journey), `msrv` (pinned 1.88),
 
 Everything below is ready and unexecuted. It needs a push.
 
-The branch is pushed and **CI is green on all eight jobs across Linux, macOS and
-Windows** (run `33803509969`). What remains:
+### Done: `v1.0.0-rc.1`
 
-```bash
-git tag -a v1.0.0-rc.1 -m "Release candidate 1"
-git push origin v1.0.0-rc.1
-```
+Cut and pushed. The release workflow succeeded on its **first ever execution**,
+which was the part most likely to fail:
 
-That builds five targets, checksums and attests each archive, and cuts a
-pre-release. It does **not** touch crates.io, because the tag does not name the
-manifest version.
+- five targets built — Linux x86-64 and arm64, macOS Intel and Apple Silicon,
+  Windows x86-64;
+- ten assets published: five archives, each with its `.sha256`;
+- SLSA v1 build provenance attested and verified against the workflow, the
+  repository and the tag;
+- marked as a pre-release;
+- **crates.io untouched** — the publish job ran, compared the tag to the
+  manifest version, and recorded why it skipped.
 
-Then, on each of macOS, Linux and Windows — on a machine that has never built
-this project — download the archive, verify its checksum, run `deltaforge`, and
-complete FlashIndex step 1 in the browser. On macOS this includes the Gatekeeper
-step the README documents; that step is part of what is being tested.
+One defect was caught in the pre-flight audit and would have failed that first
+push after building all five targets: the changelog extractor looked for a
+`## 1.0.0-rc.1` heading, which does not exist and should not. A candidate now
+reads the section for the version it precedes.
 
-Only then:
+### Done: installing from the archive on macOS (arm64)
+
+Downloaded from the Releases page, not built here:
+
+- checksum verified with the exact command the README gives;
+- provenance verified — `gh attestation verify` ties the archive's SHA-256 to
+  `.github/workflows/release.yml` at `refs/tags/v1.0.0-rc.1`;
+- **the whole learner journey completed**, driven through the real page in a
+  headless browser against a DeltaForge home and workspace that did not exist:
+  catalog → create with defaults → failing run with a diagnosis → hint → pass →
+  snapshot → prediction → benchmark → exported record.
+
+The packs came from the binary's embedded copy, extracted to the per-user cache
+— confirmed by checking that the build path baked in on the CI runner does not
+exist on this machine. That is the path a stranger takes.
+
+**Gatekeeper behaves worse than the README described**, and the README is
+corrected. macOS does not merely "block" an unsigned downloaded binary: it
+reports it as possible malware and kills the process. The fix is System Settings
+→ Privacy & Security → *Allow Anyway*, then *Open Anyway* on the next run. The
+`xattr -d com.apple.quarantine` one-liner still works and is still documented,
+but it was the only thing documented, and it is not what a user reaching for the
+mouse will do. Leaving that undescribed is exactly the failure P0-4 named — an
+OS security refusal as the first interaction, with no warning.
+
+### Remaining: Linux and Windows install validation
+
+Not reachable from this machine. Per the rule stated here before the rc was cut:
+the honest substitute is a workflow-dispatch job that downloads the published
+archive on those runners and runs the same journey, and the result must then be
+reported as *validated on CI runners*, not as *validated on three platforms*.
+Until one or the other happens, the install path on Linux and Windows is a
+claim — a better-supported claim than before, since both build and both pass the
+full suite on every commit, but a claim.
+
+Only after Linux and Windows are covered:
 
 ```bash
 git tag -a v1.0.0 -m "DeltaForge 1.0"
 git push origin v1.0.0
 ```
 
-which publishes the crate.
-
-If Linux or Windows hardware is not reachable, the honest substitute is a
-workflow-dispatch job that downloads the published archive on those runners and
-runs the same journey — and the result must be reported as *validated on CI
-runners*, not as *validated on three platforms*.
+which is the tag that publishes the crate, because it names the manifest
+version. That publish cannot be undone.
 
 ---
 
@@ -396,10 +428,12 @@ document is that it does not flinch.
    unfamiliar programmer would have found P0-1 in ninety seconds. Every
    automated gate added here was designed by someone who already knows how the
    product works, and that is a category of blindness no amount of CI removes.
-2. **The install path is still a claim.** Until an archive is downloaded onto a
-   machine that has never built this project, "install from Releases" is
-   documentation, not a tested path. The rc sequence in §4 exists precisely
-   because that has to stop being a claim before 1.0.0 is real.
+2. **The install path is a claim on two of three platforms.** macOS is now
+   tested end to end from the published archive. Linux and Windows are not, and
+   "install from Releases" stays documentation there until an archive is run on
+   each. It is worth noting what testing the one platform found: the README's
+   account of Gatekeeper was wrong in the direction that matters, describing a
+   block where macOS actually reports malware and kills the process.
 3. **The content-sufficiency practice grades its own homework.** The attempts
    are made by agents told not to read the repository. That instruction is not
    enforced by the filesystem, which `content-sufficiency.md` already says. It

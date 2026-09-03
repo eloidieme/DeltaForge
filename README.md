@@ -48,19 +48,35 @@ cargo install --git https://github.com/eloidieme/DeltaForge
 Release archives also carry GitHub build-provenance attestations. With the GitHub CLI,
 verify one with `gh attestation verify <archive> --repo eloidieme/DeltaForge`.
 
-The macOS archive is not yet signed or notarized because the project does not have an
-Apple Developer ID signing identity. After verifying the archive checksum and
-provenance, if macOS blocks the downloaded binary, remove quarantine from that one file
-and try again:
+### macOS will refuse to run it the first time
+
+The macOS archives are not signed or notarized, because the project has no Apple
+Developer ID. **Expect macOS to block the binary and say it may be malware.** This is
+what Gatekeeper does to any unsigned binary you downloaded; it is not a claim about
+DeltaForge, and it happens before DeltaForge runs a single line.
+
+Verify the checksum and provenance above first. Then allow it, either way:
+
+**In System Settings** — the path Apple intends:
+
+1. Run `deltaforge` once. macOS refuses and closes it.
+2. Open **System Settings → Privacy & Security**, scroll to the Security section, and
+   next to the message about `deltaforge` choose **Allow Anyway**.
+3. Run it again and choose **Open Anyway** in the confirmation.
+
+**Or in the terminal**, which does the same thing in one step:
 
 ```bash
 xattr -d com.apple.quarantine /absolute/path/to/deltaforge
 ```
 
-Do not apply that command recursively or to a binary you have not verified. Apple's
-[Gatekeeper guidance](https://support.apple.com/en-us/102445) explains the risk of
-overriding this protection. A future release will remove this step once Developer ID
-signing and notarization are available.
+Do not apply that command recursively, and not to a binary whose checksum you have not
+checked. Apple's [Gatekeeper guidance](https://support.apple.com/en-us/102445) explains
+what overriding this protection means. A future release removes the step once Developer
+ID signing and notarization are in place.
+
+If you would rather not do any of this, `cargo install deltaforge` builds from source and
+Gatekeeper never applies.
 
 You need a working Rust toolchain (`cargo`) to build the projects, and Git if you want
 DeltaForge to snapshot completed steps.
