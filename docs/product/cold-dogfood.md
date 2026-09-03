@@ -105,5 +105,71 @@ Two things were found and fixed during this execution:
 
 ## Running it again
 
-Run the script with someone who has not seen DeltaForge, and add a new *Execution*
-section. Never edit an earlier one.
+The next execution must use the following protocol. Its purpose is to prevent a helpful
+observer, a warm machine, or a source checkout from quietly turning a cold run into
+another author run.
+
+### Participant and machine
+
+- Recruit one programmer who has never used DeltaForge and has not read its source,
+  packs, product docs, screenshots, or this script. Familiarity with Rust is allowed.
+- Use a normal user account with no `~/.deltaforge`, no `~/DeltaForge`, no DeltaForge
+  checkout, and no `deltaforge` already on `PATH`.
+- A working Rust toolchain and Git may be installed before timing begins. Record their
+  versions, the OS and architecture, and whether Cargo's registry cache is warm.
+- Install only from the release-candidate archive and checksum published by GitHub. Do
+  not substitute `cargo run`, a local build, or a working tree. Record the archive name,
+  SHA-256, release URL, and the commit named by its provenance attestation.
+
+### Observer rules
+
+One observer takes notes and a screen recording with the participant's consent. Before
+starting, say only: *“Please install this archive, start DeltaForge, and follow the
+product until you have passed the first FlashIndex step, saved its snapshot, run a
+benchmark with a prediction, and exported your record. Think aloud. I will not answer
+product questions during the run.”*
+
+The observer must not point, explain labels, suggest terminal commands, name routes, or
+recover the participant from a dead end. If the participant asks for help, record the
+question verbatim and reply, *“Use whatever the product gives you.”* Stop only for a
+security concern, risk of data loss, or after ten minutes with no attempted action. A
+stop is a finding, not a failed participant.
+
+### Timing and evidence
+
+Start the activation clock when the participant begins downloading the archive. Record
+wall-clock timestamps for download complete, checksum verified, binary runnable,
+workbench visible, catalog found, preflight accepted, project created, first check
+started, and first behavioral result visible. The activation gate is the last of those
+events in under five minutes; report download time separately as well so network speed
+does not hide product time.
+
+Continue untimed through every step in **The script** above. For each step record:
+
+| Field | What to write |
+|---|---|
+| Expected next action | What the participant believed the product wanted |
+| Action taken | The exact click, text entry, or command |
+| Hesitation | Seconds without an action and the participant's words |
+| Outside help | Any docs, search, source, observer help, or guessed terminal command |
+| Outcome | Completed, recovered without help, blocked, or stopped for safety |
+
+Keep the exported record, redacted screen recording, service panic log if one exists,
+and the observer notes as evidence. Never collect the learner project's private source.
+
+### Pass criteria and write-up
+
+The cold gate passes only if the participant:
+
+1. gets the first behavioral result within five minutes;
+2. completes the whole requested journey with the browser as the control surface (the
+   editor or terminal may be used only to write project code);
+3. receives no observer coaching and consults no DeltaForge source or internal docs; and
+4. can state, in their own words, what failed, what to do next, and what the exported
+   record proves.
+
+Afterward, ask what they expected at each hesitation point and which single moment felt
+least trustworthy. Add a new dated *Execution* section containing the environment,
+timeline, every deviation, the participant's closing explanation, and issue links for
+all findings. Never edit an earlier execution. A failed gate remains in the record and
+must be repeated from a new clean account after fixes.

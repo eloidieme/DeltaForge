@@ -1,6 +1,6 @@
 # Shared context — prepend this to every DeltaForge handoff prompt
 
-You are working on **DeltaForge**, at `/Users/eloidieme/Projects/DeltaForge` (Rust 2024 edition, single crate, git repo). It is a local, CodeCrafters-style learning framework for staged systems-programming projects: a learner runs `deltaforge init <pack> --lang rust`, gets a repo they own, reads behavioral specs, implements each stage, runs black-box tests (`deltaforge test`), unlocks stages (`deltaforge next`), records benchmarks (`deltaforge bench --save`), and exports reports/portfolio material. The full product vision is in `Spec.md` at the repo root — read the sections referenced by your task.
+You are working on **DeltaForge**, at `/Users/eloidieme/Projects/DeltaForge` (Rust 2024 edition, single crate, git repo). It is a local, CodeCrafters-style learning framework for staged systems-programming projects: a learner runs `deltaforge init <pack> --lang rust`, gets a repo they own, reads behavioral specs, implements each stage, runs black-box tests (`deltaforge test`), unlocks stages (`deltaforge next`), records benchmarks (`deltaforge bench --save`), and exports reports/portfolio material. The original product vision is archived in [`Spec.md`](../Spec.md) — read the sections referenced by your task only as historical context.
 
 Core principles (do not violate):
 - Packs specify observable CLI behavior, not implementation details.

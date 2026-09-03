@@ -1,6 +1,6 @@
 # Task 02 — Performance gates
 
-*(Prepend `handoffs/00-shared-context.md`. Depends on Task 01 — benchmark matrix, peak memory, speedup, versioned history must already be merged; verify before starting.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`. Depends on Task 01 — benchmark matrix, peak memory, speedup, versioned history must already be merged; verify before starting.)*
 
 ## Objective
 

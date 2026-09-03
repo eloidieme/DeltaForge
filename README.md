@@ -36,7 +36,7 @@ Rust is the implementation language in 1.0.
 
 ## Install
 
-Download a published release archive for macOS, Linux, or Windows from
+Download a published release archive for macOS, Linux (x86-64 or ARM64), or Windows from
 [Releases](https://github.com/eloidieme/DeltaForge/releases), verify its checksum, and
 put the binary on your `PATH`. Before the first tagged release is published, install the
 current source directly from the repository:
@@ -44,6 +44,23 @@ current source directly from the repository:
 ```bash
 cargo install --git https://github.com/eloidieme/DeltaForge
 ```
+
+Release archives also carry GitHub build-provenance attestations. With the GitHub CLI,
+verify one with `gh attestation verify <archive> --repo eloidieme/DeltaForge`.
+
+The macOS archive is not yet signed or notarized because the project does not have an
+Apple Developer ID signing identity. After verifying the archive checksum and
+provenance, if macOS blocks the downloaded binary, remove quarantine from that one file
+and try again:
+
+```bash
+xattr -d com.apple.quarantine /absolute/path/to/deltaforge
+```
+
+Do not apply that command recursively or to a binary you have not verified. Apple's
+[Gatekeeper guidance](https://support.apple.com/en-us/102445) explains the risk of
+overriding this protection. A future release will remove this step once Developer ID
+signing and notarization are available.
 
 You need a working Rust toolchain (`cargo`) to build the projects, and Git if you want
 DeltaForge to snapshot completed steps.
@@ -69,8 +86,9 @@ The workbench runs in the background. Stop it cleanly from any directory with
 
 Every browser action has a command behind it, and the two are the same operation: a run
 started from either surface is indistinguishable to project state and to the event
-stream. See [docs/commands.md](docs/commands.md) for the full list, and
-[docs/config.md](docs/config.md) for per-project settings.
+stream. See [the command reference](https://github.com/eloidieme/DeltaForge/blob/main/docs/commands.md)
+for the full list, and [the configuration reference](https://github.com/eloidieme/DeltaForge/blob/main/docs/config.md)
+for per-project settings.
 
 ```bash
 deltaforge init flashindex --lang rust   # scripting and CI
@@ -87,21 +105,28 @@ DeltaForge runs learner commands directly, never through a shell. Fixtures are c
 temporary directories for checks and benchmarks and are treated as immutable inputs.
 Project state lives under `.deltaforge/`.
 
+The project list and private workbench discovery record live in the platform's
+per-user application-data directory: `$XDG_DATA_HOME/deltaforge` (or
+`~/.local/share/deltaforge`) on Linux and other Unix systems,
+`~/Library/Application Support/DeltaForge` on macOS, and
+`%LOCALAPPDATA%\DeltaForge` on Windows. `DELTAFORGE_HOME` overrides this path.
+
 The workbench binds only to loopback, requires a per-service capability token, validates
 Origin and Host on every request, refuses cross-origin mutations, and never serves
 repository files. Browser requests name projects by opaque registry identifier and never
 carry a filesystem path — with one deliberate, tightly bounded exception for project
 creation, which is documented in
-[docs/product/architecture.md](docs/product/architecture.md). See
-[docs/safety.md](docs/safety.md).
+[the architecture decision](https://github.com/eloidieme/DeltaForge/blob/main/docs/product/architecture.md).
+See [the safety model](https://github.com/eloidieme/DeltaForge/blob/main/docs/safety.md).
 
 ## Authoring packs
 
 A project pack is a manifest plus a directory per step: a guide, black-box tests,
 fixtures, a help ladder, and optionally benchmarks and a prediction prompt. See
-[docs/pack-format.md](docs/pack-format.md), [docs/test-format.md](docs/test-format.md),
-[docs/content-style.md](docs/content-style.md), and
-[docs/authoring-packs.md](docs/authoring-packs.md).
+[the pack format](https://github.com/eloidieme/DeltaForge/blob/main/docs/pack-format.md),
+[the test format](https://github.com/eloidieme/DeltaForge/blob/main/docs/test-format.md),
+[the content style guide](https://github.com/eloidieme/DeltaForge/blob/main/docs/content-style.md),
+and [the pack-authoring guide](https://github.com/eloidieme/DeltaForge/blob/main/docs/authoring-packs.md).
 
 Pack authoring is maintainer tooling in 1.0. It is documented, not promoted.
 
@@ -118,20 +143,20 @@ It returns structured `ok`/`blocked` reports with problems and next actions, so 
 creates packs through scaffolding and constrained edits rather than guessing the format.
 It is maintainer tooling that runs at your own privilege level and does not confine pack
 paths, so never expose it to a client you trust less than your own shell — see the trust
-boundary in [docs/authoring-packs.md](docs/authoring-packs.md).
+boundary in [the pack-authoring guide](https://github.com/eloidieme/DeltaForge/blob/main/docs/authoring-packs.md).
 
 Reference solutions under `tools/reference_solutions/` prove the bundled packs are
 passable. They are never copied into a learner's project.
 
 ## Documentation
 
-- [docs/quickstart.md](docs/quickstart.md) — the first ten minutes
-- [docs/commands.md](docs/commands.md) — every command
-- [docs/config.md](docs/config.md) — per-project configuration
-- [docs/curriculum-map.md](docs/curriculum-map.md) — what each project teaches
-- [docs/product/](docs/product/) — the 1.0 contract, the architecture decision, and the
+- [Quickstart](https://github.com/eloidieme/DeltaForge/blob/main/docs/quickstart.md) — the first ten minutes
+- [Commands](https://github.com/eloidieme/DeltaForge/blob/main/docs/commands.md) — every command
+- [Configuration](https://github.com/eloidieme/DeltaForge/blob/main/docs/config.md) — per-project configuration
+- [Curriculum map](https://github.com/eloidieme/DeltaForge/blob/main/docs/curriculum-map.md) — what each project teaches
+- [Product record](https://github.com/eloidieme/DeltaForge/tree/main/docs/product) — the 1.0 contract, the architecture decision, and the
   validation record
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/eloidieme/DeltaForge/blob/main/LICENSE).

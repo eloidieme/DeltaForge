@@ -1,6 +1,6 @@
 # Task 01 — Benchmark engine v2: frozen subtask plan
 
-Decomposition of `handoffs/01-benchmark-engine-v2.md`. Subtasks are ordered by
+Historical decomposition of `01-benchmark-engine-v2.md`. Subtasks are ordered by
 dependency; each ends with a commit, updated docs/CHANGELOG where behavior
 changes, and a green quality bar (`cargo fmt --check`, `cargo clippy
 --all-targets -- -D warnings`, `cargo test`, `cargo run -- validate-pack

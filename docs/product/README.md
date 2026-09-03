@@ -9,7 +9,7 @@ Branch: `codex/product-workbench`
 
 This directory defines the product direction for the local-web-first DeltaForge
 workbench. These documents are the approved product contract for Phase 1. They
-supersede older product assumptions in `Spec.md` where the two
+supersede older product assumptions in [`docs/history/Spec.md`](../history/Spec.md) where the two
 conflict. The existing specification remains useful for engine behavior, pack formats,
 and historical context.
 

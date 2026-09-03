@@ -9,6 +9,7 @@ on:
 jobs:
   publish-crate:
     name: Publish crate
+    needs: [build]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
@@ -22,11 +23,17 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
           - target: aarch64-apple-darwin
             os: macos-latest
@@ -38,12 +45,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
-      - name: Add target (x86_64-apple-darwin)
-        if: matrix.target == 'x86_64-apple-darwin'
-        run: rustup target add x86_64-apple-darwin
+      - name: Install ARM64 Linux linker
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install --yes gcc-aarch64-linux-gnu
 
       - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Compute version string
@@ -83,6 +94,11 @@ jobs:
           "$hash  $archive" | Out-File -FilePath "$archive.sha256" -Encoding ascii
           Add-Content -Path $env:GITHUB_ENV -Value "ARCHIVE_NAME=$archive"
 
+      - name: Attest release archive provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ env.ARCHIVE_NAME }}
+
       - uses: actions/upload-artifact@v4
         with:
           name: deltaforge-${{ matrix.target }}
@@ -99,10 +115,25 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      - name: Extract this version's changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## ${version}" '
+            $0 == heading { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+            END { if (!found) exit 1 }
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -110,11 +141,4 @@ jobs:
           name: Release ${{ github.ref_name }}
           fail_on_unmatched_files: true
           files: dist/*
-          body: |
-            Prebuilt `deltaforge` binaries for Linux (x86_64), macOS (Intel and Apple Silicon), and Windows (x86_64).
-
-            To verify a download, compare its `.sha256` file against a locally computed hash: `sha256sum -c <archive>.sha256` on Linux, `shasum -a 256 -c <archive>.sha256` on macOS, or `Get-FileHash <archive> -Algorithm SHA256` on Windows (compare the printed hash to the contents of the `.sha256` file).
-
-            Prefer building from source? `cargo install deltaforge` installs the same binary via crates.io.
-
-            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for release notes.
+          body_path: release-notes.md

@@ -1,6 +1,6 @@
 # Task 03 — FlashIndex performance stages (parallel indexing + ranked search)
 
-*(Prepend `handoffs/00-shared-context.md`. Depends on Tasks 01 and 02 — matrix benchmarks and performance gates must already be merged; verify before starting.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`. Depends on Tasks 01 and 02 — matrix benchmarks and performance gates must already be merged; verify before starting.)*
 
 ## Objective
 

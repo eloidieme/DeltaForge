@@ -1,6 +1,6 @@
 # Task 09 — Second language template (Go) + multi-file reference support
 
-*(Prepend `handoffs/00-shared-context.md`. Independent of the performance tasks; if Task 03 added flashindex stages 09–10, the Go template and reference must cover them too — check first.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`. Independent of the performance tasks; if Task 03 added flashindex stages 09–10, the Go template and reference must cover them too — check first.)*
 
 ## Objective
 

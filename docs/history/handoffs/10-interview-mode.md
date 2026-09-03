@@ -1,6 +1,6 @@
 # Task 10 — Interview mode
 
-*(Prepend `handoffs/00-shared-context.md`. Independent; reads benchmark history if present — build against the current history schema. If Task 07 landed, extend the MCP document enum as noted below.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`. Independent; reads benchmark history if present — build against the current history schema. If Task 07 landed, extend the MCP document enum as noted below.)*
 
 ## Objective
 

@@ -1,6 +1,6 @@
 # Task 01 — Benchmark engine v2: matrix, peak memory, speedup, compare
 
-*(Prepend `handoffs/00-shared-context.md`.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`.)*
 
 ## Objective
 

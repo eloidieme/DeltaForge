@@ -1,6 +1,6 @@
 # Task 08 — Design reflection loop
 
-*(Prepend `handoffs/00-shared-context.md`. Depends lightly on Task 01 (benchmark history shape) — build against whatever history schema is current.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`. Depends lightly on Task 01 (benchmark history shape) — build against whatever history schema is current.)*
 
 ## Objective
 

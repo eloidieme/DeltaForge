@@ -221,6 +221,18 @@ status is visible on the step before the learner reaches it. Enforcement is ther
 active, which is `gates.enforce = true`, the default it already had. A project may still
 turn it off in `.deltaforge/config.toml`.
 
+### A5. The default creation workspace is self-creating (decision 5)
+
+*2026-09-02.* A clean account does not yet have DeltaForge's default workspace. Treating
+that absence as a refusal made the browser creation flow impossible on exactly the
+machine it was designed for. When the learner leaves Location untouched, the browser
+now omits `parent_directory` and the guarded creation policy creates its own configured
+default. A path the learner types must still exist and pass every A3 boundary check.
+
+Consequence: creation may create one parent directory chosen by DeltaForge, never an
+arbitrary missing parent supplied by a browser request. Preflight names that default as
+“will be created” before any write occurs.
+
 ## Status at 1.0
 
 | Contract item | State |

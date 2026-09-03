@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose a focused improvement to the learner experience
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Learner problem
+      description: What cannot a learner or pack author do today, and who encounters it?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the result rather than prescribing an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints and alternatives
+      description: Note relevant local/offline, security, compatibility, or pack-format constraints.

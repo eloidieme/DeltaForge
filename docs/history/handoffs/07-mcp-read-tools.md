@@ -1,6 +1,6 @@
 # Task 07 — MCP read/grounding tools for pack authoring
 
-*(Prepend `handoffs/00-shared-context.md`. Independent of other tasks; check `git log` in case the tool surface moved.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`. Independent of other tasks; check `git log` in case the tool surface moved.)*
 
 ## Objective
 

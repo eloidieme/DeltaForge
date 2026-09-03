@@ -1,6 +1,6 @@
 # Task 04 — Content depth pass across all bundled packs
 
-*(Prepend `handoffs/00-shared-context.md`. Works best after Tasks 01–02 (matrix benchmarks, gates) so new benchmark content can use them, but can proceed without — check `git log` and use whatever benchmark schema is current.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`. Works best after Tasks 01–02 (matrix benchmarks, gates) so new benchmark content can use them, but can proceed without — check `git log` and use whatever benchmark schema is current.)*
 
 ## Objective
 

@@ -11,8 +11,8 @@ indistinguishable to project state and to the event stream.
 - `pack doctor`: report authoring quality gaps, including any of the seven required instruction sections missing or empty, hint headings not numbered `1` to `n`, fewer than three hints, and fewer than two tests.
 - `pack check-reference`: prove a pack with a reference solution.
 - `pack content <pack> [--stage <id>]`: print exactly the content a learner can see for a stage — goal, background, requirements, example, expected behavior, edge cases, exclusions, and the help ladder. No tests, no fixtures, no reference solution. This is the fixture for the content-sufficiency practice in [product/content-sufficiency.md](product/content-sufficiency.md). Supports `--json`.
-- `init <pack> --lang <language>`: create a learner repo. `--name <path>` selects the destination, `--no-git` skips repository initialization, and `--stage <id>` selects the initial stage. This is the automation form of the browser creation flow; both share one engine, so a scripted project and a created one are identical. Unlike the browser, `init` may write anywhere the shell can reach.
-- bare `deltaforge`: start or focus the local project workbench, the canonical learner entry.
+- `init <pack> --lang <language>`: create and register a learner repo. `--name <path>` selects the destination, `--no-git` skips repository initialization, and `--stage <id>` selects the initial stage. This is the automation form of project creation: it shares the browser's lower-level creation engine, but deliberately does not use the browser's preflight or restricted parent-directory policy. It may write anywhere the shell can reach, and the result appears in the workbench's Projects list.
+- bare `deltaforge`: start or focus the local project workbench, the canonical learner entry. It prints the URL every time, whether it started a service or found one already running. The service runs in the background and **exits by itself after thirty minutes with no browser tab connected and no run in flight** — see [Idle shutdown](#idle-shutdown) below. Nothing is lost when it does; run `deltaforge` again.
 - `exit`: stop the background workbench service. It refuses while a check or benchmark run is active.
 - `overview`: print the big picture, progress, and full stage roadmap as a terminal diagnostic. Supports `--json`.
 - `instructions`: print the current stage instructions, a stage selected with `--stage`, or every stage with `--all`.
@@ -41,7 +41,7 @@ indistinguishable to project state and to the event stream.
 - `design`: show prompts or edit design notes.
 - `commit`: snapshot the current step — a commit, and a tag when `[git] auto_tag` is on. A tag that already exists is reported and left alone rather than treated as an error, so a second snapshot of the same step is a legitimate action. Refuses unless the step has passed, or `--force`.
 - `validate-pack`: validate pack structure. Use `--strict` for authoring quality checks.
-- `doctor`: check local tools, discovered packs, and optional project context. The tools it checks come from what the discovered packs declare in `languages.<id>.requires`, plus Git, which DeltaForge itself uses for snapshots. It also reports where the browser creation flow puts new projects.
+- `doctor`: check local tools, discovered packs, and optional project context. The tools it checks come from what the discovered packs declare in `languages.<id>.requires`, plus Git, which DeltaForge itself uses for snapshots. It also reports where the browser creation flow puts new projects. If saved progress is damaged, `doctor --repair` restores the last complete `state.json.prev` and preserves the unreadable file as `state.json.damaged-<timestamp>`.
 
 Global flags:
 
@@ -62,3 +62,25 @@ Pack pinning and upgrades:
 - After upgrading DeltaForge or editing a pinned pack, a pin mismatch is reported with `deltaforge sync-pack` as the remedy; running it re-pins the project without discarding progress.
 - Each completion record carries a per-stage behavioral staleness digest: the stage's `tests.yaml`, its fixtures, and the language build/run commands. It detects change; it is not tamper-evidence against someone editing the writable state file. Documentation-only pack updates therefore never invalidate completed stages; changes to tests, fixtures, or commands invalidate only the affected stages, and `next`/`commit` require re-running the checks.
 - Completion records written by older DeltaForge versions may carry no behavioral digest. `sync-pack` upgrades them automatically when the pack is bit-identical to the one that passed; otherwise the stage must be revalidated.
+
+## Idle shutdown
+
+The workbench is a background service, so it stops on its own rather than
+living until the machine reboots. It exits when **all** of these hold:
+
+- no client is connected (every workbench tab is closed or navigated away);
+- no check or benchmark run is in flight;
+- thirty minutes have passed since the last request or observed source change.
+
+Editing project files counts as activity: the source watcher notices, so a
+learner who is writing code with the tab closed still keeps their service.
+
+When it does exit, the discovery record is removed and any open workbench page
+says so — after several failed reconnects the page shows *The workbench has
+stopped* with the command that starts it again. Progress is on disk in the
+project, not in the service, so nothing is lost.
+
+Thirty minutes is the default and the only value a learner encounters. Tests
+and automation override it with the hidden `deltaforge __workbench
+--idle-timeout-ms <n>`, which is how the suite exercises shutdown in seconds
+rather than half an hour.

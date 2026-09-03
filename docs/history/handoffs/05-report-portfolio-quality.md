@@ -1,6 +1,6 @@
 # Task 05 — Data-driven reports and portfolio
 
-*(Prepend `handoffs/00-shared-context.md`. Benefits from Task 01's richer benchmark history (matrix points, peak memory) — check `git log` and build against whatever history schema is current.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`. Benefits from Task 01's richer benchmark history (matrix points, peak memory) — check `git log` and build against whatever history schema is current.)*
 
 ## Objective
 

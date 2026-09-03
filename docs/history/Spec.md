@@ -1,6 +1,6 @@
 # DeltaForge — Product & Technical Specification
 
-> **Status: superseded.** This planning document predates the implemented 1.0 contract. For current behavior, see [`docs/product/release-1-0-contract.md`](docs/product/release-1-0-contract.md), [`docs/commands.md`](docs/commands.md), and [`README.md`](README.md).
+> **Status: historical and superseded.** This planning document predates the implemented 1.0 contract. For current behavior, see [`docs/product/release-1-0-contract.md`](../product/release-1-0-contract.md), [`docs/commands.md`](../commands.md), and [`README.md`](../../README.md).
 
 ## 1. One-line description
 

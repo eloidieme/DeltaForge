@@ -2,8 +2,8 @@
 
 > **Superseded as of 1.0 (2026-09-01).** This snapshot predates the product direction in
 > `docs/product/`. For what DeltaForge is now, read
-> [`docs/product/release-1-0-contract.md`](../docs/product/release-1-0-contract.md) and
-> [`docs/product/release-1-0-closeout.md`](../docs/product/release-1-0-closeout.md). Kept
+> [`docs/product/release-1-0-contract.md`](../../product/release-1-0-contract.md) and
+> [`docs/product/release-1-0-closeout.md`](../../product/release-1-0-closeout.md). Kept
 > as a record of the state these task prompts were written against.
 
 *(Snapshot prompt: read this before any new task for the up-to-date picture. `00-shared-context.md` still describes the core principles and source layout — this file records what has shipped since and what is open. Updated 2026-07-16.)*

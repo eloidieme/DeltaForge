@@ -190,8 +190,10 @@ following hold:
 - the leaf is a single component of at most 64 characters, starting with an ASCII
   alphanumeric and otherwise limited to alphanumerics, `-`, and `_`, so no request can
   traverse with `..` or an embedded separator, and not a name Windows reserves;
-- the parent is absolute, already exists, and is a directory — creation never brings a
-  parent into being on a request's say-so;
+- an explicitly supplied parent is absolute, already exists, and is a directory;
+- the one absent parent DeltaForge may create is its own configured default workspace,
+  selected by omitting `parent_directory`; the browser never gains permission to create
+  a missing path merely by spelling that path itself;
 - the parent canonicalizes, and the containment check below runs on the *canonical*
   path, so a symlink cannot be used to step outside afterwards;
 - the canonical parent lies inside the learner's home directory, or inside an

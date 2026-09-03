@@ -1,6 +1,6 @@
 # Task 06 — Optimization quests
 
-*(Prepend `handoffs/00-shared-context.md`. Depends on Task 01 (matrix/memory/speedup metrics, versioned history); pairs naturally with Task 02 (gates) — reuse its metric-evaluation code if it has landed. Verify with `git log` before starting.)*
+*(Historical: originally prepended `handoffs/00-shared-context.md`. Depends on Task 01 (matrix/memory/speedup metrics, versioned history); pairs naturally with Task 02 (gates) — reuse its metric-evaluation code if it has landed. Verify with `git log` before starting.)*
 
 ## Objective
 
