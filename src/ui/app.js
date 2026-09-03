@@ -19,6 +19,8 @@ let catalog = null;
 let createChoice = null;
 let defaultWorkspace = "";
 let preflightTimer = null;
+let preflightGeneration = 0;
+let createAllowed = false;
 let live = emptyLive();
 
 function emptyLive() {
@@ -113,7 +115,7 @@ function navigate(path) {
   // (see `fetchJson`/`post`), so the address bar and the browser's history
   // never carry it.
   history.pushState({}, "", path);
-  renderRoute();
+  renderRoute().catch((error) => reportPageError(error.message));
 }
 function setScreen(id) {
   for (const name of SCREENS) $("#" + name).hidden = name !== id;
@@ -127,24 +129,59 @@ async function renderRoute() {
   activeProject = route.project;
   currentView = route.view;
 
-  $("#projects-nav").classList.toggle("active", currentView === "projects");
+  setCurrentNav($("#projects-nav"), currentView === "projects");
+  // Create is reached from the catalog, but it is its own page. Keep the
+  // visual parent cue without claiming that the Catalog link is this page.
   $("#catalog-nav").classList.toggle("active", currentView === "catalog" || currentView === "create");
+  setAriaCurrent($("#catalog-nav"), currentView === "catalog");
 
   if (!activeProject) {
     $("#project-shell").hidden = true;
-    if (currentView === "catalog") { await loadCatalog(); return; }
-    if (currentView === "create") { await renderCreate(); return; }
-    await loadProjects();
-    connectAppEvents();
+    if (currentView === "catalog") await loadCatalog();
+    else if (currentView === "create") await renderCreate();
+    else {
+      await loadProjects();
+      connectAppEvents();
+    }
+    presentRoute();
     return;
   }
   $("#project-shell").hidden = false;
   for (const view of ["overview", "build", "performance", "runs"]) {
     const nav = $(`#${view}-nav`);
     routeLink(nav, projectRoute(view));
-    nav.classList.toggle("active", view === currentView);
+    setCurrentNav(nav, view === currentView);
   }
   await loadProject();
+  presentRoute();
+}
+
+function setCurrentNav(node, current) {
+  node.classList.toggle("active", current);
+  setAriaCurrent(node, current);
+}
+
+function setAriaCurrent(node, current) {
+  if (current) node.setAttribute("aria-current", "page");
+  else node.removeAttribute("aria-current");
+}
+
+function presentRoute() {
+  const screen = SCREENS.map((id) => $("#" + id)).find((node) => node && !node.hidden);
+  const heading = screen && screen.querySelector("h1");
+  const projectName = activeProject && $("#project-name").textContent !== "Loading project…"
+    ? $("#project-name").textContent
+    : "";
+  const view = screen && screen.id === "health-screen" ? "health" : currentView;
+  document.title = DeltaForgeCore.pageTitle({
+    view,
+    projectName,
+    heading: heading ? heading.textContent : "DeltaForge",
+  });
+  if (heading) {
+    heading.tabIndex = -1;
+    heading.focus({ preventScroll: true });
+  }
 }
 
 /* ------------------------------------------------------------- projects */
@@ -316,22 +353,49 @@ function renderLanguageChoices() {
 
 function schedulePreflight(delay = 350) {
   clearTimeout(preflightTimer);
-  preflightTimer = setTimeout(runPreflight, delay);
+  const generation = ++preflightGeneration;
+  renderPreflightLoading();
+  preflightTimer = setTimeout(() => runPreflight(generation), delay);
 }
 
-async function runPreflight() {
+function renderPreflightLoading() {
+  createAllowed = false;
+  $("#create-preflight").setAttribute("aria-busy", "true");
+  $("#preflight-tools").replaceChildren(text(element("li", "preflight-loading"), "Checking tools…"));
+  $("#preflight-location").className = "ruled";
+  $("#preflight-location-label").textContent = "Checking location";
+  $("#preflight-path").textContent = "Confirming where the project can be created…";
+  $("#preflight-note").hidden = true;
+  setCreateAvailability(false, "Checking this location…", false);
+}
+
+function setCreateAvailability(allowed, message = "", locationInvalid = false) {
+  createAllowed = allowed;
+  $("#create-submit").setAttribute("aria-disabled", String(!allowed));
+  const location = $("#create-parent");
+  if (locationInvalid) location.setAttribute("aria-invalid", "true");
+  else location.removeAttribute("aria-invalid");
+  const status = $("#create-parent-status");
+  status.textContent = message;
+  status.hidden = !message;
+}
+
+async function runPreflight(generation) {
   if (!createChoice) return;
   let result;
   try {
     result = await post("/api/v1/projects/preflight", DeltaForgeCore.preflightRequest(creationFields()), false);
   } catch (error) {
+    if (generation !== preflightGeneration) return;
     $("#preflight-tools").replaceChildren();
     $("#preflight-location-label").textContent = "Cannot create here";
     $("#preflight-path").textContent = error.message;
     $("#preflight-location").className = "ruled contradiction";
-    $("#create-submit").disabled = true;
+    $("#create-preflight").removeAttribute("aria-busy");
+    setCreateAvailability(false, error.message, true);
     return;
   }
+  if (generation !== preflightGeneration) return;
 
   $("#preflight-tools").replaceChildren(...result.tools.map((tool) => {
     const row = element("li");
@@ -352,14 +416,27 @@ async function runPreflight() {
     ? `${result.location.parent} will be created too.`
     : "";
   $("#preflight-note").hidden = !result.location.creates_parent;
-  $("#create-submit").disabled = !result.ok;
+  $("#create-preflight").removeAttribute("aria-busy");
+  const missingRequired = result.tools.filter((tool) => tool.required && !tool.found);
+  const message = !result.location.ok
+    ? result.location.problem
+    : missingRequired.length
+      ? `Install ${missingRequired.map((tool) => tool.label).join(", ")} before creating this project.`
+      : "";
+  setCreateAvailability(result.ok, message, !result.location.ok);
 }
 
 async function submitCreate(event) {
   event.preventDefault();
   if (busy || !createChoice) return;
+  if (!createAllowed) {
+    $("#create-parent-status").hidden = false;
+    $("#create-parent-status").textContent ||= "Wait for the environment check before creating the project.";
+    if ($("#create-parent").getAttribute("aria-invalid") === "true") $("#create-parent").focus();
+    return;
+  }
   busy = true;
-  $("#create-submit").disabled = true;
+  $("#create-submit").setAttribute("aria-disabled", "true");
   $("#create-activity").textContent = "Creating the project…";
   try {
     const created = await post("/api/v1/projects", DeltaForgeCore.createRequest(creationFields()), false);
@@ -367,7 +444,7 @@ async function submitCreate(event) {
     navigate(`/projects/${created.project_id}/build`);
   } catch (error) {
     $("#create-activity").textContent = error.message;
-    $("#create-submit").disabled = false;
+    $("#create-submit").setAttribute("aria-disabled", "false");
   } finally {
     busy = false;
   }
@@ -377,7 +454,17 @@ async function submitCreate(event) {
 
 async function loadProject() {
   const health = await fetchJson("/api/v1/project-health");
-  if (health.status !== "healthy") { renderHealth(health); return; }
+  if (health.status !== "healthy") {
+    renderHealth(health);
+    // The health screen is where a learner sits when something has already
+    // gone wrong, and it used to be the one screen that opened no stream at
+    // all — so a service that stopped underneath it went unreported, on
+    // exactly the page where a stale "Check again" button is most misleading.
+    // The project's own stream needs state this project cannot produce; the
+    // application stream does not.
+    connectAppEvents();
+    return;
+  }
   let next, latest;
   try {
     [next, latest] = await Promise.all([fetchJson("/api/v1/capability"), fetchJson("/api/v1/state")]);
@@ -417,10 +504,17 @@ function renderCurrentView() {
 function renderHealth(health) {
   setScreen("health-screen");
   const issue = health.issue || {};
+  const projectName = health.project || "Unavailable project";
+  $("#project-name").textContent = projectName;
+  $("#project-meta").textContent = "Needs attention";
   $("#health-title").textContent = issue.title || "DeltaForge cannot load this project";
   $("#health-guidance").textContent = issue.guidance || "Resolve this problem, then check again.";
-  $("#health-detail").textContent = issue.detail || "The project health check failed.";
-  $("#health-repin").hidden = !health.actions.some((action) => action.kind === "repin_pack");
+  renderHealthDetail(issue.detail || "The project health check failed.");
+  $("#health-repin").hidden = !(health.actions || []).some((action) => action.kind === "repin_pack");
+}
+
+function renderHealthDetail(detail) {
+  $("#health-detail").replaceChildren(...DeltaForgeCore.plainTextBlocks(detail).map(renderBlock));
 }
 
 /* -------------------------------------------------------------- overview */
@@ -535,22 +629,27 @@ function renderRail(selector) {
     node.setAttribute("aria-hidden", "true");
     const copy = element("div", "rail-copy");
     const title = element("div", "rail-title");
-    title.append(text(element("span"), `${step.position}. ${step.title}`));
+    const label = `${step.position}. ${step.title}`;
     const marker = gateMarkerFor(step.id);
     if (marker && marker.has_benchmarks) {
       const gate = element("span", `rail-gate ${marker.status || ""}`);
       gate.title = marker.status
         ? `Performance target: ${marker.status.replace(/_/g, " ")}`
         : "This step is measured";
-      title.append(gate);
+      // Keep the diamond with the title's final word, not by itself on the
+      // next line. The rest of a long title is still free to wrap.
+      const split = label.lastIndexOf(" ");
+      if (split > 0) title.append(document.createTextNode(label.slice(0, split + 1)));
+      const tail = text(element("span", "rail-title-tail"), label.slice(split + 1));
+      tail.append(gate);
+      title.append(tail);
+    } else {
+      title.append(text(element("span"), label));
     }
     copy.append(title, text(element("div", "rail-summary"), step.summary));
     row.append(node, copy);
     // The status word is what a screen reader gets; the node glyph is decorative.
-    row.setAttribute(
-      "aria-label",
-      `Step ${step.position}, ${step.title}, ${step.status}${step.current ? ", current step" : ""}`,
-    );
+    row.setAttribute("aria-label", DeltaForgeCore.railAriaLabel(step));
     return row;
   }));
 }
@@ -961,7 +1060,8 @@ function connectEvents(cursor) {
     if (data.route && data.route !== location.pathname) navigate(data.route);
     window.focus();
   });
-  events.onerror = () => { if ($("#activity")) $("#activity").textContent = "Reconnecting…"; };
+  events.onerror = () => noteStreamTrouble();
+  events.onopen = () => noteStreamRecovered();
 }
 
 function connectAppEvents() {
@@ -971,7 +1071,69 @@ function connectAppEvents() {
     if (data.route && data.route !== location.pathname) navigate(data.route);
     window.focus();
   });
+  // The projects list had no error handling at all, so a stopped service left
+  // a page that looked live and answered nothing.
+  events.onerror = () => noteStreamTrouble();
+  events.onopen = () => noteStreamRecovered();
 }
+
+/* ------------------------------------------------- when the service stops
+
+ * `EventSource` retries forever and says nothing, so a workbench that has shut
+ * down looks exactly like one that is idle. It does shut down: the service
+ * exits after thirty minutes with no connected client and no run in flight,
+ * which is less than a long lunch. In 1.0 the page then showed
+ * "Reconnecting…" in a corner, forever, with no explanation and no way back.
+ *
+ * After this many consecutive failures the page stops guessing and says the
+ * workbench has stopped, with the command that starts it again. */
+const RECONNECT_ATTEMPTS_BEFORE_DISCONNECTED = 4;
+let streamFailures = 0;
+
+function noteStreamTrouble() {
+  streamFailures += 1;
+  if (streamFailures < RECONNECT_ATTEMPTS_BEFORE_DISCONNECTED) {
+    setActivity("Reconnecting…");
+    return;
+  }
+  showDisconnected();
+}
+
+function noteStreamRecovered() {
+  const wasDisconnected = streamFailures >= RECONNECT_ATTEMPTS_BEFORE_DISCONNECTED;
+  streamFailures = 0;
+  $("#disconnected").hidden = true;
+  if (wasDisconnected) renderRoute();
+}
+
+function showDisconnected() {
+  $("#disconnected").hidden = false;
+  setActivity("The workbench is not running");
+}
+
+function setActivity(message) {
+  if ($("#activity")) $("#activity").textContent = message;
+}
+
+/* Nothing below the top-level `catch` used to be reported. An exception inside
+ * an event handler, or a promise nobody awaited, left the page in whatever
+ * half-rendered state it was in — silently, since this runs in a window the
+ * learner is not watching a console in. */
+function reportPageError(detail) {
+  const banner = $("#page-error");
+  if (!banner) return;
+  banner.hidden = false;
+  $("#page-error-detail").textContent = detail;
+}
+
+window.addEventListener("error", (event) => {
+  reportPageError(event.message || String(event.error || "an unknown error"));
+});
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason;
+  reportPageError((reason && reason.message) || String(reason || "an unknown error"));
+});
+$("#page-error-reload").onclick = () => location.reload();
 
 function handleRun(event) {
   switch (event.type) {
@@ -1072,7 +1234,7 @@ async function openProject(path) {
     $("#project-open-status").textContent = `Opened in ${result.application || "your system application"}.`;
   } catch (error) {
     $("#project-open-status").textContent = error.message;
-    if (!$("#health-screen").hidden) $("#health-detail").textContent = error.message;
+    if (!$("#health-screen").hidden) renderHealthDetail(error.message);
   }
 }
 
@@ -1095,15 +1257,16 @@ $("#open-editor").onclick = () => openProject("/api/v1/project/open-editor");
 $("#open-folder").onclick = () => openProject("/api/v1/project/open-folder");
 $("#health-editor").onclick = () => openProject("/api/v1/project/open-editor");
 $("#health-folder").onclick = () => openProject("/api/v1/project/open-folder");
-$("#health-recheck").onclick = () => loadProject();
+$("#health-recheck").onclick = () => loadProject().then(presentRoute).catch((error) => reportPageError(error.message));
 $("#health-repin").onclick = async () => {
   try {
     await post("/api/v1/project/repin-pack");
   } catch (error) {
-    $("#health-detail").textContent = error.message;
+    renderHealthDetail(error.message);
     return;
   }
   await loadProject();
+  presentRoute();
 };
 
 $("#primary-action").onclick = () => guarded(async () => {
@@ -1207,7 +1370,7 @@ document.addEventListener("click", (event) => {
   event.preventDefault();
   navigate(link.dataset.route);
 });
-window.addEventListener("popstate", renderRoute);
+window.addEventListener("popstate", () => renderRoute().catch((error) => reportPageError(error.message)));
 setInterval(() => { if (currentView === "build") renderMeter(); }, 1000);
 
 // The launcher's URL (and any bookmarked/reloaded one) carries the token in

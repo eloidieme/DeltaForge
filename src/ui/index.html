@@ -20,10 +20,25 @@ __STYLE__
     </nav>
     <div class="appbar-end">
       <span class="local-note">Local &middot; Offline</span>
-      <button class="button small quiet" id="theme-toggle" type="button" aria-live="polite">Theme</button>
+      <button class="button small quiet" id="theme-toggle" type="button">Theme</button>
     </div>
   </div>
 </header>
+
+<div class="banner error" id="page-error" role="alert" hidden>
+  <div>
+    <strong>DeltaForge hit an error on this page</strong>
+    <span id="page-error-detail"></span>
+  </div>
+  <button class="button small" id="page-error-reload" type="button">Reload the page</button>
+</div>
+
+<div class="banner" id="disconnected" role="status" hidden>
+  <div>
+    <strong>The workbench has stopped</strong>
+    <span>DeltaForge exits after 30 minutes with nothing open and nothing running. Nothing was lost &mdash; your project is on disk. Start it again with <code>deltaforge</code> in a terminal, then reload this page.</span>
+  </div>
+</div>
 
 <div id="main">
 
@@ -43,6 +58,7 @@ __STYLE__
   <div class="eyebrow">Start something</div>
   <h1>Project catalog</h1>
   <p class="lede">Each project is a real tool built in stages, checked by black-box tests against a written contract. Pick one and DeltaForge creates the repository for you.</p>
+  <p class="catalog-tier-note"><strong>Flagship</strong> meets the full 1.0 content bar. <strong>Preview</strong> projects are playable and correct, but their lessons are still being expanded to that depth.</p>
   <div class="catalog-grid" id="catalog-grid"></div>
   <div class="notice error" id="catalog-error" hidden><span id="catalog-error-text"></span></div>
 </main>
@@ -66,8 +82,9 @@ __STYLE__
 
       <section class="field">
         <label for="create-parent">Location</label>
-        <input type="text" id="create-parent" spellcheck="false">
-        <span class="help">A folder inside your home directory. DeltaForge creates its own if you leave this as it is.</span>
+        <input type="text" id="create-parent" spellcheck="false" aria-describedby="create-parent-help create-parent-status">
+        <span class="help" id="create-parent-help">A folder inside your home directory. DeltaForge creates its own if you leave this as it is.</span>
+        <span class="help field-status" id="create-parent-status" role="status" aria-live="polite" hidden></span>
       </section>
 
       <label class="checkbox"><input type="checkbox" id="create-git" checked> Start a Git repository, so each completed step can be snapshotted</label>
@@ -268,7 +285,7 @@ __STYLE__
     <div class="eyebrow">Project needs attention</div>
     <h1 id="health-title">DeltaForge cannot load this project</h1>
     <p class="lede" id="health-guidance"></p>
-    <pre id="health-detail"></pre>
+    <div class="health-detail prose" id="health-detail"></div>
     <div class="health-actions">
       <button class="button primary" id="health-recheck" type="button">Check again</button>
       <button class="button" id="health-repin" type="button" hidden>Use updated project definition</button>

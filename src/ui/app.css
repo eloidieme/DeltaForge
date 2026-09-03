@@ -20,32 +20,34 @@
 :root {
   color-scheme: light dark;
 
-  --bg: #f5f5f3;
-  --surface: #ffffff;
-  --surface-2: #efefec;
-  --surface-3: #e5e5e1;
-  --line: #dededa;
-  --line-strong: #c2c2bb;
+  /* `light-dark()` keeps each palette token in one place. The previous dark
+     palette was duplicated under a media query and an attribute selector. */
+  --bg: light-dark(#f5f5f3, #0f1114);
+  --surface: light-dark(#ffffff, #16191d);
+  --surface-2: light-dark(#efefec, #1d2126);
+  --surface-3: light-dark(#e5e5e1, #252a31);
+  --line: light-dark(#dededa, #2b3038);
+  --line-strong: light-dark(#8b8d88, #646d78);
 
-  --text: #15171b;
-  --text-2: #4b5058;
-  --text-3: #71777f;
+  --text: light-dark(#15171b, #eceef1);
+  --text-2: light-dark(#4b5058, #a6adb7);
+  --text-3: light-dark(#656b73, #98a1ad);
 
-  --accent: #2f56cf;
-  --accent-hover: #2848b4;
-  --accent-on: #ffffff;
-  --accent-soft: #e7ecfb;
+  --accent: light-dark(#2f56cf, #83a4ff);
+  --accent-hover: light-dark(#2848b4, #9db7ff);
+  --accent-on: light-dark(#ffffff, #0b1226);
+  --accent-soft: light-dark(#e7ecfb, #1a2340);
 
-  --proven: #16714f;
-  --proven-soft: #e0f1e9;
-  --attention: #8a5c05;
-  --attention-soft: #faefd6;
-  --contradiction: #ad2f24;
-  --contradiction-soft: #fae5e2;
-  --measure: #63389c;
-  --measure-soft: #efe8fa;
+  --proven: light-dark(#16714f, #5ecfa4);
+  --proven-soft: light-dark(#e0f1e9, #10261e);
+  --attention: light-dark(#8a5c05, #e6b768);
+  --attention-soft: light-dark(#faefd6, #2a2113);
+  --contradiction: light-dark(#ad2f24, #ff9c90);
+  --contradiction-soft: light-dark(#fae5e2, #2d1715);
+  --measure: light-dark(#63389c, #c5a4f1);
+  --measure-soft: light-dark(#efe8fa, #241a34);
 
-  --focus: #2f56cf;
+  --focus: light-dark(#2f56cf, #83a4ff);
 
   --max: 1220px;
   --radius: 10px;
@@ -60,65 +62,8 @@
   --ease: cubic-bezier(0.2, 0.6, 0.25, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0f1114;
-    --surface: #16191d;
-    --surface-2: #1d2126;
-    --surface-3: #252a31;
-    --line: #2b3038;
-    --line-strong: #3a414b;
-
-    --text: #eceef1;
-    --text-2: #a6adb7;
-    --text-3: #7b838e;
-
-    --accent: #83a4ff;
-    --accent-hover: #9db7ff;
-    --accent-on: #0b1226;
-    --accent-soft: #1a2340;
-
-    --proven: #5ecfa4;
-    --proven-soft: #10261e;
-    --attention: #e6b768;
-    --attention-soft: #2a2113;
-    --contradiction: #ff9c90;
-    --contradiction-soft: #2d1715;
-    --measure: #c5a4f1;
-    --measure-soft: #241a34;
-
-    --focus: #83a4ff;
-  }
-}
-
-:root[data-theme="dark"] {
-  --bg: #0f1114;
-  --surface: #16191d;
-  --surface-2: #1d2126;
-  --surface-3: #252a31;
-  --line: #2b3038;
-  --line-strong: #3a414b;
-
-  --text: #eceef1;
-  --text-2: #a6adb7;
-  --text-3: #7b838e;
-
-  --accent: #83a4ff;
-  --accent-hover: #9db7ff;
-  --accent-on: #0b1226;
-  --accent-soft: #1a2340;
-
-  --proven: #5ecfa4;
-  --proven-soft: #10261e;
-  --attention: #e6b768;
-  --attention-soft: #2a2113;
-  --contradiction: #ff9c90;
-  --contradiction-soft: #2d1715;
-  --measure: #c5a4f1;
-  --measure-soft: #241a34;
-
-  --focus: #83a4ff;
-}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
 
@@ -329,6 +274,12 @@ textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
   grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
   margin-top: 26px;
 }
+.catalog-tier-note {
+  max-width: 70ch;
+  margin-top: 14px;
+  color: var(--text-2);
+  font-size: 0.86rem;
+}
 .catalog-card {
   display: flex; flex-direction: column; gap: 14px;
   border: 1px solid var(--line);
@@ -392,6 +343,9 @@ textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
 .preflight-mark.ok { color: var(--proven); }
 .preflight-mark.missing { color: var(--contradiction); }
 .path-preview { font-family: var(--mono); font-size: 0.8rem; color: var(--text-2); word-break: break-all; }
+.field-status { color: var(--contradiction) !important; }
+[aria-invalid="true"] { border-color: var(--contradiction) !important; }
+[aria-disabled="true"] { opacity: 0.5; cursor: not-allowed; }
 
 /* ---------- project shell ---------- */
 
@@ -455,7 +409,8 @@ textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
 .rail-step.here .rail-node { box-shadow: 0 0 0 3px var(--accent-soft); }
 .rail-step.current .rail-node { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .rail-copy { display: grid; gap: 2px; min-width: 0; }
-.rail-title { font-size: 0.87rem; font-weight: 600; color: var(--text-2); display: flex; gap: 7px; align-items: baseline; flex-wrap: wrap; }
+.rail-title { font-size: 0.87rem; font-weight: 600; color: var(--text-2); }
+.rail-title-tail { white-space: nowrap; }
 .rail-step.here .rail-title { color: var(--text); }
 .rail-summary {
   font-size: 0.79rem;
@@ -469,7 +424,9 @@ textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
 .rail-step:not(.here) .rail-summary { display: none; }
 /* Gate marker: a small diamond on any step that carries a measurement. */
 .rail-gate {
+  display: inline-block;
   width: 7px; height: 7px;
+  margin-left: 7px;
   transform: rotate(45deg);
   border: 1px solid var(--measure);
   background: transparent;
@@ -565,6 +522,36 @@ textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
 }
 .prose-table th { color: var(--text); font-weight: 620; white-space: nowrap; }
 .prose-table tbody tr:last-child td { border-bottom: 0; }
+
+/* Page-wide states: an error the page could not otherwise report, and a
+   service that has stopped. Both are pinned above everything, because both
+   mean what is below them is no longer live. */
+.banner {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 20px;
+  font-size: 0.86rem;
+  background: var(--attention-soft);
+  color: var(--text);
+  border-bottom: 1px solid var(--line-strong);
+}
+.banner.error { background: var(--contradiction-soft); }
+.banner strong { display: block; margin-bottom: 2px; }
+.banner span { color: var(--text-2); }
+.banner code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  padding: 0.1em 0.34em;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
 
 .evidence { position: sticky; top: 86px; display: grid; gap: 16px; min-width: 0; }
 .result-card {
@@ -706,20 +693,30 @@ table.measure td.numeric { font-family: var(--mono); font-variant-numeric: tabul
 /* ---------- health ---------- */
 
 .health-screen { width: min(760px, calc(100% - 48px)); margin: 0 auto; padding: 64px 0; display: grid; gap: 14px; }
-.health-screen pre {
+.health-detail {
   margin: 0; padding: 14px 16px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  overflow: auto; max-height: 22rem; font-size: 0.8rem;
+  max-height: 22rem;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+  color: var(--text-2);
 }
+.health-detail p { white-space: pre-wrap; }
 .health-actions { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 6px; }
 
 /* ---------- responsive ---------- */
 
 @media (max-width: 1120px) {
   .build-layout { grid-template-columns: minmax(0, 1fr) 330px; }
-  .build-rail { grid-column: 1 / -1; position: static; }
+  /* Source order puts the fourteen-step rail first. Once the left column
+     collapses, move it after the work and its result so Run checks stays in
+     the first viewport. */
+  .instructions { order: 1; }
+  .evidence { order: 2; }
+  .build-rail { grid-column: 1 / -1; position: static; order: 3; }
   .overview-layout, .overview-hero, .create-layout { grid-template-columns: minmax(0, 1fr); }
   .plan-panel { position: static; }
 }

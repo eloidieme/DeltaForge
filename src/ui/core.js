@@ -30,6 +30,58 @@ function routeState(pathname) {
   return { project: null, view: "projects" };
 }
 
+/* A route change is a page change even though the browser does not reload.
+ * Keep the naming decision executable outside the DOM so every route can be
+ * checked without relying on a screen reader or a browser tab. */
+function pageTitle({ view, projectName, heading }) {
+  const project = (projectName || "Project").trim();
+  const page = {
+    projects: "Projects",
+    catalog: "Project catalog",
+    overview: "Overview",
+    performance: "Performance",
+    runs: "Runs",
+  }[view] || (heading || "DeltaForge").trim();
+  return projectName && !["projects", "catalog", "create"].includes(view)
+    ? `${page} — ${project} — DeltaForge`
+    : page === "DeltaForge" ? page : `${page} — DeltaForge`;
+}
+
+/* A current stage sometimes also has status "current". Saying both produced
+ * "current, current step" in the accessible name. Preserve a distinct
+ * completed state, but collapse the duplicate word. */
+function railAriaLabel(step) {
+  const status = String(step.status || "").replace(/_/g, " ");
+  const states = [];
+  if (status && !(step.current && status === "current")) states.push(status);
+  if (step.current) states.push("current step");
+  return [`Step ${step.position}`, step.title, ...states].filter(Boolean).join(", ");
+}
+
+/* Health details are prose, not terminal output. They only use inline code,
+ * so represent that small vocabulary explicitly and leave every other
+ * character untouched. */
+function plainTextBlocks(value) {
+  const source = String(value || "");
+  if (!source) return [];
+  return source.split(/\n\s*\n/).map((paragraph) => ({
+    kind: "paragraph",
+    spans: inlineCodeSpans(paragraph),
+  }));
+}
+
+function inlineCodeSpans(value) {
+  const spans = [];
+  let start = 0;
+  for (const match of value.matchAll(/`([^`\n]+)`/g)) {
+    if (match.index > start) spans.push({ kind: "text", text: value.slice(start, match.index) });
+    spans.push({ kind: "code", text: match[1] });
+    start = match.index + match[0].length;
+  }
+  if (start < value.length) spans.push({ kind: "text", text: value.slice(start) });
+  return spans.length ? spans : [{ kind: "text", text: value }];
+}
+
 /* ------------------------------------------------------------- creation */
 
 /* The body of `POST /api/v1/projects/preflight`.
@@ -66,6 +118,9 @@ function createRequest(fields) {
 const DeltaForgeCore = {
   PROJECT_VIEWS,
   routeState,
+  pageTitle,
+  railAriaLabel,
+  plainTextBlocks,
   preflightRequest,
   createRequest,
 };
