@@ -51,6 +51,8 @@ Append exactly `DEL <key>\n`, creating the file and parents under the same rules
 
 Extend valid recovery grammar to include `DEL <key>`. If the latest operation for the requested key is `DEL`, `get` exits 0 with empty stdout. A later `SET` restores the key and its new value.
 
+The malformed-history rule from the earlier step covers the new record type too: a line beginning `DEL` that is not `DEL <key>` is malformed, and recovery rejects it the way it rejects a `SET` missing its value. `DEL` takes exactly one key, and unlike `SET` there is no second field to split on, so everything after `DEL ` is the key.
+
 ## Example
 
 ```console

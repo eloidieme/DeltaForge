@@ -48,6 +48,8 @@ For a regular UTF-8 file beneath `<root>`, print an HTTP/1.1 response containing
 
 For a missing path, exit 0 and print `404 Not Found`, `Content-Length: 0`, a blank line, and an empty body.
 
+A path that exists but is not a regular file — a directory, most commonly — takes the same `404 Not Found` answer as a missing one. There is nothing to send, and the client does not need to be told which kind of nothing it found.
+
 This contract covers safe request paths. Requests that attempt to escape the document root are outside this command's current guarantees.
 
 ## Example

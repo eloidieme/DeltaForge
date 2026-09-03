@@ -28,7 +28,7 @@ Correctness remains the first gate. A fast index with missing or reordered posti
 
 Keep the threaded `index` command and byte-identical output for every thread count.
 
-Measuring runs the same indexing workload across a matrix of thread counts and reports the speedup between the lowest and highest. The bundled matrix measures `--threads 1`, `2`, `4`, and `8`. The derived `speedup_1_to_8` must be at least `1.5x` for the supplied benchmark corpus before this step can be marked complete, unless performance-gate enforcement has been explicitly disabled in project configuration.
+Measuring runs the same indexing workload across a matrix of thread counts and reports the speedup between the lowest and highest. The bundled matrix measures `--threads 1`, `2`, `4`, and `8`. The derived `speedup_1_to_8` must be at least `1.5x` for the supplied benchmark corpus before this step can be marked complete. The measurement is yours to take as often as you like; only the most recent one counts.
 
 ## Example
 

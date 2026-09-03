@@ -14,6 +14,8 @@ Operand validation separates two useful questions. Parsing asks, “Can this wri
 
 An opcode that needs an operand must fail with standard error containing `missing argument` when none is present. A present operand that is not a signed integer must fail with `invalid argument`.
 
+The reverse is not an error. An opcode that takes no operand may be written with one anyway — `ADD 5`, `HALT 1` — and the extra token is ignored rather than rejected. Loading reads at most one operand per line and checks the shape of what it reads; deciding which opcodes require one belongs to execution, not to loading.
+
 Before changing the instruction pointer for `JMP` or a taken `JZ`, require the target to be non-negative and smaller than the number of loaded instructions. An invalid target exits with status 1 and standard error containing `invalid jump`. None of these failures may panic.
 
 ## Example
