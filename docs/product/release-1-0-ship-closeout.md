@@ -88,7 +88,16 @@ cited in `docs/product/`. `CONTRIBUTING.md` states the practice going forward.
 ## 2. What the work found that the review did not predict
 
 This is the section the previous closeout did best, so it gets the same
-treatment. Five things, in descending order of how much they would have hurt.
+treatment. In descending order of how much they would have hurt.
+
+**Seven of the eleven were found by pushing.** Everything before the first push
+had been verified on one macOS machine and was green there. The first CI run
+failed on five of eight jobs, and it took five rounds to get to green — an
+untrue MSRV, a security advisory that the untrue MSRV was holding out, two
+Windows-only failures, a cross-process registry bug, and a race in the new
+harness itself. That is the review's own thesis playing out one level up: the
+harnesses were also only ever run by their author, on the machine where they
+were written.
 
 ### A release candidate would have published the real crate version
 
@@ -303,6 +312,8 @@ effect.
 | Idle CPU, release, browser tab open | 7.0% of a core | **0.400%** |
 | Idle CPU, release, no client | 2.0% of a core | **0.067%** |
 | Contrast pairs below WCAG AA | 4 of 34 | **0 of 34** |
+| CI jobs green on Linux / macOS / Windows | never run | **8 of 8** |
+| Known security advisories | 1 (unreported) | **0** |
 | Packs failing the renderer round trip | (not measured) | 0 of 4 |
 | Stage files leaking literal markdown | 21 | 0 |
 | FlashIndex stages proven passable from content alone | 5 of 14 | **14 of 14** |
@@ -318,8 +329,10 @@ unit suite, contrast check, headless journey), `msrv` (pinned 1.88),
 
 Everything below is ready and unexecuted. It needs a push.
 
+The branch is pushed and **CI is green on all eight jobs across Linux, macOS and
+Windows** (run `33803509969`). What remains:
+
 ```bash
-git push -u origin ship-1-0          # or merge to main first
 git tag -a v1.0.0-rc.1 -m "Release candidate 1"
 git push origin v1.0.0-rc.1
 ```
@@ -364,6 +377,8 @@ author's hands on it, on every commit:
 
 - a headless browser drives the real page from a home directory and a workspace
   that do not exist when it starts — the exact machine state that hid P0-1;
+- three operating systems build and test every commit, which found five defects
+  in the first four runs that no amount of local care would have;
 - `node --test` executes the page's own decisions, which had zero coverage;
 - two scripts assert the two numbers the review had to measure by hand, so
   contrast and idle CPU cannot drift back unobserved;
