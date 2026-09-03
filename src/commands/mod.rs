@@ -54,7 +54,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Some(Command::Workbench(args)) => crate::workbench::serve(
             &options,
             crate::workbench::service_token(args.token)?,
-            args.idle_timeout_ms.map(std::time::Duration::from_millis),
+            crate::workbench::service_idle_timeout(args.idle_timeout_ms)?,
         ),
     }
 }

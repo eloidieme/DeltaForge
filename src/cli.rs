@@ -1,9 +1,48 @@
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
+const ROOT_HELP_TEMPLATE: &str = "{about-with-newline}
+Run `deltaforge` with no command to open the browser workbench.
+
+{usage-heading} {usage}
+
+Learn:
+  init              Create a learner project (automation and CI)
+  overview          Show the project goal and roadmap
+  instructions      Show step instructions
+  test              Run the current step's checks
+  explain-failure   Explain the latest failing checks
+  hint              Reveal progressive help
+  bench             Measure project performance
+  next              Move to the next completed step
+  status            Show project progress
+  commit            Snapshot completed progress
+
+Automate:
+  list              List available projects
+  config            Inspect project configuration
+  report            Export the engineering record
+  portfolio         Export a portfolio summary
+  design            Show or edit design notes
+  doctor            Check the local environment
+  sync-pack         Adopt an updated pack definition
+  exit              Stop the background workbench
+
+Author packs:
+  pack              Create, inspect, and validate packs
+  validate-pack     Validate a discovered pack
+
+Options:
+{options}";
+
 #[derive(Debug, Parser)]
 #[command(name = "deltaforge")]
-#[command(about = "Local staged project learning framework", version)]
+#[command(
+    about = "Build a real developer tool on your own machine, one behavior at a time.",
+    version,
+    help_template = ROOT_HELP_TEMPLATE,
+    disable_help_subcommand = true
+)]
 pub struct Cli {
     /// Learner project directory. Defaults to upward discovery from the current directory.
     #[arg(long, global = true)]
@@ -438,6 +477,10 @@ pub struct DoctorArgs {
     /// Print machine-readable JSON only.
     #[arg(long)]
     pub json: bool,
+
+    /// Restore damaged project progress from .deltaforge/state.json.prev.
+    #[arg(long)]
+    pub repair: bool,
 }
 
 #[derive(Debug, Args)]
@@ -449,4 +492,46 @@ pub struct ExplainFailureArgs {
     /// Print machine-readable JSON only.
     #[arg(long)]
     pub json: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn root_help_leads_with_the_workbench_and_groups_secondary_commands() {
+        let help = Cli::command().render_long_help().to_string();
+        let workbench = help.find("Run `deltaforge` with no command").unwrap();
+        let learn = help.find("Learn:").unwrap();
+        let automate = help.find("Automate:").unwrap();
+        let author = help.find("Author packs:").unwrap();
+        assert!(
+            workbench < learn && learn < automate && automate < author,
+            "{help}"
+        );
+        assert!(
+            !help.contains("Commands:"),
+            "commands must not be a flat list: {help}"
+        );
+        assert!(help.contains("  test              Run the current step's checks"));
+        assert!(help.contains("  pack              Create, inspect, and validate packs"));
+        assert!(
+            !help.contains('{'),
+            "unknown template placeholder leaked: {help}"
+        );
+    }
+
+    #[test]
+    fn crate_and_cli_use_the_readme_product_description() {
+        const DESCRIPTION: &str =
+            "Build a real developer tool on your own machine, one behavior at a time.";
+        assert_eq!(env!("CARGO_PKG_DESCRIPTION"), DESCRIPTION);
+        assert!(
+            Cli::command()
+                .render_long_help()
+                .to_string()
+                .starts_with(DESCRIPTION)
+        );
+    }
 }

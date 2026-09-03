@@ -1,6 +1,8 @@
+use std::fs;
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::cli::DoctorArgs;
@@ -8,6 +10,16 @@ use crate::context::{GlobalOptions, ProjectContext};
 use crate::pack::{PackSearchOptions, discover_packs_with_options, validate_pack};
 
 pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
+    if args.repair {
+        let repaired = repair_project(options)?;
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&repaired)?);
+        } else {
+            println!("Restored saved progress from {}", repaired.restored_from);
+            println!("Damaged state preserved at {}", repaired.damaged_copy);
+        }
+        return Ok(());
+    }
     let discovery = discover_packs_with_options(&PackSearchOptions {
         packs_dir: options.packs_dir.clone(),
     })?;
@@ -118,6 +130,86 @@ pub fn run(args: DoctorArgs, options: &GlobalOptions) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+struct RepairReport {
+    status: &'static str,
+    restored_from: String,
+    damaged_copy: String,
+    state_file: String,
+}
+
+fn repair_project(options: &GlobalOptions) -> Result<RepairReport> {
+    let state_path = locate_state_file(options)?;
+    match crate::state::ProjectState::read_from(&state_path) {
+        Ok(_) => bail!(
+            "saved progress in {} is readable; no repair is needed",
+            state_path.display()
+        ),
+        Err(error) if format!("{error:#}").contains("newer version of DeltaForge") => {
+            return Err(error)
+                .context("repair refused because this state needs a newer DeltaForge");
+        }
+        Err(_) => {}
+    }
+
+    let previous = crate::state::previous_state_path(&state_path);
+    if !previous.is_file() {
+        bail!(
+            "cannot repair saved progress: {} does not exist; restore the project from version control or another backup",
+            previous.display()
+        );
+    }
+    let restored = crate::state::ProjectState::read_from(&previous).with_context(|| {
+        format!(
+            "cannot repair saved progress because the previous state {} is not readable",
+            previous.display()
+        )
+    })?;
+    let serialized = serde_json::to_string_pretty(&restored)
+        .context("failed to serialize the recovered project state")?;
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let damaged = state_path.with_file_name(format!("state.json.damaged-{suffix}"));
+    fs::rename(&state_path, &damaged).with_context(|| {
+        format!(
+            "failed to preserve damaged state {} as {}",
+            state_path.display(),
+            damaged.display()
+        )
+    })?;
+    if let Err(error) = crate::fs_util::atomic_write(&state_path, serialized) {
+        let _ = fs::rename(&damaged, &state_path);
+        return Err(error).context("failed to install the recovered project state");
+    }
+    Ok(RepairReport {
+        status: "repaired",
+        restored_from: previous.display().to_string(),
+        damaged_copy: damaged.display().to_string(),
+        state_file: state_path.display().to_string(),
+    })
+}
+
+fn locate_state_file(options: &GlobalOptions) -> Result<PathBuf> {
+    let start = options
+        .project_dir
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .context("could not locate the current directory")?;
+    let start = start.canonicalize().unwrap_or(start);
+    for candidate in start.ancestors() {
+        let state = candidate.join(".deltaforge").join("state.json");
+        if state.is_file() || crate::state::previous_state_path(&state).is_file() {
+            return Ok(state);
+        }
+    }
+    bail!(
+        "no DeltaForge project state was found from {}; run repair from inside the project",
+        start.display()
+    )
+}
+
 fn project_state_exists(options: &GlobalOptions) -> bool {
     let start = options
         .project_dir
@@ -153,4 +245,43 @@ struct DoctorProject {
     project: String,
     language: String,
     current_stage: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repair_restores_the_previous_state_and_preserves_the_damaged_file() {
+        let root = crate::fs_util::create_private_scratch_dir("deltaforge-doctor-repair").unwrap();
+        let metadata = root.join(".deltaforge");
+        fs::create_dir_all(&metadata).unwrap();
+        let state_path = metadata.join("state.json");
+        let mut state = crate::state::ProjectState::new(
+            "flashindex".to_string(),
+            "rust".to_string(),
+            "01_scan_files".to_string(),
+        )
+        .unwrap();
+        state.write_to(&state_path).unwrap();
+        state.current_stage = "02_filter_files".to_string();
+        state.write_to(&state_path).unwrap();
+        fs::write(&state_path, "{ truncated").unwrap();
+
+        let report = repair_project(&GlobalOptions {
+            project_dir: Some(root.clone()),
+            packs_dir: None,
+        })
+        .unwrap();
+
+        assert_eq!(report.status, "repaired");
+        assert!(std::path::Path::new(&report.damaged_copy).is_file());
+        assert_eq!(
+            crate::state::ProjectState::read_from(&state_path)
+                .unwrap()
+                .current_stage,
+            "01_scan_files"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }

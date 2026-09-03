@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -214,19 +217,17 @@ impl ProjectContext {
             .completion_proofs
             .get(stage_id)
             .with_context(|| {
-                format!(
-                    "stage {stage_id} has no current completion record; run `deltaforge test` again"
-                )
+                format!("stage {stage_id} has no current completion record; its checks need to pass again")
             })?;
         if self.stage_needs_revalidation(stage_id)? {
             bail!(
-                "stage {stage_id} passed against an older version of this pack and must be revalidated; run `deltaforge test`"
+                "stage {stage_id} passed against an older version of this pack and must be revalidated by passing its checks again"
             );
         }
         let project_digest = self.project_digest()?;
         if proof.project_digest != project_digest {
             bail!(
-                "learner project changed since stage {stage_id} passed; run `deltaforge test` again"
+                "learner project changed since stage {stage_id} passed; its checks need to pass again"
             );
         }
         Ok(())
@@ -373,7 +374,7 @@ fn recorded_gate_result_passes(result: &crate::state::RecordedGateResult) -> boo
 fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {
     if !state.pack_version.is_empty() && state.pack_version != pack.manifest.version {
         bail!(
-            "project is pinned to pack {} version {}, but discovery selected version {} from {}. Run `deltaforge sync-pack` to re-pin to the current pack.",
+            "project is pinned to pack {} version {}, but discovery selected version {} from {}. Adopt the currently discovered pack definition to continue.",
             state.project,
             state.pack_version,
             pack.manifest.version,
@@ -393,21 +394,51 @@ fn verify_pack_pin(state: &ProjectState, pack: &LoadedPack) -> Result<()> {
         };
         if !matches {
             bail!(
-                "project is pinned to pack source {}, but discovery selected {}. Run `deltaforge sync-pack` to re-pin, or use the original --packs-dir.",
+                "project is pinned to pack source {}, but discovery selected {}. Restore the original pack source or adopt the currently discovered pack definition.",
                 state.pack_source,
                 actual_label
             );
         }
     }
     if !state.pack_digest.is_empty() {
+        // Pack content is immutable for normal learners and changes only when
+        // an author edits an installed pack. Loading workbench state every
+        // half-second used to walk all 541 bundled-pack files merely to prove
+        // the same digest again. The pack directory mtime is the cheap gate:
+        // when it and the expected digest agree with a successful check, the
+        // expensive walk cannot add useful information.
+        let directory_mtime = std::fs::metadata(&pack.root)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        if pack_pin_cache_hit(&pack.root, directory_mtime, &state.pack_digest) {
+            return Ok(());
+        }
         let actual = digest_pack_tree(&pack.root)?;
         if state.pack_digest != actual {
             bail!(
-                "pack contents changed since project initialization. Run `deltaforge sync-pack` to re-pin to the current pack."
+                "pack contents changed since project initialization. Adopt the currently discovered pack definition to continue."
             );
         }
+        remember_pack_pin(&pack.root, directory_mtime, &state.pack_digest);
     }
     Ok(())
+}
+
+type PackPinCache = HashMap<PathBuf, (Option<SystemTime>, String)>;
+
+fn pack_pin_cache() -> &'static Mutex<PackPinCache> {
+    static CACHE: OnceLock<Mutex<PackPinCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn pack_pin_cache_hit(root: &Path, mtime: Option<SystemTime>, expected: &str) -> bool {
+    crate::sync::lock(pack_pin_cache())
+        .get(root)
+        .is_some_and(|cached| cached.0 == mtime && cached.1 == expected)
+}
+
+fn remember_pack_pin(root: &Path, mtime: Option<SystemTime>, expected: &str) {
+    crate::sync::lock(pack_pin_cache()).insert(root.to_path_buf(), (mtime, expected.to_string()));
 }
 
 pub fn locate_project_root(options: &GlobalOptions) -> Result<PathBuf> {

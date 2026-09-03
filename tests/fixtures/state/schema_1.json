@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "project": "flashindex",
+  "language": "rust",
+  "pack_version": "1.0.0",
+  "pack_source": "builtin",
+  "pack_digest": "a1b2c3",
+  "current_stage": "02_filter_files",
+  "completed_stages": ["01_scan_files"],
+  "completed_stage_timestamps": { "01_scan_files": "2026-01-04T09:12:44Z" },
+  "completion_proofs": {},
+  "last_test_runs": {},
+  "hint_state": { "01_scan_files": 2 },
+  "gate_results": {},
+  "attempt_history": [
+    {
+      "job_id": "job-1",
+      "stage_ids": ["01_scan_files"],
+      "started_at": "2026-01-04T09:11:02Z",
+      "finished_at": "2026-01-04T09:12:44Z",
+      "status": "passed",
+      "passed": 10,
+      "failed": 0
+    }
+  ],
+  "active_job": null,
+  "observed_project_digest": "d4e5f6",
+  "source_revision": 7,
+  "source_event_revision": 7,
+  "created_at": "2026-01-04T09:00:00Z",
+  "updated_at": "2026-01-04T09:12:44Z"
+}

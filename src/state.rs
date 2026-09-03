@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -275,6 +275,13 @@ impl ProjectState {
     pub fn write_to(&self, path: &Path) -> Result<()> {
         let serialized =
             serde_json::to_string_pretty(self).context("failed to serialize project state")?;
+        if path.is_file() {
+            let previous = std::fs::read(path)
+                .with_context(|| format!("failed to preserve state file {}", path.display()))?;
+            atomic_write(&previous_state_path(path), previous).with_context(|| {
+                format!("failed to preserve previous state file {}", path.display())
+            })?;
+        }
         atomic_write(path, serialized)
             .with_context(|| format!("failed to write state file {}", path.display()))?;
 
@@ -298,9 +305,24 @@ impl ProjectState {
         if let Ok(probe) = serde_json::from_str::<SchemaProbe>(&source) {
             check_schema_version(probe.schema_version, path)?;
         }
-        let mut state: Self = serde_json::from_str(&source)
-            .with_context(|| format!("failed to parse state file {}", path.display()))?;
-        state.validate(path)?;
+        let mut document: serde_json::Value =
+            serde_json::from_str(&source).map_err(|_| damaged_state_error(path))?;
+        migrate(&mut document, path).map_err(|error| {
+            if format!("{error:#}").contains("newer version of DeltaForge") {
+                error
+            } else {
+                damaged_state_error(path)
+            }
+        })?;
+        let mut state: Self =
+            serde_json::from_value(document).map_err(|_| damaged_state_error(path))?;
+        state.validate(path).map_err(|error| {
+            if format!("{error:#}").contains("newer version of DeltaForge") {
+                error
+            } else {
+                damaged_state_error(path)
+            }
+        })?;
         if state.updated_at.is_empty() {
             state.updated_at = state.created_at.clone();
         }
@@ -581,25 +603,119 @@ impl ProjectState {
     }
 }
 
+pub fn previous_state_path(path: &Path) -> std::path::PathBuf {
+    path.with_file_name("state.json.prev")
+}
+
+fn damaged_state_error(path: &Path) -> anyhow::Error {
+    anyhow!(
+        "saved progress in {} is damaged and cannot be read; run `deltaforge doctor --repair` from this project to restore the previous saved state",
+        path.display()
+    )
+}
+
 fn current_state_schema_version() -> u32 {
     2
 }
 
 fn check_schema_version(found: u32, path: &Path) -> Result<()> {
     let expected = current_state_schema_version();
-    if found == expected {
+    if found <= expected {
+        // Older is not an error; it is a migration. See `MIGRATIONS`.
         return Ok(());
-    }
-    if found < expected {
-        bail!(
-            "state schema_version {found} in {} is from an older DeltaForge and is not supported; recreate the project with `deltaforge init`",
-            path.display()
-        );
     }
     bail!(
         "state schema_version {found} in {} was written by a newer version of DeltaForge (this build supports {expected}); upgrade DeltaForge to open this project",
         path.display()
     );
+}
+
+/// The chain of state-file migrations, one per schema version, in order.
+///
+/// Each entry takes a document written at version `n` and returns it at `n+1`.
+///
+/// This exists now, while there is exactly one rung to write, because the
+/// alternative is what 1.0 shipped: every schema bump refused to load and told
+/// the learner to run `deltaforge init` again, which destroys their progress.
+/// That was defensible before there were users and is not defensible after.
+/// The ladder is cheap to extend and impossible to add retroactively — by the
+/// time a second bump is needed, the projects that would have needed rung one
+/// are already broken.
+///
+/// Migrations work on `serde_json::Value`, not on `ProjectState`. That is the
+/// point: `ProjectState` is the *current* shape, and a migration's whole job is
+/// to handle a document that is not that shape yet. Deserializing first would
+/// mean the migration could only ever run on documents that did not need it.
+type Migration = fn(&mut serde_json::Map<String, serde_json::Value>);
+
+const MIGRATIONS: &[(u32, Migration)] = &[(1, migrate_1_to_2)];
+
+/// Bring `document` up to the current schema, in place.
+///
+/// A state file with no `schema_version` at all is treated as version 1: the
+/// field was introduced with it, so its absence means the oldest shape.
+fn migrate(document: &mut serde_json::Value, path: &Path) -> Result<()> {
+    let expected = current_state_schema_version();
+    let Some(object) = document.as_object_mut() else {
+        bail!("invalid state {}: not a JSON object", path.display());
+    };
+    let mut version = object
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1) as u32;
+
+    while version < expected {
+        let Some((_, step)) = MIGRATIONS.iter().find(|(from, _)| *from == version) else {
+            bail!(
+                "state schema_version {version} in {} cannot be upgraded to {expected}: no migration is defined for it",
+                path.display()
+            );
+        };
+        step(object);
+        version += 1;
+        object.insert(
+            "schema_version".to_string(),
+            serde_json::Value::from(version),
+        );
+    }
+    Ok(())
+}
+
+/// Schema 1 to 2: jobs gained a kind, and stages gained prediction and
+/// reflection notes.
+///
+/// Everything schema 2 added is optional to *parse* — `serde(default)` would
+/// fill each one in. The migration writes them anyway, because a migration's
+/// output should be a document that is genuinely at the new version rather
+/// than one that happens to survive the current deserializer. Relying on the
+/// defaults would make this rung silently stop working the day a field stops
+/// being defaulted.
+fn migrate_1_to_2(state: &mut serde_json::Map<String, serde_json::Value>) {
+    // Every job recorded before schema 2 was a test run; benchmarks could not
+    // be started as jobs yet.
+    if let Some(active) = state
+        .get_mut("active_job")
+        .and_then(|job| job.as_object_mut())
+    {
+        active
+            .entry("kind")
+            .or_insert_with(|| serde_json::Value::from("tests"));
+    }
+    if let Some(attempts) = state
+        .get_mut("attempt_history")
+        .and_then(|history| history.as_array_mut())
+    {
+        for attempt in attempts.iter_mut().filter_map(|a| a.as_object_mut()) {
+            attempt
+                .entry("kind")
+                .or_insert_with(|| serde_json::Value::from("tests"));
+        }
+    }
+    for field in ["predictions", "reflections"] {
+        state
+            .entry(field)
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    }
 }
 
 fn current_timestamp() -> Result<String> {
@@ -631,6 +747,93 @@ mod tests {
                 .completed_stage_timestamps
                 .contains_key("01_scan_files")
         );
+    }
+
+    /// P2-6. A project written by an older DeltaForge opens, keeping every
+    /// completion it had earned.
+    ///
+    /// 1.0 refused: `check_schema_version` rejected every older schema with
+    /// "recreate the project with `deltaforge init`", so a schema bump was a
+    /// promise to destroy the learner's progress. The fixture is a real
+    /// schema-1 document, checked in, so this rung stays honest even after
+    /// the code that wrote that shape is long gone.
+    #[test]
+    fn a_schema_1_project_migrates_to_the_current_schema() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/state/schema_1.json");
+        let state = ProjectState::read_from(&fixture).expect("a schema 1 project must still open");
+
+        assert_eq!(state.schema_version, current_state_schema_version());
+        // Progress survives, which is the entire point.
+        assert_eq!(state.completed_stages, ["01_scan_files"]);
+        assert_eq!(state.current_stage, "02_filter_files");
+        assert_eq!(state.hint_state.get("01_scan_files"), Some(&2));
+        // And what schema 2 added is present and correct, not merely absent.
+        assert_eq!(state.attempt_history.len(), 1);
+        assert_eq!(state.attempt_history[0].kind, JobKind::Tests);
+        assert!(state.predictions.is_empty());
+        assert!(state.reflections.is_empty());
+    }
+
+    /// The ladder refuses what it cannot climb, rather than deserializing a
+    /// document it has not actually migrated.
+    #[test]
+    fn a_schema_with_no_migration_is_refused_by_name() {
+        let mut document = serde_json::json!({ "schema_version": 0 });
+        let refusal =
+            migrate(&mut document, Path::new("state.json")).expect_err("version 0 has no rung");
+        assert!(format!("{refusal:#}").contains("no migration is defined"));
+    }
+
+    /// Forward compatibility is unchanged: a file from a newer build is a
+    /// reason to upgrade, not something to guess at.
+    #[test]
+    fn a_newer_schema_is_still_refused_with_the_upgrade_message() {
+        let newer = current_state_schema_version() + 1;
+        let refusal = check_schema_version(newer, Path::new("state.json"))
+            .expect_err("a newer schema must be refused");
+        assert!(format!("{refusal:#}").contains("upgrade DeltaForge"));
+    }
+
+    #[test]
+    fn a_damaged_state_has_a_learner_facing_recovery_message() {
+        let root = crate::fs_util::create_private_scratch_dir("deltaforge-state-damaged").unwrap();
+        let path = root.join("state.json");
+        std::fs::write(&path, r#"{"schema_version":2,"project":"flashindex""#).unwrap();
+
+        let message = format!("{:#}", ProjectState::read_from(&path).unwrap_err());
+        assert!(message.contains("saved progress"));
+        assert!(message.contains("doctor --repair"));
+        assert!(!message.contains("expected"));
+        assert!(!message.contains("completed_stages"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn every_state_write_keeps_the_previous_complete_document() {
+        let root = crate::fs_util::create_private_scratch_dir("deltaforge-state-backup").unwrap();
+        let path = root.join("state.json");
+        let mut state = ProjectState::new(
+            "flashindex".to_string(),
+            "rust".to_string(),
+            "01_scan_files".to_string(),
+        )
+        .unwrap();
+        state.write_to(&path).unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+
+        state.current_stage = "02_filter_files".to_string();
+        state.write_to(&path).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(previous_state_path(&path)).unwrap(),
+            first
+        );
+        assert_eq!(
+            ProjectState::read_from(&path).unwrap().current_stage,
+            "02_filter_files"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

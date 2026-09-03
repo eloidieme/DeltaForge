@@ -639,6 +639,27 @@ pub fn load_project_health(options: &GlobalOptions) -> Result<ProjectHealth> {
         }),
         Err(error) => {
             let detail = sanitize_project_text(&format!("{error:#}"), &root);
+            // The health route is most important when normal project loading
+            // failed. Keep its identity available from the state when that is
+            // readable, and from the registered folder as a last resort.
+            let project =
+                crate::state::ProjectState::read_from(&root.join(".deltaforge").join("state.json"))
+                    .map(|state| {
+                        crate::pack::load_pack_read_only(
+                            &state.project,
+                            &crate::pack::PackSearchOptions {
+                                packs_dir: options.packs_dir.clone(),
+                            },
+                        )
+                        .map(|pack| pack.manifest.name)
+                        .unwrap_or(state.project)
+                    })
+                    .unwrap_or_else(|_| {
+                        root.file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("Unavailable project")
+                            .to_string()
+                    });
             let (code, title, guidance, repinnable) = classify_project_health_error(&detail);
             let mut actions = vec![health_action(
                 ProjectHealthActionKind::Recheck,
@@ -664,7 +685,7 @@ pub fn load_project_health(options: &GlobalOptions) -> Result<ProjectHealth> {
             ));
             Ok(ProjectHealth {
                 status: ProjectHealthStatus::Unhealthy,
-                project: None,
+                project: Some(project),
                 issue: Some(ProjectHealthIssue {
                     code: code.to_string(),
                     title: title.to_string(),
@@ -2193,7 +2214,7 @@ fn classify_project_health_error(detail: &str) -> (&'static str, &'static str, &
         (
             "pack_content_invalid",
             "This step's guide cannot be rendered",
-            "The pack is missing a required section for this step. Fix the pack's instructions.md, or run `deltaforge validate-pack <pack> --strict` to see every gap, then check again.",
+            "The pack is missing required content for this step. Open its instructions.md to correct the guide, then check again. Pack authors can use strict validation to find every gap.",
             false,
         )
     } else if detail.contains("config.toml") {
@@ -2343,5 +2364,13 @@ mod tests {
         );
         assert_eq!(pack.0, "pack_changed");
         assert!(pack.3);
+
+        let content = classify_project_health_error("capability instructions are missing");
+        assert_eq!(content.0, "pack_content_invalid");
+        assert!(content.2.contains("Open its instructions.md"));
+        assert!(
+            !content.2.contains("deltaforge"),
+            "browser health guidance must not require the terminal"
+        );
     }
 }
