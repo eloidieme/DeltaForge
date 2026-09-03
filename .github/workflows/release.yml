@@ -158,12 +158,29 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          awk -v heading="## ${version}" '
-            $0 == heading { found = 1; next }
-            found && /^## / { exit }
-            found { print }
-            END { if (!found) exit 1 }
-          ' CHANGELOG.md > release-notes.md
+          # A candidate carries the notes of the version it is a candidate for:
+          # `v1.0.0-rc.1` reads the `## 1.0.0` section. The CHANGELOG has no
+          # heading for a pre-release and should not grow one — the notes do not
+          # differ, only the confidence does.
+          release_version="${version%%-*}"
+          extract() {
+            awk -v heading="## $1" '
+              $0 == heading { found = 1; next }
+              found && /^## / { exit }
+              found { print }
+              END { if (!found) exit 1 }
+            ' CHANGELOG.md
+          }
+          if [ "$version" != "$release_version" ]; then
+            {
+              echo "**Release candidate for ${release_version}.** Not published to"
+              echo "crates.io; install from the archives below to validate it."
+              echo
+              extract "$release_version"
+            } > release-notes.md
+          else
+            extract "$version" > release-notes.md
+          fi
           test -s release-notes.md
 
       - name: Create GitHub Release
