@@ -2785,7 +2785,10 @@ fn state_schema_v1_migrates_and_keeps_the_learner_going() {
         serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
     assert_eq!(migrated["schema_version"], serde_json::json!(2));
     assert_eq!(migrated["project"], serde_json::json!("flashindex"));
-    assert_eq!(migrated["current_stage"], serde_json::json!("01_scan_files"));
+    assert_eq!(
+        migrated["current_stage"],
+        serde_json::json!("01_scan_files")
+    );
 
     let _ = fs::remove_dir_all(project);
 }
