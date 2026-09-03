@@ -289,7 +289,7 @@ impl ProjectState {
     }
 
     pub fn read_from(path: &Path) -> Result<Self> {
-        let source = std::fs::read_to_string(path)
+        let source = crate::fs_util::read_to_string_shared(path)
             .with_context(|| format!("failed to read state file {}", path.display()))?;
         // Check the schema version with a two-field probe before the strict,
         // `deny_unknown_fields` deserialization below: a state file written

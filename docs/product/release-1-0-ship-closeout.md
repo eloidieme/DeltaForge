@@ -203,6 +203,33 @@ Two gates found this between them, and neither could have alone: the MSRV job
 proved the claim false, and `cargo deny` proved what the false claim was
 costing.
 
+### Reading the project registry could make another process fail to write it
+
+A cross-platform correctness bug, found only because `deltaforge init` now
+registers the project it creates (P2-7) and so many more processes touch
+`projects.json` at once.
+
+Registry writes are already serialised by a lease and already use `MoveFileEx`
+with `MOVEFILE_REPLACE_EXISTING`. Registry *reads* were not, and on Windows a
+handle opened without `FILE_SHARE_DELETE` blocks a replace — so an ordinary
+reader makes a concurrent writer fail with *Access is denied*. The lease
+serialises writers against each other and cannot help here, because the reader
+never takes it.
+
+That is a real defect, not a test artefact: `deltaforge status` in one terminal
+could make `deltaforge init` in another fail to register. Every file DeltaForge
+writes atomically — the registry, `state.json`, the service discovery record —
+is now read through `read_to_string_shared`, which sets the share mode on
+Windows and is a plain read everywhere else. The replace also retries briefly on
+a transient `ACCESS_DENIED`/`SHARING_VIOLATION`, because an antivirus scanner or
+the search indexer can hold a handle no care on DeltaForge's side prevents.
+
+### `set_modified` needs a writable handle on Windows
+
+`fs::File::open(path).set_modified(…)` works on Unix, where `futimens` accepts a
+read-only descriptor, and fails on Windows with *Access is denied*. One test
+used it. Now opened for writing.
+
 ### Windows reports a closed connection as an error, not as end-of-stream
 
 `browser_journey.rs` read each response with

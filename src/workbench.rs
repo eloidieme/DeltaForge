@@ -481,7 +481,7 @@ fn wait_for_service(record_path: &Path) -> Result<Option<(ServiceRecord, Service
 }
 
 fn read_compatible_record(record_path: &Path) -> Result<Option<(ServiceRecord, ServiceStatus)>> {
-    let source = match fs::read_to_string(record_path) {
+    let source = match crate::fs_util::read_to_string_shared(record_path) {
         Ok(source) => source,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -568,7 +568,7 @@ fn replace_incompatible_service(record_path: &Path, record: &ServiceRecord) -> R
 }
 
 fn remove_record_if_matches(record_path: &Path, expected: &ServiceRecord) {
-    let current = fs::read_to_string(record_path)
+    let current = crate::fs_util::read_to_string_shared(record_path)
         .ok()
         .and_then(|source| serde_json::from_str::<ServiceRecord>(&source).ok());
     if current.as_ref().is_some_and(|record| {
@@ -594,7 +594,7 @@ fn request_focus(record: &ServiceRecord, route: &str) -> bool {
 
 pub fn exit() -> Result<()> {
     let record_path = crate::project_registry::service_record_path()?;
-    let source = match fs::read_to_string(&record_path) {
+    let source = match crate::fs_util::read_to_string_shared(&record_path) {
         Ok(source) => source,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             println!("DeltaForge is not running.");

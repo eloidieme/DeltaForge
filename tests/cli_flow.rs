@@ -689,7 +689,12 @@ fn explain_failure_flags_a_result_recorded_before_the_current_source() {
     // Force a strictly newer mtime regardless of filesystem timestamp
     // granularity, so cargo's own staleness check reliably rebuilds when
     // `test` runs again below.
-    fs::File::open(&main_rs)
+    // Opened for writing, not just reading: Windows refuses `set_modified` on a
+    // read-only handle with "Access is denied", while Unix allows it. The
+    // read-only form passed on macOS and Linux and failed on Windows CI.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&main_rs)
         .unwrap()
         .set_modified(SystemTime::now() + Duration::from_secs(5))
         .unwrap();

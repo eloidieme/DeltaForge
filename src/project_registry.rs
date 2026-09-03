@@ -312,7 +312,7 @@ fn ensure_project_root(root: &Path) -> Result<()> {
 
 fn read_registry() -> Result<RegistryFile> {
     let path = application_home()?.join(REGISTRY_FILE);
-    let source = match fs::read_to_string(&path) {
+    let source = match crate::fs_util::read_to_string_shared(&path) {
         Ok(source) => source,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(RegistryFile::default());

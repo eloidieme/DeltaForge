@@ -124,6 +124,38 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     fs::rename(source, destination)
 }
 
+/// Read a file that some other process may be atomically replacing.
+///
+/// On Windows a handle opened without `FILE_SHARE_DELETE` blocks
+/// `MoveFileEx`, so an ordinary reader makes a concurrent writer's replace fail
+/// with "Access is denied". Every file DeltaForge writes through
+/// [`atomic_write`] is read through here instead, so reading one can never be
+/// the reason writing it failed.
+///
+/// On Unix a rename over an open file has always been fine, and this is a plain
+/// read.
+pub fn read_to_string_shared(path: &Path) -> std::io::Result<String> {
+    #[cfg(windows)]
+    {
+        use std::io::Read as _;
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+        const FILE_SHARE_DELETE: u32 = 0x4;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .open(path)?;
+        let mut source = String::new();
+        file.read_to_string(&mut source)?;
+        Ok(source)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::read_to_string(path)
+    }
+}
+
 #[cfg(windows)]
 fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -144,18 +176,37 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
-    let result = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if result == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
+    // A replace can be refused by a handle DeltaForge does not control — an
+    // antivirus scanner or the search indexer opening the file it just saw
+    // change. Those handles are held for milliseconds, so a short retry turns
+    // a spurious failure into a small delay. `read_to_string_shared` removes
+    // the case DeltaForge causes itself; this covers the rest.
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    let mut backoff = std::time::Duration::from_millis(2);
+    for attempt in 0..6 {
+        let result = unsafe {
+            MoveFileExW(
+                source.as_ptr(),
+                destination.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if result != 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        let transient = matches!(
+            error.raw_os_error(),
+            Some(ERROR_ACCESS_DENIED) | Some(ERROR_SHARING_VIOLATION)
+        );
+        if !transient || attempt == 5 {
+            return Err(error);
+        }
+        std::thread::sleep(backoff);
+        backoff *= 2;
     }
+    unreachable!("the loop returns on its last attempt")
 }
 
 fn temporary_path(path: &Path) -> Result<PathBuf> {
