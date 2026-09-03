@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -9,8 +9,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use base64::Engine as _;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::application;
 use crate::context::GlobalOptions;
@@ -22,14 +24,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(4);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
-/// How often the source watcher checks registered projects for changes while
-/// no browser client is connected. There is nobody to notify of a change at
-/// this cadence, so the watcher backs off to this interval instead of
-/// `EVENT_POLL_INTERVAL`; a poll for an unchanged project is now cheap (see
-/// `integrity::cached_digest`), so this backoff only needs to be large enough
-/// to matter, not large enough to make a learner who reloads the page or
-/// switches to the terminal notice the delay.
-const IDLE_SOURCE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_SOURCE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// How many accepted-but-unauthenticated connections may be in flight at once.
 /// Far above what a browser opens for the workbench (a handful of fetches plus
@@ -114,9 +109,23 @@ struct Shared {
     idle_timeout: Duration,
     focus_revision: AtomicUsize,
     focus_target: Mutex<String>,
+    /// Projects with a live project-event stream, counted per open tab. The
+    /// source watcher has no reason to walk every project a learner has ever
+    /// registered; only these can currently receive the event.
+    watched_projects: Mutex<BTreeMap<String, WatchedProject>>,
     /// Connections accepted but not yet past the token check. Bounded by
     /// `MAX_PRE_AUTH_CONNECTIONS`; see `PreAuthSlot`.
     pre_auth: AtomicUsize,
+    /// Whether `POST /api/v1/__panic` exists. Read once from
+    /// `DELTAFORGE_PANIC_PROBE` at start, so the route is present only in a
+    /// service that was deliberately started to test panic recovery.
+    panic_probe: bool,
+}
+
+#[derive(Debug, Clone)]
+struct WatchedProject {
+    options: GlobalOptions,
+    clients: usize,
 }
 
 /// A permit to occupy one of the bounded pre-authentication slots, released
@@ -319,14 +328,14 @@ pub fn launch(options: &GlobalOptions) -> Result<()> {
         record.port, route, record.token
     );
     if status.clients > 0 && request_focus(&record, &route) {
-        println!("DeltaForge is ready.");
+        println!("DeltaForge is ready at {url}");
         return Ok(());
     }
     if std::env::var_os("DELTAFORGE_NO_BROWSER").is_some() {
         println!("DeltaForge is ready at {url}");
     } else {
         match open_in_browser(url.as_ref()) {
-            Ok(()) => println!("DeltaForge is ready."),
+            Ok(()) => println!("DeltaForge is ready at {url}"),
             Err(error) => {
                 println!("DeltaForge is ready at {url}");
                 println!("Browser opening failed: {error:#}");
@@ -385,6 +394,14 @@ fn spawn_service(root: Option<&Path>, options: &GlobalOptions, token: &str) -> R
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Integration tests use the real detached launcher. Give a service whose
+    // test process aborts before cleanup a bounded lifetime without exposing a
+    // learner-facing timeout setting or weakening the 30-minute default.
+    if let Some(timeout) = test_idle_timeout_from_environment()? {
+        command
+            .arg("--idle-timeout-ms")
+            .arg(timeout.as_millis().to_string());
+    }
     if let Some(packs_dir) = &options.packs_dir {
         command.arg("--packs-dir").arg(packs_dir);
     }
@@ -406,6 +423,33 @@ fn spawn_service(root: Option<&Path>, options: &GlobalOptions, token: &str) -> R
         .context("failed to send the workbench capability to the service")?;
     drop(stdin);
     Ok(())
+}
+
+fn test_idle_timeout_from_environment() -> Result<Option<Duration>> {
+    parse_test_idle_timeout(std::env::var_os("DELTAFORGE_TEST_IDLE_TIMEOUT_MS"))
+}
+
+fn parse_test_idle_timeout(value: Option<std::ffi::OsString>) -> Result<Option<Duration>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .context("DELTAFORGE_TEST_IDLE_TIMEOUT_MS must be valid UTF-8")?;
+    let milliseconds = value
+        .parse::<u64>()
+        .context("DELTAFORGE_TEST_IDLE_TIMEOUT_MS must be a positive integer")?;
+    if milliseconds == 0 {
+        bail!("DELTAFORGE_TEST_IDLE_TIMEOUT_MS must be greater than zero");
+    }
+    Ok(Some(Duration::from_millis(milliseconds)))
+}
+
+pub fn service_idle_timeout(argument_ms: Option<u64>) -> Result<Option<Duration>> {
+    match argument_ms {
+        Some(milliseconds) => Ok(Some(Duration::from_millis(milliseconds))),
+        None => test_idle_timeout_from_environment(),
+    }
 }
 
 pub fn service_token(argument: Option<String>) -> Result<String> {
@@ -639,7 +683,8 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
         version: SERVICE_VERSION.to_string(),
         probe_id: probe_id.clone(),
     };
-    crate::project_registry::ensure_private_application_home()?;
+    let home = crate::project_registry::ensure_private_application_home()?;
+    install_panic_log(&home);
     atomic_write_private(&record_path, serde_json::to_string(&record)?)?;
 
     let shared = Arc::new(Shared {
@@ -656,7 +701,9 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
         idle_timeout,
         focus_revision: AtomicUsize::new(0),
         focus_target: Mutex::new("/projects".to_string()),
+        watched_projects: Mutex::new(BTreeMap::new()),
         pre_auth: AtomicUsize::new(0),
+        panic_probe: std::env::var_os("DELTAFORGE_PANIC_PROBE").is_some(),
     });
     spawn_idle_watchdog(Arc::clone(&shared));
     spawn_source_watcher(Arc::clone(&shared));
@@ -674,39 +721,154 @@ pub fn serve(options: &GlobalOptions, token: String, idle_timeout: Option<Durati
             continue;
         };
         let shared = Arc::clone(&shared);
-        std::thread::spawn(move || {
-            let _ = handle_connection(stream, &shared, slot);
-        });
+        std::thread::spawn(move || serve_one_connection(stream, shared, slot));
     }
     Ok(())
 }
 
+/// One connection, on its own thread, with a panic contained to it.
+///
+/// `handle_connection` runs behind `catch_unwind` because a panic in a handler
+/// used to be terminal for the whole service, not just the request: the thread
+/// died while holding one of the shared mutexes, every later `lock()` returned
+/// a poisoned error, and each of those was an `expect` — so every subsequent
+/// request panicked too. The browser hung with no error surface at all, and
+/// the only trace went to a terminal the learner has probably closed, because
+/// this runs in the background.
+///
+/// `Shared` holds a timestamp and a set of run identifiers behind mutexes;
+/// there is no invariant a half-finished handler can break. So the answer to
+/// a panicking request is a 500 for that request, a line in the panic log, and
+/// a service that still works.
+fn serve_one_connection(stream: TcpStream, shared: Arc<Shared>, slot: PreAuthSlot) {
+    let reply = stream.try_clone();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = handle_connection(stream, &shared, slot);
+    }));
+    if outcome.is_err()
+        && let Ok(mut reply) = reply
+    {
+        // Best effort: the handler may already have written a response, in
+        // which case this is discarded by the client as trailing bytes on a
+        // connection that is closing anyway. Saying nothing is worse — that is
+        // the hang.
+        let _ = respond(
+            &mut reply,
+            "500 Internal Server Error",
+            "application/json",
+            r#"{"error":"DeltaForge hit an internal error handling that request. The workbench is still running; try again."}"#,
+        );
+    }
+}
+
+/// Record panics to a file under the DeltaForge home, and keep the default
+/// behaviour on stderr.
+///
+/// The workbench is started by a launcher and then detached. Without this, the
+/// one artefact of a crash goes to a terminal that is closed by the time
+/// anybody looks — which is the same reason `catch_unwind` above is not enough
+/// on its own: a contained panic that leaves no trace is a bug nobody can
+/// report.
+pub fn install_panic_log(home: &Path) {
+    let log_path = home.join("panic.log");
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let entry = format!(
+            "{} thread {:?}\n{info}\n\n",
+            humantime_now(),
+            std::thread::current().name().unwrap_or("unnamed"),
+        );
+        if let Ok(mut file) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write as _;
+            let _ = file.write_all(entry.as_bytes());
+        }
+        previous(info);
+    }));
+}
+
+/// An RFC 3339 timestamp, without pulling in a date library for one line.
+fn humantime_now() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default();
+    format!("unix:{seconds}")
+}
+
 fn spawn_source_watcher(shared: Arc<Shared>) {
     std::thread::spawn(move || {
+        let mut probes = HashMap::<String, SourceProbe>::new();
+        let mut interval = EVENT_POLL_INTERVAL;
         loop {
-            let changed = crate::project_registry::list()
-                .unwrap_or_default()
-                .into_iter()
-                .any(|project| {
-                    application::observe_source_changes(&options_for_entry(&project))
+            let watched = crate::sync::lock(&shared.watched_projects).clone();
+            probes.retain(|id, _| watched.contains_key(id));
+            let mut changed = false;
+            for (id, project) in &watched {
+                let probe = probes.entry(id.clone()).or_insert_with(SourceProbe::new);
+                let stamp = project_directory_stamp(
+                    project
+                        .options
+                        .project_dir
+                        .as_deref()
+                        .unwrap_or_else(|| Path::new(".")),
+                );
+                let directory_changed = probe.directory_stamp != stamp;
+                if directory_changed || probe.last_walk.elapsed() >= MAX_SOURCE_POLL_INTERVAL {
+                    changed |= application::observe_source_changes(&project.options)
                         .ok()
                         .flatten()
-                        .is_some()
-                });
-            if changed {
-                *shared
-                    .last_activity
-                    .lock()
-                    .expect("workbench lock poisoned") = Instant::now();
+                        .is_some();
+                    probe.directory_stamp = stamp;
+                    probe.last_walk = Instant::now();
+                }
             }
-            let interval = if shared.clients.load(Ordering::SeqCst) == 0 {
-                IDLE_SOURCE_POLL_INTERVAL
+            if changed {
+                *crate::sync::lock(&shared.last_activity) = Instant::now();
+                interval = EVENT_POLL_INTERVAL;
             } else {
-                EVENT_POLL_INTERVAL
-            };
+                interval = (interval * 2).min(MAX_SOURCE_POLL_INTERVAL);
+            }
             std::thread::sleep(interval);
         }
     });
+}
+
+struct SourceProbe {
+    directory_stamp: Option<Vec<(PathBuf, SystemTime)>>,
+    last_walk: Instant,
+}
+
+impl SourceProbe {
+    fn new() -> Self {
+        Self {
+            directory_stamp: None,
+            last_walk: Instant::now() - MAX_SOURCE_POLL_INTERVAL,
+        }
+    }
+}
+
+/// A cheap signal for the common editor behaviour of atomically replacing a
+/// file. Only the project root and its immediate directories are inspected;
+/// a periodic full walk remains the correctness backstop for in-place writes
+/// and changes deeper in the tree.
+fn project_directory_stamp(root: &Path) -> Option<Vec<(PathBuf, SystemTime)>> {
+    let mut stamp = vec![(PathBuf::new(), fs::metadata(root).ok()?.modified().ok()?)];
+    for entry in fs::read_dir(root).ok()? {
+        let entry = entry.ok()?;
+        let metadata = entry.metadata().ok()?;
+        if metadata.is_dir() {
+            stamp.push((
+                entry.file_name().into(),
+                metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            ));
+        }
+    }
+    stamp.sort_by(|left, right| left.0.cmp(&right.0));
+    Some(stamp)
 }
 
 fn spawn_idle_watchdog(shared: Arc<Shared>) {
@@ -718,16 +880,11 @@ fn spawn_idle_watchdog(shared: Arc<Shared>) {
                     .min(Duration::from_secs(30))
                     .max(Duration::from_millis(10)),
             );
-            let idle = shared
-                .last_activity
-                .lock()
-                .map(|last| last.elapsed())
-                .unwrap_or_default();
-            let run_starting = !shared
-                .run_starting
-                .lock()
-                .expect("workbench lock poisoned")
-                .is_empty();
+            // Not `.lock().map(…).unwrap_or_default()`: that reported zero
+            // idle time on a poisoned lock, so a service that had panicked
+            // once would never shut down again.
+            let idle = crate::sync::lock(&shared.last_activity).elapsed();
+            let run_starting = !crate::sync::lock(&shared.run_starting).is_empty();
             let run_active = run_starting
                 || crate::project_registry::list()
                     .unwrap_or_default()
@@ -750,14 +907,11 @@ fn handle_connection(
     shared: &Arc<Shared>,
     mut pre_auth: PreAuthSlot,
 ) -> Result<()> {
-    stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
+    configure_request_stream(&stream)?;
     let Some(request) = read_request(&mut stream)? else {
         return Ok(());
     };
-    *shared
-        .last_activity
-        .lock()
-        .expect("workbench lock poisoned") = Instant::now();
+    *crate::sync::lock(&shared.last_activity) = Instant::now();
 
     let path = request
         .target
@@ -864,6 +1018,16 @@ fn handle_connection(
     if let Err(error) = dispatch(&mut stream, shared, &request, path) {
         return respond_internal_error(&mut stream, &error);
     }
+    Ok(())
+}
+
+/// Bound both halves of a normal HTTP exchange. The read bound prevents a
+/// client from dribbling headers forever; the write bound is equally
+/// important because an authenticated client that stops reading must not
+/// retain a worker thread indefinitely.
+fn configure_request_stream(stream: &TcpStream) -> Result<()> {
+    stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
+    stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
     Ok(())
 }
 
@@ -993,7 +1157,7 @@ fn dispatch(
                 .filter(|route| route.starts_with("/projects"))
                 .unwrap_or("/projects")
                 .to_string();
-            *shared.focus_target.lock().expect("workbench lock poisoned") = route;
+            *crate::sync::lock(&shared.focus_target) = route;
             shared.focus_revision.fetch_add(1, Ordering::SeqCst);
             respond(
                 stream,
@@ -1004,6 +1168,12 @@ fn dispatch(
         }
         ("GET", "/api/v1/state") => {
             let (project_id, options) = project_request(shared, request)?;
+            // A direct state read is also a declaration that this is the
+            // project the caller is viewing. Browser tabs keep an event stream
+            // open and are watched continuously; API clients that poll this
+            // endpoint still get fresh source state without making the
+            // background watcher scan every registered project.
+            let _ = application::observe_source_changes(&options)?;
             let state = application::load_workbench_state_for_session(
                 &options,
                 &project_session_id(shared, &project_id),
@@ -1321,6 +1491,26 @@ fn dispatch(
             open_project(stream, shared, request, &options, ProjectOpenKind::Folder)
         }
         ("POST", "/api/v1/service/shutdown") => shutdown_service(stream, shared, request),
+        // A handler that panics on purpose, so panic recovery is tested
+        // rather than asserted about. It exists only when
+        // `DELTAFORGE_PANIC_PROBE` is set in the service's environment, and
+        // is authenticated like every other mutation — a released binary
+        // started normally has no such route.
+        ("POST", "/api/v1/__panic") if shared.panic_probe => {
+            if !authorized_mutation(request, shared) {
+                return respond(
+                    stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"error":"forbidden"}"#,
+                );
+            }
+            // Panicking while holding a shared lock is the shape that used to
+            // be terminal: the mutex stayed poisoned and every later request
+            // panicked on it.
+            let _held = crate::sync::lock(&shared.run_starting);
+            panic!("deliberate panic from the DeltaForge panic probe");
+        }
         ("POST", _) | ("GET", _) => respond(
             stream,
             "404 Not Found",
@@ -1550,7 +1740,7 @@ fn start_run(
             r#"{"error":"invalid_test_filter"}"#,
         );
     }
-    let mut starting = shared.run_starting.lock().expect("workbench lock poisoned");
+    let mut starting = crate::sync::lock(&shared.run_starting);
     if shared.shutting_down.load(Ordering::SeqCst)
         || starting.contains(&project_id)
         || application::run_is_active(&options)?
@@ -1589,15 +1779,8 @@ fn start_run(
                 },
             );
         }
-        worker
-            .run_starting
-            .lock()
-            .expect("workbench lock poisoned")
-            .remove(&project_id);
-        *worker
-            .last_activity
-            .lock()
-            .expect("workbench lock poisoned") = Instant::now();
+        crate::sync::lock(&worker.run_starting).remove(&project_id);
+        *crate::sync::lock(&worker.last_activity) = Instant::now();
     });
     respond(
         stream,
@@ -1702,7 +1885,7 @@ fn start_benchmark_run(
     options: GlobalOptions,
     save: bool,
 ) -> Result<()> {
-    let mut starting = shared.run_starting.lock().expect("workbench lock poisoned");
+    let mut starting = crate::sync::lock(&shared.run_starting);
     if shared.shutting_down.load(Ordering::SeqCst)
         || starting.contains(&project_id)
         || application::run_is_active(&options)?
@@ -1740,15 +1923,8 @@ fn start_benchmark_run(
                 },
             );
         }
-        worker
-            .run_starting
-            .lock()
-            .expect("workbench lock poisoned")
-            .remove(&project_id);
-        *worker
-            .last_activity
-            .lock()
-            .expect("workbench lock poisoned") = Instant::now();
+        crate::sync::lock(&worker.run_starting).remove(&project_id);
+        *crate::sync::lock(&worker.last_activity) = Instant::now();
     });
     respond(
         stream,
@@ -1792,7 +1968,7 @@ fn shutdown_service(stream: &mut TcpStream, shared: &Shared, request: &HttpReque
             r#"{"error":"invalid_json"}"#,
         );
     }
-    let run_starting = shared.run_starting.lock().expect("workbench lock poisoned");
+    let run_starting = crate::sync::lock(&shared.run_starting);
     let run_active = !run_starting.is_empty()
         || crate::project_registry::list()
             .unwrap_or_default()
@@ -2088,6 +2264,35 @@ fn serve_events(
     }
     shared.clients.fetch_add(1, Ordering::SeqCst);
     let _guard = ClientGuard(&shared.clients);
+    {
+        let mut watched = crate::sync::lock(&shared.watched_projects);
+        let project = watched
+            .entry(project_id.clone())
+            .or_insert_with(|| WatchedProject {
+                options: options.clone(),
+                clients: 0,
+            });
+        project.clients += 1;
+    }
+    struct ProjectWatchGuard<'a> {
+        shared: &'a Shared,
+        project_id: String,
+    }
+    impl Drop for ProjectWatchGuard<'_> {
+        fn drop(&mut self) {
+            let mut watched = crate::sync::lock(&self.shared.watched_projects);
+            if let Some(project) = watched.get_mut(&self.project_id) {
+                project.clients = project.clients.saturating_sub(1);
+                if project.clients == 0 {
+                    watched.remove(&self.project_id);
+                }
+            }
+        }
+    }
+    let _watch_guard = ProjectWatchGuard {
+        shared,
+        project_id: project_id.clone(),
+    };
     if let Err(error) = stream_project_events(stream, shared, request, &project_id, &options) {
         let payload = format!(
             "event: stream_error\ndata: {}\n\n",
@@ -2115,17 +2320,15 @@ fn stream_project_events(
         })
         .unwrap_or(crate::run_journal::cursor(project_root(options)?)?);
     let mut previous = String::new();
+    let mut previous_state_stamp = None;
     let mut focus_revision = shared.focus_revision.load(Ordering::SeqCst);
 
     loop {
+        let mut run_event_arrived = false;
         let current_focus_revision = shared.focus_revision.load(Ordering::SeqCst);
         if current_focus_revision != focus_revision {
             focus_revision = current_focus_revision;
-            let target = shared
-                .focus_target
-                .lock()
-                .expect("workbench lock poisoned")
-                .clone();
+            let target = crate::sync::lock(&shared.focus_target).clone();
             let payload = format!(
                 "event: focus\ndata: {}\n\n",
                 serde_json::json!({"route": target})
@@ -2154,27 +2357,36 @@ fn stream_project_events(
                 return Ok(());
             }
             cursor = entry.id;
+            run_event_arrived = true;
         }
-        let state = application::load_workbench_state_for_session(
-            options,
-            &project_session_id(shared, project_id),
-        )?;
-        let serialized = serde_json::to_string(&state)?;
-        let payload = if serialized != previous {
-            previous = serialized.clone();
-            format!("event: state\ndata: {serialized}\n\n")
+        let state_stamp = state_file_stamp(project_root(options)?);
+        let payload = if previous_state_stamp != state_stamp || run_event_arrived {
+            previous_state_stamp = state_stamp;
+            let state = application::load_workbench_state_for_session(
+                options,
+                &project_session_id(shared, project_id),
+            )?;
+            let serialized = serde_json::to_string(&state)?;
+            if serialized != previous {
+                previous = serialized.clone();
+                format!("event: state\ndata: {serialized}\n\n")
+            } else {
+                ": keep-alive\n\n".to_string()
+            }
         } else {
             ": keep-alive\n\n".to_string()
         };
         if stream.write_all(payload.as_bytes()).is_err() {
             return Ok(());
         }
-        *shared
-            .last_activity
-            .lock()
-            .expect("workbench lock poisoned") = Instant::now();
+        *crate::sync::lock(&shared.last_activity) = Instant::now();
         std::thread::sleep(EVENT_POLL_INTERVAL);
     }
+}
+
+fn state_file_stamp(root: &Path) -> Option<(u64, SystemTime)> {
+    let metadata = fs::metadata(root.join(".deltaforge").join("state.json")).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
 }
 
 fn serve_app_events(stream: &mut TcpStream, shared: &Shared) -> Result<()> {
@@ -2203,11 +2415,7 @@ fn serve_app_events(stream: &mut TcpStream, shared: &Shared) -> Result<()> {
         let current = shared.focus_revision.load(Ordering::SeqCst);
         let payload = if current != focus_revision {
             focus_revision = current;
-            let target = shared
-                .focus_target
-                .lock()
-                .expect("workbench lock poisoned")
-                .clone();
+            let target = crate::sync::lock(&shared.focus_target).clone();
             format!(
                 "event: focus\ndata: {}\n\n",
                 serde_json::json!({"route": target})
@@ -2218,10 +2426,7 @@ fn serve_app_events(stream: &mut TcpStream, shared: &Shared) -> Result<()> {
         if stream.write_all(payload.as_bytes()).is_err() {
             return Ok(());
         }
-        *shared
-            .last_activity
-            .lock()
-            .expect("workbench lock poisoned") = Instant::now();
+        *crate::sync::lock(&shared.last_activity) = Instant::now();
         std::thread::sleep(EVENT_POLL_INTERVAL);
     }
 }
@@ -2316,12 +2521,104 @@ fn query_value<'a>(target: &'a str, name: &str) -> Option<&'a str> {
 }
 
 fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: &str) -> Result<()> {
+    let content_security_policy = content_security_policy(content_type, body);
     let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: {content_security_policy}\r\nX-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n{body}",
         body.len(),
     );
     stream.write_all(response.as_bytes())?;
     Ok(())
+}
+
+/// A hash-based CSP for the compile-time assets embedded in the page.
+///
+/// The capability token makes the assembled HTML different for each service,
+/// so the script hashes are derived from the response body rather than copied
+/// into a constant that would silently go stale. Inline style attributes are
+/// separately restricted with CSP 3's `unsafe-hashes`: this allows only the
+/// exact declarations already present in the shell or emitted by the client,
+/// without granting arbitrary inline CSS.
+fn content_security_policy(content_type: &str, body: &str) -> String {
+    if !content_type.starts_with("text/html") {
+        return "default-src 'none'; frame-ancestors 'none'; base-uri 'none'".to_string();
+    }
+
+    let script_hashes = inline_tag_contents(body, "script")
+        .into_iter()
+        .map(csp_hash)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let style_hashes = inline_tag_contents(body, "style")
+        .into_iter()
+        .map(csp_hash)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let mut attribute_styles = html_attribute_values(body, "style");
+    // `app.js` creates these declarations at runtime. Width is an integer
+    // percentage (completed steps / total steps, rounded), so enumerate the
+    // finite set rather than allow arbitrary inline styles.
+    attribute_styles.extend([
+        "color:var(--text-2);font-size:.88rem;margin-top:4px".to_string(),
+        "color:var(--text-3);font-size:.78rem".to_string(),
+        "margin-top:4px".to_string(),
+        "margin-top:10px".to_string(),
+        "text-align:left;color:var(--contradiction)".to_string(),
+        "color:var(--contradiction);margin-top:4px".to_string(),
+        "text-align: center;".to_string(),
+        "text-align: right;".to_string(),
+    ]);
+    for percent in 0..=100 {
+        attribute_styles.push(format!("width: {percent}%;"));
+    }
+    attribute_styles.sort();
+    attribute_styles.dedup();
+    let attribute_hashes = attribute_styles
+        .iter()
+        .map(|style| csp_hash(style))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    format!(
+        "default-src 'self'; script-src 'self' {script_hashes}; script-src-attr 'none'; style-src 'self' {style_hashes}; style-src-attr 'unsafe-hashes' {attribute_hashes}; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    )
+}
+
+fn csp_hash(source: &str) -> String {
+    let digest = Sha256::digest(source.as_bytes());
+    format!(
+        "'sha256-{}'",
+        base64::engine::general_purpose::STANDARD.encode(digest)
+    )
+}
+
+fn inline_tag_contents<'a>(html: &'a str, tag: &str) -> Vec<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let mut rest = html;
+    let mut contents = Vec::new();
+    while let Some((_, after_open)) = rest.split_once(&open) {
+        let Some((content, after_close)) = after_open.split_once(&close) else {
+            break;
+        };
+        contents.push(content);
+        rest = after_close;
+    }
+    contents
+}
+
+fn html_attribute_values(html: &str, attribute: &str) -> Vec<String> {
+    let marker = format!(r#"{attribute}=""#);
+    let mut rest = html;
+    let mut values = Vec::new();
+    while let Some((_, after_marker)) = rest.split_once(&marker) {
+        let Some((value, after_quote)) = after_marker.split_once('"') else {
+            break;
+        };
+        values.push(value.to_string());
+        rest = after_quote;
+    }
+    values
 }
 
 fn http_get(port: u16, path: &str) -> Option<String> {
@@ -2380,6 +2677,17 @@ fn workbench_html(token: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_service_timeout_is_short_but_rejects_invalid_values() {
+        assert_eq!(parse_test_idle_timeout(None).unwrap(), None);
+        assert_eq!(
+            parse_test_idle_timeout(Some("10000".into())).unwrap(),
+            Some(Duration::from_secs(10))
+        );
+        assert!(parse_test_idle_timeout(Some("0".into())).is_err());
+        assert!(parse_test_idle_timeout(Some("not-a-number".into())).is_err());
+    }
+
     fn test_shared(port: u16) -> Shared {
         Shared {
             default_project_id: None,
@@ -2395,7 +2703,9 @@ mod tests {
             idle_timeout: IDLE_TIMEOUT,
             focus_revision: AtomicUsize::new(0),
             focus_target: Mutex::new("/projects".to_string()),
+            watched_projects: Mutex::new(BTreeMap::new()),
             pre_auth: AtomicUsize::new(0),
+            panic_probe: false,
         }
     }
 
@@ -2634,6 +2944,56 @@ mod tests {
     }
 
     #[test]
+    fn normal_requests_bound_reads_and_writes() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            configure_request_stream(&stream).unwrap();
+            (
+                stream.read_timeout().unwrap(),
+                stream.write_timeout().unwrap(),
+            )
+        });
+        let _client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let (read, write) = server.join().unwrap();
+        assert_eq!(read, Some(REQUEST_TIMEOUT));
+        assert_eq!(write, Some(REQUEST_TIMEOUT));
+    }
+
+    #[test]
+    fn page_csp_hashes_embedded_assets_and_inline_declarations() {
+        let html = workbench_html("secret-token");
+        let policy = content_security_policy("text/html; charset=utf-8", &html);
+        assert!(!policy.contains("'unsafe-inline'"), "{policy}");
+        assert!(policy.contains("script-src-attr 'none'"), "{policy}");
+        assert!(
+            policy.contains("style-src-attr 'unsafe-hashes'"),
+            "{policy}"
+        );
+
+        let scripts = inline_tag_contents(&html, "script");
+        assert_eq!(scripts.len(), 2, "the shell embeds core.js and app.js");
+        for source in scripts {
+            assert!(policy.contains(&csp_hash(source)), "missing script hash");
+        }
+        let styles = inline_tag_contents(&html, "style");
+        assert_eq!(styles.len(), 1, "the shell embeds app.css");
+        assert!(policy.contains(&csp_hash(styles[0])), "missing style hash");
+
+        for declaration in ["margin-top:14px", "width: 50%;", "text-align: center;"] {
+            assert!(
+                policy.contains(&csp_hash(declaration)),
+                "missing hash for {declaration}"
+            );
+        }
+        assert_eq!(
+            content_security_policy("application/json", "{}"),
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+        );
+    }
+
+    #[test]
     fn service_never_serves_guessed_project_paths() {
         let probe = raw_request("/../Cargo.toml?token=secret-token", "127.0.0.1:0", None);
         assert!(probe.starts_with("HTTP/1.1 403"));
@@ -2736,7 +3096,7 @@ mod tests {
 
         // Light and dark are both first-class, and motion respects the
         // learner's preference.
-        assert!(html.contains("prefers-color-scheme: dark"));
+        assert!(html.contains("light-dark(#f5f5f3, #0f1114)"));
         assert!(html.contains("[data-theme=\"dark\"]"));
         assert!(html.contains("prefers-reduced-motion: reduce"));
         assert!(html.contains("skip-link"));

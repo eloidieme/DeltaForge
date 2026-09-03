@@ -377,10 +377,7 @@ impl LoadedPack {
         let key = (stage_dir.clone(), language_commands_key(language));
         let signature = crate::integrity::tree_change_signature(&stage_dir);
         if let Some(signature) = &signature
-            && let Some(cached) = behavioral_digest_cache()
-                .lock()
-                .expect("behavioral digest cache poisoned")
-                .get(&key)
+            && let Some(cached) = crate::sync::lock(behavioral_digest_cache()).get(&key)
             && &cached.0 == signature
         {
             return Ok(cached.1.clone());
@@ -388,10 +385,7 @@ impl LoadedPack {
 
         let digest = self.compute_stage_behavioral_digest(stage, language)?;
         if let Some(signature) = signature {
-            behavioral_digest_cache()
-                .lock()
-                .expect("behavioral digest cache poisoned")
-                .insert(key, (signature, digest.clone()));
+            crate::sync::lock(behavioral_digest_cache()).insert(key, (signature, digest.clone()));
         }
         Ok(digest)
     }

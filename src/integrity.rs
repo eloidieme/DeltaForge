@@ -362,14 +362,14 @@ fn cached_digest(
     key_names.sort();
     let key = (root.to_path_buf(), key_names);
 
-    if let Some(cached) = cache.lock().expect("digest cache poisoned").get(&key) {
+    if let Some(cached) = crate::sync::lock(cache).get(&key) {
         if cached.fingerprint == fingerprint {
             return Ok(cached.digest.clone());
         }
     }
 
     let digest = hash_entries(entries)?;
-    cache.lock().expect("digest cache poisoned").insert(
+    crate::sync::lock(cache).insert(
         key,
         DigestCacheEntry {
             fingerprint,

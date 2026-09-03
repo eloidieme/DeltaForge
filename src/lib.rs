@@ -18,5 +18,6 @@ pub mod run_lease;
 pub mod runner;
 pub mod snapshot;
 pub mod state;
+pub mod sync;
 pub mod terminal;
 pub mod workbench;
