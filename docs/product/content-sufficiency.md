@@ -69,9 +69,7 @@ Every attempt passed on its first and only submission. Every attempt returned th
 verdict *yes-with-guesswork*: implementable from the content, with decisions the content
 did not settle.
 
-The remaining nine stages have not been run. The contract's gate — every FlashIndex
-stage passable from published content alone — is therefore **met on five of fourteen**,
-and the practice is repeatable for the rest with the two scripts above.
+The remaining nine stages were run in execution 2, below.
 
 ### What the attempts found
 
@@ -119,3 +117,74 @@ question is a complete specification of it; leaving it unmentioned is not.
 
 Run the two scripts for a stage and record the outcome in a new *Execution* section.
 Never edit an earlier one: a practice whose history can be rewritten proves nothing.
+
+## Execution 2 — 2026-09-03
+
+The remaining nine stages, run the same way: each attempt made by an agent with no
+knowledge of this project, given only its sandbox and told not to read the repository.
+Three agents, three stages each, in curriculum order.
+
+| Stage | Cumulative content | Result | Submissions | Guesses |
+|---|---:|---|---:|---:|
+| 01 Scan files | 157 lines | **Pass** | 1 | 2 |
+| 03 Recognize tokens | 464 lines | **Pass** | 1 | 3 |
+| 04 Find an exact token | 607 lines | **Pass** | 1 | 1 |
+| 06 Make the index canonical | 912 lines | **Pass** | 1 | 3 |
+| 07 Write the index to disk | 1,049 lines | **Pass** | 1 | 3 |
+| 09 Describe a scan as data | 1,329 lines | **Pass** | 1 | 3 |
+| 10 Summarize the corpus | 1,476 lines | **Pass** | 1 | 4 |
+| 12 Measure parallel speedup | 1,771 lines | **Pass** | 1 | 3 |
+| 13 Score multi-token matches | 1,938 lines | **Pass** | 2 | 4 |
+
+**The contract's gate is met: fourteen of fourteen FlashIndex stages are passable from
+published content alone.** Eight of the nine passed on first submission; stage 13 took
+two.
+
+### What the attempts found
+
+Two of these are worse than anything execution 1 turned up, because they are places where
+following the specification *literally* fails the checks.
+
+**Stage 09's requirements contradicted its own checker.** The Requirements block shows
+the output object as `{"files": <N>, "runtime_ms": <N>}` — with a space after each colon —
+and the prose says "print exactly one valid JSON object". The checks asserted
+`"files":2` as a substring and pinned the whole object with a byte-exact regex, both
+without spaces. A learner who copied the shape from the requirements failed, and the
+failure said nothing about whitespace. Verified by building exactly that implementation:
+it failed two of six checks before the fix and passes all six after. The assertions now
+allow whitespace wherever JSON does, and the requirement says so.
+
+**Stage 13 required an error string it never named.** "Reject a query containing no
+tokens" was the whole specification; the check required stderr to contain `non-empty
+query`. This was the only failing submission in the exercise, and it cost a full
+iteration of trial and error to discover a phrase no reader could have inferred. Step 11
+already sets the right precedent — it pins `positive integer` explicitly — so the
+inconsistency, not the requirement, was the defect. Stage 13 now pins its string the same
+way.
+
+Two further gaps were reported independently across stages and are now closed:
+
+- **No general invocation contract.** Stages 1, 3 and 4 each specify the happy-path
+  command shape precisely and name one or two error conditions, but nothing states the
+  general rule for a wrong shape — an unknown command word, or the wrong argument count.
+  Every attempt guessed the same way and none were tested on it. Stage 1 now states the
+  rule once, for every command the project gains later.
+- **`--out` and standard output.** Stage 7's "this step adds a destination; it does not
+  replace one" left it genuinely unclear whether the canonical index is still printed as
+  well as written. Two attempts reasoned it out from the example rather than the prose.
+  Stage 7 now says it.
+
+Everything else reported was a decision the content explicitly declares open — symlink
+treatment, mid-tree read errors, partitioning strategy, tie-break order among equal
+scores. Those are stated non-goals, not gaps.
+
+### The recurring shape, across both executions
+
+Execution 1 found six gaps of the form *a rule stated once and relied on later*.
+Execution 2 found a different shape and a sharper one: **the prose promises more freedom
+than the checker allows.** Stage 09's "exactly one valid JSON object" and stage 13's
+unnamed error string are the same defect seen twice — the specification describes a
+class of acceptable answers, and the checks accept one member of it.
+
+That is the failure mode this practice is uniquely able to find, because it is invisible
+to the author. The author's own implementation is the member of the class that passes.

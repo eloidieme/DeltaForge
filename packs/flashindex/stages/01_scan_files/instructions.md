@@ -64,7 +64,7 @@ This is FlashIndex's default ignore policy, not a complete or universal list. It
 
 ## Requirements
 
-- Accept exactly the command shape `flashindex scan <path>`.
+- Accept exactly the command shape `flashindex scan <path>`. This is the rule for every command FlashIndex gains later, not just this one: an unknown command word, or the wrong number of arguments for a known one, exits non-zero without doing any work.
 - Visit every regular file below `<path>`, including files in nested directories.
 - Print one root-relative path per line and never print an absolute path.
 - Use `/` as the visible separator on every operating system.

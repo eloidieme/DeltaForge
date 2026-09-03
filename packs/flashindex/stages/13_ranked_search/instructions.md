@@ -42,7 +42,7 @@ Add:
 flashindex rank <path> "<query>"
 ```
 
-Split `<query>` on whitespace into distinct, case-sensitive query tokens. Reject a query containing no tokens.
+Split `<query>` on whitespace into distinct, case-sensitive query tokens. Reject a query containing no tokens: exit non-zero with an error containing `non-empty query`.
 
 For each file containing at least one query token, calculate:
 

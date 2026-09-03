@@ -503,9 +503,13 @@ the pre-auth permit bounds unauthenticated connections, an authenticated one is 
 **P3-7.** Content sufficiency stands at five stages of fourteen against a contract gate of
 fourteen. The practice already found six specification holes in the five it covered.
 
+> **Resolution.** Resolved in `ab8f2c1`-series content work. The remaining nine stages were run; **the contract's gate is now met at fourteen of fourteen.** Eight passed on first submission, one took two. The practice found two defects worse than anything execution 1 turned up, both places where following the specification literally *fails*: stage 09's requirements show the output JSON with spaces after the colons while its checks pinned a byte-exact form without them, and stage 13 required an error string (`non-empty query`) that it never named, which cost the exercise its only failing submission. Both are fixed, along with two gaps reported independently across stages — no general contract for a wrong invocation shape, and what `--out` does to standard output. See `content-sufficiency.md`, execution 2.
+
 **P3-8.** The cold dogfood has never been performed by someone who is not the author. The
 record says so itself. One session with one unfamiliar programmer would have found P0-1 in
 ninety seconds.
+
+> **Resolution.** **Deferred — it cannot be done by the agent doing the work.** The whole point is a reader with no prior knowledge of this project, and that disqualifies whoever wrote the code and whoever fixed this review. `cold-dogfood.md` now carries a ready-to-run protocol: participant and machine preconditions (a normal account with no `~/.deltaforge`, no `~/DeltaForge`, no checkout, installing only from the published archive), the observer's exact opening sentence and the refusal to say anything else, the nine timestamps that make up the activation measurement, a per-step record sheet, and pass criteria. It needs one unfamiliar programmer and about an hour. The review is right that it would have found P0-1 in ninety seconds.
 
 **P3-9.** Three of four catalog projects are second-tier. A legitimate, honestly-labelled
 decision — but it means the catalog a new user sees is 75% preview, and P0-3's worst

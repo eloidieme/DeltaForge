@@ -33,7 +33,7 @@ flashindex index <path> --out <index-file>
 
 Write the complete canonical index to `<index-file>`. Each line must contain one token followed by its sorted, deduplicated relative `/` paths. Separate every field with one tab byte and terminate every record with `\n`. Token lines retain canonical ascending order.
 
-Create missing parent directories and replace all stale destination contents. On success, exit 0 and print a line containing `wrote`.
+Create missing parent directories and replace all stale destination contents. On success, exit 0 and print a line containing `wrote`. With `--out`, that line is the whole of standard output: the canonical index text goes to the file instead of to the terminal, not to both.
 
 Without `--out`, `flashindex index <path>` keeps printing the canonical index to standard output exactly as before. This step adds a destination; it does not replace one.
 

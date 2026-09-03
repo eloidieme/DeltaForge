@@ -554,7 +554,10 @@ fn cases() -> Vec<Case> {
             )]),
             timeout_ms: None,
             expected_priority: 20,
-            expected_kind: "stdout-contains",
+            // A regex, not a substring: the count assertion has to tolerate the
+            // JSON whitespace the stage's own Requirements block shows, which a
+            // byte-exact `stdout_contains` did not.
+            expected_kind: "stdout-regex",
             expected_headline: "The reported file count does not match the corpus",
         },
         // ------------------------------------------------------------------

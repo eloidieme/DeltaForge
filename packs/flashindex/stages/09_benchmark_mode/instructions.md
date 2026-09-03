@@ -40,7 +40,7 @@ Scan the searchable corpus and print exactly one valid JSON object followed by `
 {"files": <N>, "runtime_ms": <N>}
 ```
 
-`files` is the number of selected source-like files. `runtime_ms` is the elapsed scan duration measured with a monotonic clock. Do not print prose on stdout. An invalid or unreadable root must exit non-zero without printing a success-shaped object.
+`files` is the number of selected source-like files. `runtime_ms` is the elapsed scan duration measured with a monotonic clock. Whitespace between tokens is yours to choose — the object is read as JSON, not compared as text. Do not print prose on stdout. An invalid or unreadable root must exit non-zero without printing a success-shaped object.
 
 ## Example
 
