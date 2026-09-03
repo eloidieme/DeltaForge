@@ -1,3 +1,5 @@
+mod common;
+
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -132,9 +134,7 @@ fn request(port: u16, method: &str, path: &str, origin: Option<&str>, body: &str
     headers.push_str("\r\n");
     stream.write_all(headers.as_bytes()).unwrap();
     stream.write_all(body.as_bytes()).unwrap();
-    let mut response = String::new();
-    stream.read_to_string(&mut response).unwrap();
-    response
+    common::read_http_response(&mut stream, &format!("{method} {path}"))
 }
 
 fn response_json(response: &str) -> serde_json::Value {

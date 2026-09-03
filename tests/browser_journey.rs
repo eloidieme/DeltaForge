@@ -6,8 +6,10 @@
 //! except the one call that writes source into the project, which stands in
 //! for the learner's editor.
 
+mod common;
+
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::net::{Ipv4Addr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -186,18 +188,7 @@ impl Service {
         request.push_str("\r\n");
         stream.write_all(request.as_bytes()).unwrap();
         stream.write_all(body.as_bytes()).unwrap();
-        let mut response = String::new();
-        // Windows reports a peer that closed after replying as ECONNRESET
-        // rather than as end-of-stream, so a complete response arrives
-        // alongside an error. Unwrapping here failed the whole journey on
-        // Windows CI while passing everywhere else. Keep what was read, and
-        // only fail when nothing was.
-        if let Err(error) = stream.read_to_string(&mut response)
-            && (response.is_empty() || error.kind() != std::io::ErrorKind::ConnectionReset)
-        {
-            panic!("failed to read the response to {method} {path}: {error}");
-        }
-        response
+        common::read_http_response(&mut stream, &format!("{method} {path}"))
     }
 
     /// Poll project state until `predicate` holds, then return it.

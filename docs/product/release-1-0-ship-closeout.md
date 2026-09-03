@@ -232,12 +232,17 @@ used it. Now opened for writing.
 
 ### Windows reports a closed connection as an error, not as end-of-stream
 
-`browser_journey.rs` read each response with
+Both integration suites read each response with
 `stream.read_to_string(&mut response).unwrap()`. On Windows a peer that closes
 after replying surfaces as `ECONNRESET` rather than as EOF, so a *complete*
-response arrived alongside an error and the unwrap failed the whole journey —
-on Windows only, while macOS and Linux stayed green. The read now keeps what it
-received and fails only when nothing was read.
+response arrived alongside an error and the unwrap failed — on Windows only,
+while macOS and Linux stayed green.
+
+It had to be found twice. `browser_journey.rs` and `workbench_flow.rs` each
+carried their own copy of "send a request, read the reply", so fixing one left
+the other to fail on the next run with the same error at a different line. The
+helper now lives in `tests/common/mod.rs` and both call it — a rule written
+twice being, again, the defect shape this project keeps finding.
 
 ### The `--check` gate was already failing on `main`
 
