@@ -19,6 +19,11 @@ the account; that one is the ledger.
 
 **Fixed: 31. Deferred with a stated reason: 2. Not-a-defect: 0.**
 
+The two deferred are P0-4's final step (cutting the tag, which is a push and
+therefore the user's to make) and P3-8 (the cold dogfood, which by construction
+cannot be performed by whoever did this work). P3-3, the two `wip` commits, is
+closed as will-not-fix. Everything else is closed with a commit against it.
+
 Nothing in the review turned out to be wrong. That is worth stating plainly:
 every finding reproduced, including the four that were only reachable by running
 the product rather than reading it.
@@ -46,6 +51,15 @@ the product rather than reading it.
 
 P2-1 through P2-15 and P3-1 through P3-6 and P3-9 are all fixed; see the ledger
 for the commit against each.
+
+### Content sufficiency reached its gate
+
+P3-7 was five stages of fourteen against a contract gate of fourteen. The
+remaining nine were run: all nine passed, eight on first submission. **The gate
+is met.**
+
+What they found is in §2 — it includes the single worst content defect this
+whole review turned up, and the review did not name it.
 
 ### The two that are not closed
 
@@ -96,6 +110,37 @@ every archive, and cuts a GitHub Release marked as a pre-release.
 
 The general lesson is the review's own, one level deeper: the first execution of
 an untested irreversible path is not a validation, it is the thing itself.
+
+### A stage's requirements contradicted its own checker
+
+The worst content defect found anywhere in this work, and the review did not
+see it — because it is invisible unless someone who has not read the code tries
+to implement from the text.
+
+FlashIndex stage 9 asks for a benchmark result as JSON. Its Requirements block
+shows the object as `{"files": <N>, "runtime_ms": <N>}`, with a space after each
+colon, and its prose says *print exactly one valid JSON object*. Its checks
+asserted `"files":2` as a substring and pinned the whole object with a
+byte-exact regex — neither of which that shape satisfies.
+
+A learner who copied the shape out of the requirements failed two of six checks,
+and the failure message said nothing about whitespace. Confirmed by writing
+exactly that implementation and running it: two failures before the fix, six
+passes after.
+
+Stage 13 is the same defect in a different costume: *reject a query containing
+no tokens* was the entire specification, while the check required the string
+`non-empty query` in stderr — a phrase no reader could infer. It cost the
+exercise its only failing submission. Stage 11 pins its own error string
+explicitly, so the inconsistency was the defect rather than the requirement.
+
+The general shape, which is worth more than either instance: **the prose
+promises a class of acceptable answers and the checker accepts one member of
+it.** That is precisely the defect an author cannot see, because their own
+implementation is the member that passes. It is the reason the
+content-sufficiency practice exists, and it is the first time the practice has
+returned something that would have blocked a learner outright rather than merely
+made them guess.
 
 ### The renderer was losing two constructs nobody had noticed
 
@@ -158,6 +203,7 @@ effect.
 | Contrast pairs below WCAG AA | 4 of 34 | **0 of 34** |
 | Packs failing the renderer round trip | (not measured) | 0 of 4 |
 | Stage files leaking literal markdown | 21 | 0 |
+| FlashIndex stages proven passable from content alone | 5 of 14 | **14 of 14** |
 
 CI jobs: `rust` (fmt, clippy, test, validate-pack on three OSes), `page` (Node
 unit suite, contrast check, headless journey), `msrv` (pinned 1.85),
@@ -240,7 +286,9 @@ document is that it does not flinch.
 3. **The content-sufficiency practice grades its own homework.** The attempts
    are made by agents told not to read the repository. That instruction is not
    enforced by the filesystem, which `content-sufficiency.md` already says. It
-   is a good practice with a stated weakness, not a proof.
+   is a good practice with a stated weakness, not a proof — though it has now
+   earned some credit: it found a stage whose requirements a learner could not
+   satisfy by following them, which nothing else in this review did.
 
 The pattern the review named is a solo-project pattern, and the durable fix is
 the one it gave: make something other than the author run the product, on every
