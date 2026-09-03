@@ -78,11 +78,11 @@ jobs:
         run: node tests/browser/journey.mjs
 
   msrv:
-    name: Minimum Rust 1.85
+    name: Minimum Rust 1.88
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.88.0
       - name: Check the documented minimum Rust version
         # The published crate's MSRV covers its library and binaries. The MCP
         # protocol client used only by integration tests currently requires a

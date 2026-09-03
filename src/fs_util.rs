@@ -26,6 +26,10 @@ pub fn create_private_scratch_dir(prefix: &str) -> Result<PathBuf> {
     let suffix: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = std::env::temp_dir().join(format!("{prefix}-{suffix}"));
 
+    // `mut` only matters on Unix, where `DirBuilderExt::mode` takes `&mut
+    // self`. Windows has no such call, so the binding is never mutated there
+    // and `-D warnings` refuses the `mut`.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {

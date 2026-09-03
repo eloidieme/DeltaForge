@@ -12,7 +12,7 @@ Thank you for helping make DeltaForge clearer, safer, or more useful to learners
 
 ## Development setup
 
-Install Rust 1.85 or newer and Node.js 22. Then run:
+Install Rust 1.88 or newer and Node.js 22. Then run:
 
 ```bash
 cargo build --lib

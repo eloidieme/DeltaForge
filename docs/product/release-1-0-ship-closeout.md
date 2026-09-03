@@ -159,6 +159,32 @@ They were found because the guard was written as a property — parse, re-emit,
 compare — rather than as a list of constructs someone remembered to ban. A
 checklist only refuses what its author thought of.
 
+### `rust-version = "1.85"` had never been true
+
+The review's own words: *a promise CI never checks*. The MSRV job was added to
+check it, and failed on its first run against a real 1.85 toolchain — 35 errors,
+all the same one. Let-chains (`if x && let Some(y) = z`) are used throughout the
+codebase and stabilised in **1.88**; 1.85 was the edition-2024 floor and was
+never the real minimum. The crate has never compiled on the version it told
+users to install.
+
+Bisected to confirm rather than assumed: 1.87 fails with 35 errors, 1.88 is
+clean. `rust-version` now says 1.88 and `CONTRIBUTING.md` says the same.
+
+Stating the truth then produced a second, smaller finding for free: clippy gates
+some lints on the declared MSRV, so `collapsible_if` had been silently
+suppressed. With the real minimum declared, it fired, and one nested `if` became
+the let-chain the rest of the file already uses.
+
+### A Windows-only warning failed a `-D warnings` build
+
+`create_private_scratch_dir` binds `let mut builder` and mutates it only inside
+`#[cfg(unix)]`, where `DirBuilderExt::mode` takes `&mut self`. On Windows the
+mutation does not exist, so `unused_mut` fired and `-D warnings` turned it into
+a failed build. macOS and Linux CI were green; nothing local could have caught
+it. This is the same shape as every P0 in the review — a path the author's
+machine never takes — and it is the reason the matrix is worth its runtime.
+
 ### The `--check` gate was already failing on `main`
 
 `cargo fmt --check` is a CI gate. Ten hunks across four files did not satisfy it
@@ -206,7 +232,7 @@ effect.
 | FlashIndex stages proven passable from content alone | 5 of 14 | **14 of 14** |
 
 CI jobs: `rust` (fmt, clippy, test, validate-pack on three OSes), `page` (Node
-unit suite, contrast check, headless journey), `msrv` (pinned 1.85),
+unit suite, contrast check, headless journey), `msrv` (pinned 1.88),
 `publish-dry-run`, `energy` (idle CPU ceiling), `dependency-policy`
 (`cargo deny`: advisories, bans, licences, sources).
 

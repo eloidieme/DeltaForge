@@ -9,7 +9,11 @@ repository = "https://github.com/eloidieme/DeltaForge"
 readme = "README.md"
 keywords = ["learning", "education", "cli", "systems-programming", "tutorial"]
 categories = ["command-line-utilities", "development-tools"]
-rust-version = "1.85"
+# Let-chains (`if x && let Some(y) = z`) are used throughout and stabilised in
+# 1.88. 1.85 was the edition-2024 floor and was never the real minimum: the
+# crate has never compiled on it. The MSRV job in CI checks this now, which is
+# how the claim was found to be false.
+rust-version = "1.88"
 exclude = [
     "/.github",
     "/docs",
