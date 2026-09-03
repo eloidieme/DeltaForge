@@ -185,6 +185,33 @@ a failed build. macOS and Linux CI were green; nothing local could have caught
 it. This is the same shape as every P0 in the review — a path the author's
 machine never takes — and it is the reason the matrix is worth its runtime.
 
+### The false MSRV was holding a security fix out
+
+`time` was pinned to exactly `0.3.45`, with a comment explaining why: *0.3.46
+raised `time`'s MSRV above DeltaForge's documented Rust 1.85*. That pin was
+therefore load-bearing on a claim that was never true.
+
+`cargo deny`, on its first run, reported **RUSTSEC-2026-0009** — denial of
+service via stack exhaustion in `time`'s RFC 2822 parser, fixed in 0.3.47. The
+pin was holding the fix out to preserve compatibility with a Rust version the
+crate had never compiled on.
+
+Making the MSRV honest dissolved the reason for the pin, and `time` moved to
+0.3.55. Verified to still build on the declared 1.88.
+
+Two gates found this between them, and neither could have alone: the MSRV job
+proved the claim false, and `cargo deny` proved what the false claim was
+costing.
+
+### Windows reports a closed connection as an error, not as end-of-stream
+
+`browser_journey.rs` read each response with
+`stream.read_to_string(&mut response).unwrap()`. On Windows a peer that closes
+after replying surfaces as `ECONNRESET` rather than as EOF, so a *complete*
+response arrived alongside an error and the unwrap failed the whole journey —
+on Windows only, while macOS and Linux stayed green. The read now keeps what it
+received and fails only when nothing was read.
+
 ### The `--check` gate was already failing on `main`
 
 `cargo fmt --check` is a CI gate. Ten hunks across four files did not satisfy it
@@ -204,6 +231,23 @@ So the one screen a learner reaches *because something has already gone wrong*
 was the one screen that could not tell them the workbench had stopped. It now
 opens the application stream. This was found only because the harness drove the
 real page in the real order, which is exactly the argument P0-2 makes.
+
+### The harness asserted a title before the page could know it
+
+Not a product defect, and recorded because the distinction matters. A screen is
+unhidden as soon as its route is known; its title is set once the data that
+names it arrives. `renderCreate` shows the form and *then* fetches the catalog
+and the workspace. Locally that gap is a few milliseconds and the assertion
+never lost the race. On a Linux CI runner it did, reading the previous route's
+title.
+
+The page was right and the harness was wrong. All five title assertions now wait
+for the title rather than sampling it, and the waiter was checked against a
+deliberately impossible expectation to confirm it still fails when the title is
+genuinely wrong.
+
+The general point: a harness that only ever ran on one fast machine has the same
+blind spot as the product did.
 
 ### Preflight was creating a directory just for being looked at
 

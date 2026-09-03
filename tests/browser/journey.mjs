@@ -96,6 +96,29 @@ async function until(page, what, read, timeout = UI_TIMEOUT) {
   throw new Error(`timed out waiting for ${what}${last ? ` (last saw ${last})` : ""}`);
 }
 
+/* Wait for `document.title` to satisfy `matches`, then return it.
+ *
+ * A screen is unhidden as soon as the route is known, but its title is set once
+ * the data that names it has arrived — `renderCreate` shows the form and then
+ * fetches the catalog and the workspace. Locally that gap is a few
+ * milliseconds; on a CI runner it is long enough that asserting the title the
+ * instant the screen appears reads the previous route's. That is a race in this
+ * harness, not in the page: the title is correct a moment later, every time. */
+async function titleBecomes(page, matches, describe) {
+  let last = "";
+  try {
+    await page.waitForFunction(
+      (source) => new Function("title", `return (${source})(title)`)(document.title),
+      matches.toString(),
+      { timeout: UI_TIMEOUT },
+    );
+  } catch {
+    last = await page.title();
+    throw new Error(`${describe}; title stayed "${last}"`);
+  }
+  return page.title();
+}
+
 const textOf = (page, selector) =>
   page.$eval(selector, (node) => node.textContent.trim()).catch(() => "");
 
@@ -120,7 +143,7 @@ async function journey(page, service) {
     (await textOf(page, ".catalog-tier-note")).includes("playable and correct"),
     "the catalog does not explain what Preview means",
   );
-  check((await page.title()) === "Project catalog — DeltaForge", `catalog title is ${await page.title()}`);
+  await titleBecomes(page, (title) => title === "Project catalog — DeltaForge", "the catalog never titled itself");
   check(await page.$eval("#catalog-nav", (node) => node.getAttribute("aria-current") === "page"), "catalog navigation has no current-page state");
   check(await page.$eval("#catalog-screen h1", (node) => document.activeElement === node), "catalog heading did not receive focus");
   log(`catalog lists ${cards.length} projects, flagship first and previews alphabetical`);
@@ -132,7 +155,7 @@ async function journey(page, service) {
   /* 2. Creation with the defaults — nothing typed, nothing chosen. */
   await page.click(".catalog-card:first-of-type .catalog-actions button");
   await page.waitForSelector("#create-screen:not([hidden])", { timeout: UI_TIMEOUT });
-  check((await page.title()).startsWith("Create FlashIndex —"), `creation title is ${await page.title()}`);
+  await titleBecomes(page, (title) => title.startsWith("Create FlashIndex —"), "the creation screen never titled itself");
   check(await page.$eval("#create-title", (node) => document.activeElement === node), "creation heading did not receive focus");
   check(await page.$eval("#catalog-nav", (node) => !node.hasAttribute("aria-current")), "creation falsely marks Catalog as the current page");
   const offered = await page.inputValue("#create-parent");
@@ -195,7 +218,7 @@ async function journey(page, service) {
   check(root && fs.existsSync(root), `the created project is not on disk: ${root ?? projectPath}`);
   log(`project root ${root}`);
 
-  check((await page.title()).includes("Scan files — FlashIndex — DeltaForge"), `build title is ${await page.title()}`);
+  await titleBecomes(page, (title) => title.includes("Scan files — FlashIndex — DeltaForge"), "the build screen never titled itself");
   check(await page.$eval("#instruction-title", (node) => document.activeElement === node), "build heading did not receive focus");
   check(await page.$eval("#build-nav", (node) => node.getAttribute("aria-current") === "page"), "Build navigation has no current-page state");
   const currentLabel = await page.getAttribute("#build-rail .rail-step.here", "aria-label");
@@ -282,7 +305,7 @@ async function journey(page, service) {
   /* 8. The performance loop: predict, measure, reflect. */
   await page.click("#performance-nav");
   await page.waitForSelector("#performance-screen:not([hidden])", { timeout: UI_TIMEOUT });
-  check((await page.title()) === "Performance — FlashIndex — DeltaForge", `performance title is ${await page.title()}`);
+  await titleBecomes(page, (title) => title === "Performance — FlashIndex — DeltaForge", "the performance screen never titled itself");
   check(await page.$eval("#performance-title", (node) => document.activeElement === node), "performance heading did not receive focus");
   check(await page.$eval("#performance-nav", (node) => node.getAttribute("aria-current") === "page"), "Performance navigation has no current-page state");
   await until(page, "the prediction prompt", async () =>
@@ -335,7 +358,7 @@ async function journey(page, service) {
   await page.click("#build-nav");
   await page.waitForSelector("#health-screen:not([hidden])", { timeout: UI_TIMEOUT });
   check((await textOf(page, "#project-name")) === "FlashIndex", `health header lost the project name: ${await textOf(page, "#project-name")}`);
-  check((await page.title()).includes("— FlashIndex — DeltaForge"), `health title is ${await page.title()}`);
+  await titleBecomes(page, (title) => title.includes("— FlashIndex — DeltaForge"), "the health screen never titled itself");
   check(await page.$eval("#health-title", (node) => document.activeElement === node), "health heading did not receive focus");
   check(await page.$eval("#health-detail", (node) => node.scrollWidth <= node.clientWidth + 1), "health prose overflows horizontally");
   await page.evaluate(() => renderHealthDetail(`Review \`deltaforge sync-pack\` before adopting the change. ${"Long readable prose ".repeat(80)}`));

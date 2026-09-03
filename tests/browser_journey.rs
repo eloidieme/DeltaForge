@@ -187,7 +187,16 @@ impl Service {
         stream.write_all(request.as_bytes()).unwrap();
         stream.write_all(body.as_bytes()).unwrap();
         let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
+        // Windows reports a peer that closed after replying as ECONNRESET
+        // rather than as end-of-stream, so a complete response arrives
+        // alongside an error. Unwrapping here failed the whole journey on
+        // Windows CI while passing everywhere else. Keep what was read, and
+        // only fail when nothing was.
+        if let Err(error) = stream.read_to_string(&mut response)
+            && (response.is_empty() || error.kind() != std::io::ErrorKind::ConnectionReset)
+        {
+            panic!("failed to read the response to {method} {path}: {error}");
+        }
         response
     }
 

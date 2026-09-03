@@ -37,8 +37,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.10"
-# 0.3.46 raised `time`'s MSRV above DeltaForge's documented Rust 1.85.
-time = { version = "=0.3.45", features = ["formatting", "parsing"] }
+# 0.3.47 fixes RUSTSEC-2026-0009 (stack exhaustion parsing RFC 2822). The
+# previous `=0.3.45` pin existed because 0.3.46 raised `time`'s MSRV above the
+# Rust 1.85 this crate claimed — a claim that was never true, so the pin was
+# holding a security fix out for a reason that did not exist.
+time = { version = "0.3.47", features = ["formatting", "parsing"] }
 toml = "0.8"
 
 [target.'cfg(windows)'.dependencies]
