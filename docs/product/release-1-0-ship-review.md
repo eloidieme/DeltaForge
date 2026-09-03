@@ -182,6 +182,8 @@ content defect.
 
 > **Resolution.** Resolved except the tag itself**, in `b4ebf7c`. `publish-crate` now needs `build`, so a failed target can no longer leave a permanent crates.io version with no binaries behind it. Added: `cargo publish --dry-run`, an MSRV job pinned to 1.85, `cargo deny` (advisories, bans, licences, sources), Dependabot for cargo and actions, `aarch64-unknown-linux-gnu`, build attestations on every archive, and a release body carrying this version's changelog section. macOS is **not** notarized — there is no Apple Developer account — so the README states the exact `xattr -d com.apple.quarantine` command and links Apple's own explanation of what it means. **Still open:** cutting `v1.0.0-rc.1` and installing from the published archive on three platforms. That requires pushing a tag, which is the one irreversible step in this list.
 
+> Fixing this finding surfaced a worse version of it that the review had not named. `publish-crate` was gated on `needs: [build]` but not on *which* tag: `cargo publish` publishes the version in `Cargo.toml`, not the version in the tag, so pushing `v1.0.0-rc.1` — the release candidate whose entire purpose is to be validated before 1.0.0 exists — would have published crate version 1.0.0 to crates.io permanently, on the way to finding out whether it worked. The job now compares the tag against `cargo metadata` and publishes only on an exact match; a candidate still produces binaries, checksums, attestations and a GitHub Release, marked as a pre-release.
+
 No tags, no releases, no published crate. The README's primary install instruction —
 download an archive from Releases and verify its checksum — points at an empty page.
 
